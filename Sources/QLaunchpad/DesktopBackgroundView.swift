@@ -3,6 +3,7 @@ import CoreGraphics
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import Darwin
+import ImageIO
 
 /// Best-effort bridge to WindowServer's private wallpaper capture SPI.
 private enum PrivateWindowServerCapture {
@@ -47,22 +48,20 @@ private enum PrivateWindowServerCapture {
 }
 
 private enum WallpaperWindowLocator {
-    private struct Candidate {
-        let id: CGWindowID
-        let score: Double
-    }
-
-    static func find(for displayID: CGDirectDisplayID) -> CGWindowID? {
+    /// Desktop-sized wallpaper surfaces, best match first.
+    /// Wallpaper lives at `desktopLevel - 1`. Window Server and Dock helpers
+    /// capture black, so they are never candidates.
+    static func candidates(for displayID: CGDirectDisplayID) -> [CGWindowID] {
         guard let windows = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly],
             kCGNullWindowID
         ) as? [[String: Any]] else {
-            return nil
+            return []
         }
 
         let displayBounds = CGDisplayBounds(displayID)
         let desktopLevel = Int(CGWindowLevelForKey(.desktopWindow))
-        var best: Candidate?
+        var bestByID: [CGWindowID: Double] = [:]
 
         for window in windows {
             guard
@@ -86,26 +85,151 @@ private enum WallpaperWindowLocator {
             let name = (window[kCGWindowName as String] as? String ?? "")
                 .lowercased()
             let layer = layerNumber.intValue
-            let isWindowManagerWallpaper = owner == "windowmanager" &&
-                name == "wallpaper" &&
-                layer <= desktopLevel + 1
-
-            // Do not fall back to WindowServer/Dock helper windows here. They
-            // can be full-screen and opaque-looking, but are not the actual
-            // wallpaper surface and often capture as black.
-            guard isWindowManagerWallpaper else {
+            guard let score = score(
+                owner: owner,
+                name: name,
+                layer: layer,
+                desktopLevel: desktopLevel
+            ) else {
                 continue
             }
 
-            let score = 1_000.0
-
-            let candidate = Candidate(id: idNumber.uint32Value, score: score)
-            if best == nil || candidate.score > best!.score {
-                best = candidate
+            let id = idNumber.uint32Value
+            if score > (bestByID[id] ?? -.greatestFiniteMagnitude) {
+                bestByID[id] = score
             }
         }
 
-        return best?.id
+        return bestByID.sorted { $0.value > $1.value }.map(\.key)
+    }
+
+    static func score(
+        owner: String,
+        name: String,
+        layer: Int,
+        desktopLevel: Int
+    ) -> Double? {
+        guard layer <= desktopLevel + 1 else { return nil }
+
+        if owner == "windowmanager" && (name == "wallpaper" || name.isEmpty) {
+            return 1_000
+        }
+        if owner.contains("wallpaper")
+            || name == "wallpaper"
+            || name.hasPrefix("desktop picture") {
+            return 900
+        }
+        // Window Server and Dock helpers capture black.
+        if owner == "window server" || owner == "dock" {
+            return nil
+        }
+        // Unnamed: wallpaper layer only. Lower layers are backstops.
+        if owner.isEmpty && name.isEmpty {
+            guard layer == desktopLevel - 1 else { return nil }
+            return 500
+        }
+        return nil
+    }
+}
+
+/// User still-image path when CGS capture returns nothing usable.
+private enum WallpaperFileSource {
+    static func workspaceURL(for displayID: CGDirectDisplayID) -> URL? {
+        let screen = NSScreen.screens.first { screen in
+            let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
+                as? CGDirectDisplayID
+            return number == displayID
+        }
+        guard let url = screen.flatMap({ NSWorkspace.shared.desktopImageURL(for: $0) }) else {
+            return nil
+        }
+        return readableImageURL(url)
+    }
+
+    static func indexPlistURL(for displayID: CGDirectDisplayID) -> URL? {
+        guard let uuid = displayUUIDString(displayID) else { return nil }
+        let store = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist")
+        guard
+            let root = NSDictionary(contentsOf: store),
+            let displays = root["Displays"] as? [String: Any],
+            let display = displays[uuid] as? [String: Any],
+            let desktop = display["Desktop"] as? [String: Any],
+            let content = desktop["Content"] as? [String: Any],
+            let choices = content["Choices"] as? [[String: Any]],
+            let choice = choices.first
+        else {
+            return nil
+        }
+
+        if let files = choice["Files"] as? [[String: Any]] {
+            for file in files {
+                if let parsed = url(fromPlistValue: file["relative"] ?? file["url"]),
+                   let readable = readableImageURL(parsed) {
+                    return readable
+                }
+            }
+        }
+        if let configData = choice["Configuration"] as? Data,
+           let config = try? PropertyListSerialization.propertyList(
+               from: configData,
+               options: [],
+               format: nil
+           ) as? [String: Any],
+           let parsed = url(fromPlistValue: config["url"]),
+           let readable = readableImageURL(parsed) {
+            return readable
+        }
+        return nil
+    }
+
+    static func loadCGImage(from url: URL, prefersDark: Bool) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let count = CGImageSourceGetCount(source)
+        guard count > 0 else { return nil }
+        let index = (count > 1 && prefersDark) ? 1 : 0
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        return CGImageSourceCreateImageAtIndex(source, index, options)
+    }
+
+    private static func displayUUIDString(_ displayID: CGDirectDisplayID) -> String? {
+        guard let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue() else {
+            return nil
+        }
+        return CFUUIDCreateString(nil, uuid) as String
+    }
+
+    private static func url(fromPlistValue value: Any?) -> URL? {
+        if let relative = value as? String {
+            return URL(string: relative)
+        }
+        if let dict = value as? [String: Any], let relative = dict["relative"] as? String {
+            return URL(string: relative)
+        }
+        return nil
+    }
+
+    private static func readableImageURL(_ url: URL) -> URL? {
+        guard !isPlaceholderStill(url) else { return nil }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            return nil
+        }
+        return url
+    }
+
+    private static func isPlaceholderStill(_ url: URL) -> Bool {
+        let name = url.lastPathComponent.lowercased()
+        if name == "defaultdesktop.heic" || name == "defaultaerial.heic" {
+            return true
+        }
+        if url.pathExtension.lowercased() == "madesktop" {
+            return true
+        }
+        let path = url.standardizedFileURL.path.lowercased()
+        return path.contains("/system/library/wallpapers/.default")
+            || path.contains("/system/library/coreservices/defaultdesktop")
     }
 }
 
@@ -120,11 +244,8 @@ private actor PrivateWallpaperRenderer {
         backingScale _: CGFloat,
         blurRadius: CGFloat,
         saturation: CGFloat
-    ) -> CGImage? {
-        guard
-            let windowID = WallpaperWindowLocator.find(for: displayID),
-            let capturedImage = PrivateWindowServerCapture.capture(windowID: windowID)
-        else {
+    ) async -> CGImage? {
+        guard let capturedImage = await captureWallpaperPixels(displayID: displayID) else {
             return nil
         }
 
@@ -158,6 +279,29 @@ private actor PrivateWallpaperRenderer {
             height: max(1, scaledExtent.height)
         )
         return context.createCGImage(output, from: outputRect)
+    }
+
+    private func captureWallpaperPixels(displayID: CGDirectDisplayID) async -> CGImage? {
+        for windowID in WallpaperWindowLocator.candidates(for: displayID) {
+            if let image = PrivateWindowServerCapture.capture(windowID: windowID),
+               !isFailedBlackFrame(image) {
+                return image
+            }
+        }
+
+        let (workspaceURL, prefersDark) = await MainActor.run {
+            (
+                WallpaperFileSource.workspaceURL(for: displayID),
+                NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            )
+        }
+        let fileURL = workspaceURL ?? WallpaperFileSource.indexPlistURL(for: displayID)
+        if let fileURL,
+           let image = WallpaperFileSource.loadCGImage(from: fileURL, prefersDark: prefersDark),
+           !isFailedBlackFrame(image) {
+            return image
+        }
+        return nil
     }
 
     /// Failed CGS captures are typically uniform black. Keep a previous good frame.
