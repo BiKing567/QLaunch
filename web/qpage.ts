@@ -1,7 +1,7 @@
 import { IPageMeta, ISection, IQPageConfig } from "qpage";
 
 export const config: IQPageConfig = {
-  defaultLang: "zh-Hans",
+ 
 };
 
 import UrlIcon from "./icons/qlaunchpad-512.png";
@@ -53,17 +53,18 @@ export const sections: ISection[] = [
   },
 
   {
-    id: "pingyin",
-    title: "拼音搜索",
-    description: "中文用户不用切换输入法了，无脑输入，无论当前输入法是英文还是拼音都能搜索到目标",
-    cards: [{ style: "center", image: "./assets/s6.png" }],
-  },
-
-  {
     id: "infcolors",
     title: "无限画布 + 按颜色排序",
     description: "在画布中陈列所有应用程序图标，通过缩放、平移自由浏览，还可以根据图标颜色排序",
     cards: [{ style: "center", video: "./assets/无限画布模式.mp4" }],
+  },
+
+
+  {
+    id: "pingyin",
+    title: "拼音搜索",
+    description: "中文用户不用切换输入法了，无脑输入，无论当前输入法是英文还是拼音都能搜索到目标",
+    cards: [{ style: "center", image: "./assets/s6.png" }],
   },
 
   {

@@ -678,7 +678,11 @@ function embedSparkleFramework(appPath: string, scratchPath: string): string {
   const destination = join(frameworksPath, "Sparkle.framework");
   mkdirSync(frameworksPath, { recursive: true });
   rmSync(destination, { recursive: true, force: true });
-  cpSync(source, destination, { recursive: true });
+  // Default cpSync rewrites relative symlink targets to absolute paths.
+  // That leaves Sparkle.framework's versioned root links pointing outside
+  // the app, and codesign fails with "unsealed contents present in the
+  // root directory of an embedded framework".
+  cpSync(source, destination, { recursive: true, verbatimSymlinks: true });
   return destination;
 }
 

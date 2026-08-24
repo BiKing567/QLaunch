@@ -247,6 +247,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private var canvasStateItemCount = 0
     private var canvasStateSignature: AppListSignature?
     private var canvasStateUsesAdaptiveLayout = false
+    private var canvasStateSize: CGSize = .zero
     private var canvasZoomVelocity: CGFloat = 0
     private var canvasPanVelocity: CGPoint = .zero
     private var canvasEdgePanVelocity: CGPoint = .zero
@@ -954,7 +955,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             let center = interactionIconCenter(globalIndex: visualIndex, metrics: metrics)
             if groupingMotionSpeed <= groupingMaximumIntentSpeed * 1.5,
                hypot(draggedCenter.x - center.x, draggedCenter.y - center.y)
-                <= metrics.iconSize * groupingReleaseRadiusScale {
+                <= interactionIconPointSize(metrics: metrics) * groupingReleaseRadiusScale {
                 return
             }
             setDragHoverTarget(nil)
@@ -975,7 +976,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             // Acquire grouping from the actual dragged icon center rather than the
             // pointer. Grabbing an icon near an edge therefore remains just as easy
             // as grabbing it in the middle.
-            let groupingRadius = metrics.iconSize * groupingAcquireRadiusScale
+            let groupingRadius = interactionIconPointSize(metrics: metrics)
+                * groupingAcquireRadiusScale
             var groupingCandidate: (id: String, distance: CGFloat)?
             for (index, item) in displayedItems.enumerated() where item.id != draggedAppID {
                 let visualIndex = reorderVisualSlots[item.id] ?? Double(index)
@@ -1021,12 +1023,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             return
         }
 
+        if reorderVisualSlots.isEmpty {
+            resetReorderVisualSlots(to: displayedItems)
+        }
         store.moveItem(from: source, to: destination)
-        displayedItems = store.displayItems
-        lastDisplaySignature = AppListSignature(items: displayedItems)
+        applyAnimatedLayout(store.displayItems)
         dragSource = destination
         dragDestination = destination
-        isReorderAnimationActive = true
         startDisplayLink()
     }
 
@@ -1057,12 +1060,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         guard let destination = layoutItemIndex(at: point, hitRadiusScale: 1.05) else { return }
         guard displayedItems.indices.contains(destination), destination != source else { return }
 
+        if reorderVisualSlots.isEmpty {
+            resetReorderVisualSlots(to: displayedItems)
+        }
         store.moveAppInsideFolder(folderID: folderID, from: source, to: destination)
-        displayedItems = store.activeDisplayItems
-        lastDisplaySignature = AppListSignature(items: displayedItems)
+        applyAnimatedLayout(store.activeDisplayItems)
         dragSource = destination
         dragDestination = destination
-        isReorderAnimationActive = true
         startDisplayLink()
     }
 
@@ -2941,9 +2945,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-        if GridLayoutPreset.current.isInfiniteCanvas {
-            canvasStatePreset = nil
-        }
         needsDisplay = true
     }
 
@@ -2967,6 +2968,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             canvasStateItemCount = 0
             canvasStateSignature = nil
             canvasStateUsesAdaptiveLayout = false
+            canvasStateSize = .zero
             store.setInfiniteCanvasNavigationColumns(InfiniteCanvasMetrics.columns)
             resetCanvasMotion()
             return
@@ -2977,10 +2979,16 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             ? canvasStateUsesAdaptiveLayout
             : store.isSearching || store.openedFolderID != nil
         let signature = AppListSignature(items: displayedItems)
-        guard canvasStatePreset != preset
-                || canvasStateItemCount != itemCount
-                || (store.isSearching && canvasStateSignature != signature)
-                || canvasStateUsesAdaptiveLayout != usesAdaptiveLayout else { return }
+        let presetChanged = canvasStatePreset != preset
+        let adaptiveChanged = canvasStateUsesAdaptiveLayout != usesAdaptiveLayout
+        let itemCountChanged = canvasStateItemCount != itemCount
+        let searchContentsChanged = store.isSearching && canvasStateSignature != signature
+        let sizeChanged = !canvasStateSizeMatchesView
+        guard presetChanged
+                || adaptiveChanged
+                || itemCountChanged
+                || searchContentsChanged
+                || sizeChanged else { return }
         let metrics = InfiniteCanvasMetrics(
             size: bounds.size,
             itemCount: itemCount,
@@ -2988,28 +2996,62 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             maximumScale: preset.infiniteCanvasMaximumScale
         )
         store.setInfiniteCanvasNavigationColumns(metrics.columnCount)
-        let initialScale = usesAdaptiveLayout
-            ? metrics.fittedScale
-            : metrics.viewportFillingScale
-        canvasScale = max(initialScale, 0.12)
-        canvasPan = .zero
-        canvasPanStart = .zero
-        resetCanvasMotion()
-        canvasZoomAnchor = metrics.viewportCenter
-        canvasRippleCenter = metrics.viewportCenter
-        canvasRippleReferenceScale = canvasScale
-        canvasRippleReferencePan = canvasPan
-        canvasTransformHistory = [CanvasTransformSample(
-            time: CACurrentMediaTime(),
-            scale: canvasScale,
-            pan: canvasPan
-        )]
-        currentPageOffset = 0
-        frozenPageOffset = 0
+        // Reorder, grouping, and drawable-size callbacks must keep the user's
+        // zoom. Only a layout mode change (preset / search / folder) re-fits.
+        let shouldResetCamera = presetChanged
+            || adaptiveChanged
+            || canvasStateSize.width < 1
+            || canvasStateSize.height < 1
+            || bounds.size.width < 1
+            || bounds.size.height < 1
+        if shouldResetCamera {
+            let initialScale = usesAdaptiveLayout
+                ? metrics.fittedScale
+                : metrics.viewportFillingScale
+            canvasScale = max(initialScale, 0.12)
+            canvasPan = .zero
+            canvasPanStart = .zero
+            resetCanvasMotion()
+            canvasZoomAnchor = metrics.viewportCenter
+            canvasRippleCenter = metrics.viewportCenter
+            canvasRippleReferenceScale = canvasScale
+            canvasRippleReferencePan = canvasPan
+            canvasTransformHistory = [CanvasTransformSample(
+                time: CACurrentMediaTime(),
+                scale: canvasScale,
+                pan: canvasPan
+            )]
+            currentPageOffset = 0
+            frozenPageOffset = 0
+        } else {
+            let oldMetrics = InfiniteCanvasMetrics(
+                size: canvasStateSize,
+                itemCount: canvasStateItemCount,
+                adaptsToItemCount: canvasStateUsesAdaptiveLayout,
+                maximumScale: canvasStatePreset?.infiniteCanvasMaximumScale
+                    ?? preset.infiniteCanvasMaximumScale
+            )
+            let preserved = metrics.cameraPreservingGridPoint(
+                from: oldMetrics,
+                scale: canvasScale,
+                pan: canvasPan,
+                minimumScale: max(metrics.fittedScale, 0.12),
+                maximumScale: canvasMaximumScale
+            )
+            canvasScale = preserved.scale
+            canvasPan = preserved.pan
+            canvasPanStart = canvasPan
+        }
         canvasStatePreset = preset
         canvasStateItemCount = itemCount
         canvasStateSignature = signature
         canvasStateUsesAdaptiveLayout = usesAdaptiveLayout
+        canvasStateSize = bounds.size
+    }
+
+    private var canvasStateSizeMatchesView: Bool {
+        abs(canvasStateSize.width - bounds.size.width) < 0.5
+            && abs(canvasStateSize.height - bounds.size.height) < 0.5
     }
 
     private func canvasVisualTransform(
@@ -3320,6 +3362,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         needsDisplay = true
     }
 
+    private func interactionIconPointSize(metrics: GridMetrics) -> CGFloat {
+        GridLayoutPreset.current.isInfiniteCanvas
+            ? 128 * canvasScale
+            : metrics.iconSize
+    }
+
     private func interactionIconCenter(globalIndex: Double, metrics: GridMetrics) -> CGPoint {
         guard GridLayoutPreset.current.isInfiniteCanvas else {
             return metrics.iconCenter(globalIndex: globalIndex, pageOffset: interactionPageOffset)
@@ -3540,6 +3588,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 )
                 lastGroupingMotionPoint = iconCenter
                 lastGroupingMotionTime = CACurrentMediaTime()
+                if GridLayoutPreset.current.isInfiniteCanvas {
+                    canvasZoomVelocity = 0
+                    canvasPanVelocity = .zero
+                    canvasRippleActiveUntil = 0
+                }
                 if store.allowsUserLayoutEditing {
                     startDisplayLink()
                 }
