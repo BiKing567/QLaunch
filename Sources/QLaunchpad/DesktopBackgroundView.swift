@@ -123,9 +123,9 @@ private enum WallpaperWindowLocator {
         if owner == "window server" || owner == "dock" {
             return nil
         }
-        // Unnamed: wallpaper layer only. Lower layers are backstops.
-        if owner.isEmpty && name.isEmpty {
-            guard layer == desktopLevel - 1 else { return nil }
+        // Tahoe can expose nonempty, renamed owner/name metadata for the real
+        // wallpaper surface. After excluding black helpers, identify it by layer.
+        if layer == desktopLevel - 1 {
             return 500
         }
         return nil
@@ -440,7 +440,9 @@ final class DesktopBackgroundView: NSView {
             wallpaperImageView.image = nil
             wallpaperImageView.isHidden = true
             visualEffectView.isHidden = false
-        } else if !replaceExisting, wallpaperImageView.image != nil {
+        } else if !replaceExisting,
+                  wallpaperImageView.image != nil || captureTask != nil {
+            // Reuse either the cached image or an in-flight capture for this display.
             return
         }
 
@@ -465,6 +467,10 @@ final class DesktopBackgroundView: NSView {
             if let image, !(await self.renderer.isFailedBlackFrame(image)) {
                 accepted = image
             }
+            guard !Task.isCancelled else { return }
+            guard generation == self.captureGeneration else { return }
+            self.captureTask = nil
+
             if let accepted {
                 self.wallpaperImageView.image = NSImage(
                     cgImage: accepted,
