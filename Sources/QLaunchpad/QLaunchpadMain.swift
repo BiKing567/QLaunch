@@ -10,17 +10,17 @@ enum QLaunchpadMain {
         }
 
         let application = NSApplication.shared
-        // Packaged .app: use Icon Services (Assets.car / icns). Bare binary: flat PNG.
-        if Bundle.main.bundleURL.pathExtension == "app" {
-            application.applicationIconImage = NSWorkspace.shared.icon(
-                forFile: Bundle.main.bundlePath
-            )
-        } else if let image = QLaunchpadAppIcon.image {
+        // Packaged .app: never assign applicationIconImage. Dock must render
+        // CFBundleIconName from Assets.car (correct pixel size + Liquid Glass).
+        // NSWorkspace.icon(forFile:) is a 32pt lazy snapshot; writing it here
+        // is why the Dock tile occasionally looks low-resolution.
+        // Bare `swift run` has no asset catalog, so it still needs the PNG.
+        if Bundle.main.bundleURL.pathExtension != "app",
+           let image = QLaunchpadAppIcon.image {
             application.applicationIconImage = image
         }
         let delegate = AppDelegate()
         application.delegate = delegate
-        application.setActivationPolicy(.accessory)
         application.run()
     }
 }

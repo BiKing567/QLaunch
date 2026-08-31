@@ -39,6 +39,11 @@ const TARGET_NAME = "QLaunchpad";
 const RESOURCE_BUNDLE_NAME = TARGET_NAME + "_" + TARGET_NAME + ".bundle";
 /** Flat PNG fallback (About / `swift run` / actool unavailable). */
 const ICON_PNG_SOURCE = join(ROOT_DIR, "Sources/QLaunchpad/Resources/QLaunchpadAppIcon.png");
+/** Icon Composer 1024 flattened export — used to fill 512/1024 into the icns fallback. */
+const ICON_FLAT_1024 = join(
+  ROOT_DIR,
+  "icons/QLaunch Exports/QLaunch-macOS-Default-1024@1x.png",
+);
 /**
  * Icon Composer multi-layer source (preferred).
  * Override with env `QLAUNCHPAD_ICON` (path to a `.icon` package).
@@ -201,10 +206,34 @@ function readIconCacheManifest(): IconCacheManifest | null {
 }
 
 function iconCacheArtifactsExist(iconName: string): boolean {
+  const icns = join(ICON_CACHE_DIR, iconName + ".icns");
   return (
     existsSync(join(ICON_CACHE_DIR, "Assets.car")) &&
-    existsSync(join(ICON_CACHE_DIR, iconName + ".icns"))
+    existsSync(icns) &&
+    icnsContainsType(icns, "ic10")
   );
+}
+
+/** True when the icns includes `type` (e.g. `ic10` = 1024×1024). */
+function icnsContainsType(icnsPath: string, type: string): boolean {
+  const data = readFileSync(icnsPath);
+  if (data.length < 8 || data.toString("ascii", 0, 4) !== "icns") return false;
+  let offset = 8;
+  while (offset + 8 <= data.length) {
+    const ost = data.toString("ascii", offset, offset + 4);
+    const size = data.readUInt32BE(offset + 4);
+    if (size < 8) return false;
+    if (ost === type) return true;
+    offset += size;
+  }
+  return false;
+}
+
+function resolveFlattened1024PNG(): string | null {
+  for (const candidate of [ICON_FLAT_1024, ICON_PNG_SOURCE]) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
 }
 
 function writeIconCacheManifest(manifest: IconCacheManifest): void {
@@ -218,10 +247,6 @@ function copyCachedIconsToApp(resourcesPath: string, iconName: string): void {
     join(ICON_CACHE_DIR, iconName + ".icns"),
     join(resourcesPath, iconName + ".icns"),
   );
-  const cachedPng = join(ICON_CACHE_DIR, "QLaunchpadAppIcon.png");
-  if (existsSync(cachedPng)) {
-    copyFileSync(cachedPng, ICON_PNG_SOURCE);
-  }
 }
 
 /**
@@ -365,15 +390,17 @@ async function compileIconComposer(
 
     const car = join(outDir, "Assets.car");
     const icns = join(outDir, BUNDLE_ICON_NAME + ".icns");
+    // actool's Icon Composer icns often stops at 256px (ic13). Rebuild a
+    // complete icns from the 1024 flatten so Icon Services never upscales.
+    const flat1024 = resolveFlattened1024PNG();
+    if (flat1024) {
+      await createICNSFromPNG(icns, flat1024);
+    }
     copyFileSync(car, join(resourcesPath, "Assets.car"));
     copyFileSync(icns, join(resourcesPath, BUNDLE_ICON_NAME + ".icns"));
     // Persist cache for subsequent dev builds.
     copyFileSync(car, join(ICON_CACHE_DIR, "Assets.car"));
     copyFileSync(icns, join(ICON_CACHE_DIR, BUNDLE_ICON_NAME + ".icns"));
-
-    // Refresh flat PNG for About / SPM resource bundle consumers.
-    await exportPNGFromICNS(icns, ICON_PNG_SOURCE);
-    copyFileSync(ICON_PNG_SOURCE, join(ICON_CACHE_DIR, "QLaunchpadAppIcon.png"));
     return true;
   };
 
@@ -419,44 +446,13 @@ async function compileIconComposer(
   };
 }
 
-async function exportPNGFromICNS(icnsPath: string, pngPath: string): Promise<void> {
-  mkdirSync(dirname(pngPath), { recursive: true });
-  // iconutil expands all representations; pick the largest PNG.
-  const iconset = join(dirname(icnsPath), "export-temp.iconset");
-  rmSync(iconset, { recursive: true, force: true });
-  try {
-    await runCommand(["iconutil", "-c", "iconset", icnsPath, "-o", iconset]);
-    const files = readdirSync(iconset)
-      .filter((name) => name.endsWith(".png"))
-      .map((name) => join(iconset, name));
-    if (files.length === 0) {
-      throw new Error("iconutil 未从 icns 导出任何 PNG");
-    }
-    // Prefer 1024 / @2x of 512.
-    const preferred =
-      files.find((f) => f.includes("512x512@2x")) ||
-      files.find((f) => f.includes("256x256@2x")) ||
-      files.sort((a, b) => b.length - a.length)[0];
-    copyFileSync(preferred, pngPath);
-    // Ensure 1024 square for marketing consistency.
-    await runCommand([
-      "sips",
-      "-z",
-      "1024",
-      "1024",
-      pngPath,
-      "--out",
-      pngPath,
-    ]);
-  } finally {
-    rmSync(iconset, { recursive: true, force: true });
-  }
-}
-
 /** Legacy flat-PNG → iconset → icns pipeline. */
-async function createICNSFromPNG(destination: string): Promise<void> {
-  if (!existsSync(ICON_PNG_SOURCE)) {
-    throw new Error("未找到应用图标 PNG: " + ICON_PNG_SOURCE);
+async function createICNSFromPNG(
+  destination: string,
+  sourcePNG: string = ICON_PNG_SOURCE,
+): Promise<void> {
+  if (!existsSync(sourcePNG)) {
+    throw new Error("未找到应用图标 PNG: " + sourcePNG);
   }
 
   const iconset = join(dirname(destination), "QLaunch.iconset");
@@ -469,7 +465,7 @@ async function createICNSFromPNG(destination: string): Promise<void> {
       "-z",
       String(pointSize),
       String(pointSize),
-      ICON_PNG_SOURCE,
+      sourcePNG,
       "--out",
       join(iconset, "icon_" + pointSize + "x" + pointSize + ".png"),
     ]);
@@ -478,7 +474,7 @@ async function createICNSFromPNG(destination: string): Promise<void> {
       "-z",
       String(pointSize * 2),
       String(pointSize * 2),
-      ICON_PNG_SOURCE,
+      sourcePNG,
       "--out",
       join(iconset, "icon_" + pointSize + "x" + pointSize + "@2x.png"),
     ]);
@@ -521,7 +517,8 @@ async function installAppIcon(resourcesPath: string): Promise<{
     cached &&
     cached.kind === "png" &&
     cached.fingerprint === fingerprint &&
-    existsSync(join(ICON_CACHE_DIR, icnsName))
+    existsSync(join(ICON_CACHE_DIR, icnsName)) &&
+    icnsContainsType(join(ICON_CACHE_DIR, icnsName), "ic10")
   ) {
     console.log("▸ 图标缓存命中 (PNG)，跳过 iconutil");
     copyFileSync(join(ICON_CACHE_DIR, icnsName), join(resourcesPath, icnsName));
@@ -535,7 +532,10 @@ async function installAppIcon(resourcesPath: string): Promise<{
 
   console.log("▸ 未找到 .icon，回退 PNG → icns: " + ICON_PNG_SOURCE);
   mkdirSync(ICON_CACHE_DIR, { recursive: true });
-  await createICNSFromPNG(join(resourcesPath, icnsName));
+  await createICNSFromPNG(
+    join(resourcesPath, icnsName),
+    resolveFlattened1024PNG() ?? ICON_PNG_SOURCE,
+  );
   copyFileSync(join(resourcesPath, icnsName), join(ICON_CACHE_DIR, icnsName));
   writeIconCacheManifest({
     source: ICON_PNG_SOURCE,
@@ -766,8 +766,7 @@ export async function buildApp(options: AppBuildOptions): Promise<AppBuildResult
   cpSync(resourceBundleSource, join(resourcesPath, basename(resourceBundleSource)), { recursive: true });
 
   const iconInstall = await installAppIcon(resourcesPath);
-  // After Icon Composer compile, PNG in Resources/ may have been refreshed —
-  // re-copy SPM resource bundle's app icon if present so packaged app matches.
+  // Keep the SPM resource-bundle PNG in sync for About / `swift run`.
   const refreshedPng = ICON_PNG_SOURCE;
   const bundledPng = join(
     resourcesPath,

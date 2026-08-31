@@ -22,7 +22,7 @@ enum QLaunchpadResources {
 }
 
 enum QLaunchpadAppIcon {
-    /// Full-color app icon (Dock / About / applicationIconImage).
+    /// Full-color app icon (About / `swift run`). Packaged Dock icons come from Assets.car.
     static var image: NSImage? {
         image(named: "QLaunchpadAppIcon")
     }

@@ -32,3 +32,11 @@ test("Sources/QLaunchpad 不得使用 Bundle.module（发布包会 fatalError）
   }
   expect(hits).toEqual([]);
 });
+
+test("QLaunchpadMain 不得把 NSWorkspace 图标赋给 applicationIconImage", () => {
+  const source = stripSwiftComments(
+    readFileSync(join(APP_SOURCES, "QLaunchpadMain.swift"), "utf8"),
+  );
+  expect(source).not.toContain("NSWorkspace.shared.icon");
+  expect(source).not.toMatch(/applicationIconImage\s*=\s*NSWorkspace/);
+});

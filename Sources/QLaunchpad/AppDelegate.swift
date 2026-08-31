@@ -51,6 +51,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // The login-item Apple Event is only reliable while launch is in flight.
         launchReason = LaunchpadLaunchProbe.currentReason()
+        // Tile the Dock *before* didFinishLaunching. Flipping
+        // .accessory → .regular later makes Dock snapshot whatever
+        // low-res Icon Services has at that instant.
+        applyDockIconPreference()
         // Overlap the filesystem scan with panel / Metal setup.
         store.load()
     }
@@ -65,7 +69,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
         store.load()
         installHotKey()
-        applyDockIconPreference()
         installStatusItem()
         NotificationCenter.default.addObserver(
             self,
@@ -442,6 +445,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func applyDockIconPreference() {
+        // Do not assign applicationIconImage here. Packaged builds rely on
+        // Assets.car via CFBundleIconName; a raster override is what made
+        // the Dock icon intermittently blurry.
         NSApp.setActivationPolicy(showDockIconPreference ? .regular : .accessory)
     }
 
