@@ -444,6 +444,7 @@ enum IconRenderQuality: String, CaseIterable, Identifiable {
 
 enum LaunchpadAnimationStyle: String, CaseIterable, Identifiable {
     case fly
+    case classic
     case zoom
     case fade
     case none
@@ -458,9 +459,10 @@ enum LaunchpadAnimationStyle: String, CaseIterable, Identifiable {
 
     var duration: CFTimeInterval {
         switch self {
-        case .fly: 1.3
-        case .zoom: 0.62
-        case .fade: 0.26
+        case .fly: 1.2
+        case .classic: 0.33
+        case .zoom: 0.57
+        case .fade: 0.24
         case .none: 0
         }
     }
@@ -468,6 +470,7 @@ enum LaunchpadAnimationStyle: String, CaseIterable, Identifiable {
     var dismissalDuration: CFTimeInterval {
         switch self {
         case .fly: 0.48
+        case .classic: 0.26
         case .zoom: 0.22
         case .fade: 0.25
         case .none: 0

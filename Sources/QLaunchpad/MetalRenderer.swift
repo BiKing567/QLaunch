@@ -308,6 +308,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private var displayLink: CADisplayLink?
     private var animatingPresentation = false
     private var contentScale: CGFloat = 1
+    private var contentOffsetY: CGFloat = 0
     /// Start visible so a missed present-notification never leaves a blank grid.
     private var contentAlpha: CGFloat = 1
     private var iconEntranceProgress: CGFloat = 1
@@ -1259,10 +1260,21 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             iconEntranceProgress = progress >= 0.999 ? 1 : progress * 0.87
             contentAlpha = isShowingPresentation ? 1 : fastDismissAlpha
             contentScale = 1
+            contentOffsetY = 0
+        case .classic:
+            iconEntranceProgress = 1
+            let eased = 1 - pow(1 - progress, 3)
+            contentAlpha = isShowingPresentation ? eased : fastDismissAlpha
+            contentScale = ClassicPresentationTransform.scale(
+                progress: progress,
+                showing: isShowingPresentation
+            )
+            contentOffsetY = 0
         case .zoom:
             iconEntranceProgress = 1
             contentAlpha = isShowingPresentation ? 1 : fastDismissAlpha
             contentScale = 1
+            contentOffsetY = 0
         case .fade:
             let eased = 1 - pow(1 - progress, 3)
             iconEntranceProgress = 1
@@ -1270,10 +1282,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             // wallpaper and all content share an identical opacity curve.
             contentAlpha = isShowingPresentation ? eased : 1
             contentScale = 1
+            contentOffsetY = 0
         case .none:
             iconEntranceProgress = 1
             contentAlpha = 1
             contentScale = 1
+            contentOffsetY = 0
         }
         store.presentationProgress = progress
     }
@@ -2244,6 +2258,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
            window?.isVisible == true {
             contentAlpha = 1
             contentScale = 1
+            contentOffsetY = 0
         }
         let presentAlpha = Float(max(contentAlpha, 0))
         let gridAlpha = presentAlpha * max(contentTransitionAlpha, 0)
@@ -2468,6 +2483,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         horizontalOffset: CGFloat,
         verticalOffset: CGFloat
     ) {
+        if presentationStyle == .classic {
+            return classicIconEntrance(localIndex: localIndex)
+        }
         guard iconEntranceProgress < 0.999 else { return (1, 1, 1, 0, 0) }
 
         let column = CGFloat(localIndex % GridMetrics.columns)
@@ -2532,6 +2550,43 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             scale = 1
         }
         return (Float(opacity), scale, position, horizontalOffset, verticalOffset)
+    }
+
+    private func classicIconEntrance(
+        localIndex: Int
+    ) -> (
+        opacity: Float,
+        scale: CGFloat,
+        position: CGFloat,
+        horizontalOffset: CGFloat,
+        verticalOffset: CGFloat
+    ) {
+        guard iconEntranceProgress < 0.999 else { return (1, 1, 1, 0, 0) }
+
+        let column = CGFloat(localIndex % GridMetrics.columns)
+        let row = CGFloat(localIndex / GridMetrics.columns)
+        let centerColumn = CGFloat(GridMetrics.columns - 1) * 0.5
+        let centerRow = CGFloat(GridMetrics.rows - 1) * 0.5
+        let distance = hypot(column - centerColumn, row - centerRow)
+        let minimumDistance = hypot(CGFloat(0.5), CGFloat(0.5))
+        let maximumDistance = hypot(centerColumn, centerRow)
+        let distanceProgress = min(
+            1,
+            max(0, (distance - minimumDistance) / max(maximumDistance - minimumDistance, 0.001))
+        )
+
+        let inwardProgress = 1 - distanceProgress
+        let delay = 0.04 + 0.14 * inwardProgress
+        let span = 0.28 + 0.08 * inwardProgress
+        let expansion = min(
+            1,
+            max(0, (iconEntranceProgress - delay) / span)
+        )
+        let easedExpansion = 1 - pow(1 - expansion, 3)
+        let opacityPhase = min(1, expansion / 0.82)
+        let opacity = 1 - pow(1 - opacityPhase, 3)
+        let scale = 0.78 + 0.22 * easedExpansion
+        return (Float(opacity), scale, easedExpansion, 0, 0)
     }
 
     /// Per-icon center expansion for the zoom style. Icons near the grid center
@@ -2772,9 +2827,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     c.x = midX + (c.x - midX) * zoom.layoutScale
                     c.y = midY + (c.y - midY) * zoom.layoutScale
                 }
-                if !viewTransitionActive, contentScale < 0.999 {
+                if !viewTransitionActive, abs(contentScale - 1) > 0.0001 {
                     c.x = midX + (c.x - midX) * contentScale
                     c.y = midY + (c.y - midY) * contentScale
+                }
+                if !viewTransitionActive, contentOffsetY != 0 {
+                    c.y += contentOffsetY
                 }
                 // The launched app remains at its exact final position and size.
                 // Its extra fifth-power fade combines with the shared cubic fade,
