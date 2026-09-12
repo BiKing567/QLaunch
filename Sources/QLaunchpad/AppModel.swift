@@ -569,8 +569,8 @@ final class AppStore: ObservableObject {
     private var scrollAxisAccumY: Double = 0
     /// After finger-up settle, leftover trackpad momentum must not start a new flip.
     private var ignoreScrollMomentum = false
-    private var lastDiscreteWheelEventAt: CFTimeInterval = -.infinity
-    private let discreteWheelBurstWindow: CFTimeInterval = 0.8
+    private var lastDiscreteWheelAcceptedAt: CFTimeInterval = -.infinity
+    private let discreteWheelCooldown: CFTimeInterval = 0.8
     /// Un-rubber-banded page at mouse-down. Pointer X maps 1:1 onto this origin.
     private var pagePanOrigin: Double = 0
     /// The renderer owns adaptive infinite-canvas geometry because it depends
@@ -1446,13 +1446,16 @@ final class AppStore: ObservableObject {
 
             if isPrecise {
                 let now = CACurrentMediaTime()
-                if now - lastDiscreteWheelEventAt < discreteWheelBurstWindow {
-                    lastDiscreteWheelEventAt = now
+                guard LaunchpadPageSnap.acceptsDiscreteWheel(
+                    now: now,
+                    lastAcceptedAt: lastDiscreteWheelAcceptedAt,
+                    cooldown: discreteWheelCooldown
+                ) else {
                     return
                 }
-                lastDiscreteWheelEventAt = now
+                lastDiscreteWheelAcceptedAt = now
             } else {
-                lastDiscreteWheelEventAt = -.infinity
+                lastDiscreteWheelAcceptedAt = -.infinity
             }
 
             resetPageScrollGesture()
@@ -1461,7 +1464,7 @@ final class AppStore: ObservableObject {
         }
 
         if began {
-            lastDiscreteWheelEventAt = -.infinity
+            lastDiscreteWheelAcceptedAt = -.infinity
             ignoreScrollMomentum = false
             isPageGestureActive = true
             scrollAccumulated = 0

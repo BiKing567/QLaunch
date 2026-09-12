@@ -24,6 +24,15 @@ public enum LaunchpadPageSnap {
         !isPrecise || (phaseIsEmpty && momentumPhaseIsEmpty)
     }
 
+    public static func acceptsDiscreteWheel(
+        now: Double,
+        lastAcceptedAt: Double,
+        cooldown: Double
+    ) -> Bool {
+        guard lastAcceptedAt.isFinite else { return true }
+        return now - lastAcceptedAt >= cooldown
+    }
+
     public static func settledPage(
         offset: Double,
         origin: Double,

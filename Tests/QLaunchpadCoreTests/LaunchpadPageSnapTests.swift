@@ -42,6 +42,30 @@ final class LaunchpadPageSnapTests: XCTestCase {
         )
     }
 
+    func testDiscreteWheelCooldownUsesAcceptedEventTime() {
+        XCTAssertTrue(
+            LaunchpadPageSnap.acceptsDiscreteWheel(
+                now: 0,
+                lastAcceptedAt: -.infinity,
+                cooldown: 0.8
+            )
+        )
+        XCTAssertFalse(
+            LaunchpadPageSnap.acceptsDiscreteWheel(
+                now: 0.7,
+                lastAcceptedAt: 0,
+                cooldown: 0.8
+            )
+        )
+        XCTAssertTrue(
+            LaunchpadPageSnap.acceptsDiscreteWheel(
+                now: 0.8,
+                lastAcceptedAt: 0,
+                cooldown: 0.8
+            )
+        )
+    }
+
     func testMouseCommitIsLowerThanHalfPage() {
         XCTAssertLessThan(LaunchpadPageSnap.mouseCommitThreshold, 0.5)
         XCTAssertLessThan(
