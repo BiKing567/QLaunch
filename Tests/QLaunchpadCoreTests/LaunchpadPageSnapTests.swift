@@ -2,6 +2,46 @@ import XCTest
 import QLaunchpadCore
 
 final class LaunchpadPageSnapTests: XCTestCase {
+    func testMouseWheelUsesTheDominantAxisAndFlipsDirection() {
+        XCTAssertEqual(
+            LaunchpadPageSnap.mouseWheelPageDelta(deltaX: 0, deltaY: -1),
+            1
+        )
+        XCTAssertEqual(
+            LaunchpadPageSnap.mouseWheelPageDelta(deltaX: 4, deltaY: 1),
+            -1
+        )
+    }
+
+    func testMouseWheelIgnoresEmptyDelta() {
+        XCTAssertNil(LaunchpadPageSnap.mouseWheelPageDelta(deltaX: 0, deltaY: 0))
+        XCTAssertNil(LaunchpadPageSnap.mouseWheelPageDelta(deltaX: 0.005, deltaY: 0))
+    }
+
+    func testPreciseWheelWithoutPhasesUsesDiscretePaging() {
+        XCTAssertTrue(
+            LaunchpadPageSnap.isDiscreteWheel(
+                isPrecise: true,
+                phaseIsEmpty: true,
+                momentumPhaseIsEmpty: true
+            )
+        )
+        XCTAssertFalse(
+            LaunchpadPageSnap.isDiscreteWheel(
+                isPrecise: true,
+                phaseIsEmpty: false,
+                momentumPhaseIsEmpty: true
+            )
+        )
+        XCTAssertTrue(
+            LaunchpadPageSnap.isDiscreteWheel(
+                isPrecise: false,
+                phaseIsEmpty: false,
+                momentumPhaseIsEmpty: false
+            )
+        )
+    }
+
     func testMouseCommitIsLowerThanHalfPage() {
         XCTAssertLessThan(LaunchpadPageSnap.mouseCommitThreshold, 0.5)
         XCTAssertLessThan(

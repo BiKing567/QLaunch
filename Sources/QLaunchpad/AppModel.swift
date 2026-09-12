@@ -569,6 +569,8 @@ final class AppStore: ObservableObject {
     private var scrollAxisAccumY: Double = 0
     /// After finger-up settle, leftover trackpad momentum must not start a new flip.
     private var ignoreScrollMomentum = false
+    private var lastDiscreteWheelEventAt: CFTimeInterval = -.infinity
+    private let discreteWheelBurstWindow: CFTimeInterval = 0.8
     /// Un-rubber-banded page at mouse-down. Pointer X maps 1:1 onto this origin.
     private var pagePanOrigin: Double = 0
     /// The renderer owns adaptive infinite-canvas geometry because it depends
@@ -1431,17 +1433,35 @@ final class AppStore: ObservableObject {
         let inMomentum = momentumPhase.contains(.began) || momentumPhase.contains(.changed)
         let momentumEnded = momentumPhase.contains(.ended) || momentumPhase.contains(.cancelled)
 
-        // Mouse wheel: one notch → one page. Trackpad never takes this path.
-        if !isPrecise && phase.isEmpty && momentumPhase.isEmpty {
-            let primary = abs(deltaX) >= abs(deltaY) ? deltaX : deltaY
-            guard abs(primary) > 0.01 else { return }
-            let pageDelta = Double(-primary) / (pageScrollUnit * 0.35)
+        let isDiscreteWheel = LaunchpadPageSnap.isDiscreteWheel(
+            isPrecise: isPrecise,
+            phaseIsEmpty: phase.isEmpty,
+            momentumPhaseIsEmpty: momentumPhase.isEmpty
+        )
+        if isDiscreteWheel {
+            guard let pageDelta = LaunchpadPageSnap.mouseWheelPageDelta(
+                deltaX: Double(deltaX),
+                deltaY: Double(deltaY)
+            ) else { return }
+
+            if isPrecise {
+                let now = CACurrentMediaTime()
+                if now - lastDiscreteWheelEventAt < discreteWheelBurstWindow {
+                    lastDiscreteWheelEventAt = now
+                    return
+                }
+                lastDiscreteWheelEventAt = now
+            } else {
+                lastDiscreteWheelEventAt = -.infinity
+            }
+
             resetPageScrollGesture()
             settlePage(withVelocity: pageDelta > 0 ? 1.2 : -1.2)
             return
         }
 
         if began {
+            lastDiscreteWheelEventAt = -.infinity
             ignoreScrollMomentum = false
             isPageGestureActive = true
             scrollAccumulated = 0
