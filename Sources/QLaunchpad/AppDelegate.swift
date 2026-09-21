@@ -236,6 +236,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+        window.contentView = nil
+        settingsWindow = nil
+        syncSettingsWindowLevel()
+        if launchpadPanel?.isVisible == true, store.presentation != .hidden {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard self.launchpadPanel?.isVisible == true, self.store.presentation != .hidden else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                self.launchpadPanel?.makeKey()
+            }
+        }
+    }
+
     /// Settings already took key from the overlay, so `windowDidResignKey`
     /// will not fire again when the user opens a browser, Sparkle, or
     /// System Settings. Hide the fullscreen overlay so those windows are
@@ -694,6 +709,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.hidesOnDeactivate = false
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.contentView = NSHostingView(rootView: SettingsView(store: store))
         window.center()
         settingsWindow = window

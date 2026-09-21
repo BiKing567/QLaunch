@@ -104,6 +104,7 @@ struct AppInfo: Identifiable, Hashable, Sendable {
         name: String,
         url: URL,
         bundleIdentifier: String,
+        pinyin: PinyinSearchMetadata? = nil,
         installedAt: Date? = nil,
         lastUsedAt: Date? = nil
     ) {
@@ -112,7 +113,7 @@ struct AppInfo: Identifiable, Hashable, Sendable {
         self.url = url
         self.resourceSourcePath = url.standardizedFileURL.path
         self.bundleIdentifier = bundleIdentifier
-        self.pinyin = PinyinSearchMetadata.make(for: name)
+        self.pinyin = pinyin ?? PinyinSearchMetadata.make(for: name)
         self.installedAt = installedAt
         self.lastUsedAt = lastUsedAt
     }

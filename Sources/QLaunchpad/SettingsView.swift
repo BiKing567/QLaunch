@@ -104,8 +104,8 @@ private struct GeneralSettingsView: View {
     private var presentationAnimationStyle = LaunchpadAnimationStyle.fly.rawValue
     @AppStorage(HotCornerPreferences.positionKey)
     private var hotCornerPosition = HotCornerPreferences.defaultPosition.rawValue
-    @State private var launchAtLogin = LaunchAtLogin.isEnabled || LaunchAtLogin.needsApproval
-    @State private var launchAtLoginNeedsApproval = LaunchAtLogin.needsApproval
+    @State private var launchAtLogin = false
+    @State private var launchAtLoginNeedsApproval = false
     @State private var didClearCache = false
 
     var body: some View {
@@ -160,6 +160,26 @@ private struct GeneralSettingsView: View {
                 .onChange(of: showMenuBarIcon) { _, _ in
                     notifyAppearanceChanged()
                 }
+
+                Picker(
+                    L10n.tr("settings.hotCorner.position"),
+                    selection: Binding(
+                        get: { HotCornerPosition(rawValue: hotCornerPosition) ?? .none },
+                        set: {
+                            hotCornerPosition = $0.rawValue
+                            NotificationCenter.default.post(name: .qlaunchpadHotCornerChanged, object: nil)
+                        }
+                    )
+                ) {
+                    ForEach(HotCornerPosition.allCases) { corner in
+                        Text(corner.title).tag(corner)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Text(L10n.tr("settings.hotCorner.detail"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section(L10n.tr("settings.section.display")) {
@@ -207,6 +227,17 @@ private struct GeneralSettingsView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+
+            Section(L10n.tr("settings.section.animation")) {
+                Picker(L10n.tr("settings.animation"), selection: $presentationAnimationStyle) {
+                    ForEach(LaunchpadAnimationStyle.allCases) { style in
+                        Text(style.title).tag(style.rawValue)
+                    }
+                }
+                Text(L10n.tr("settings.animation.detail"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section(L10n.tr("settings.section.background")) {
@@ -276,44 +307,11 @@ private struct GeneralSettingsView: View {
                 }
             }
 
-            Section(L10n.tr("settings.section.animation")) {
-                Picker(L10n.tr("settings.animation"), selection: $presentationAnimationStyle) {
-                    ForEach(LaunchpadAnimationStyle.allCases) { style in
-                        Text(style.title).tag(style.rawValue)
-                    }
-                }
-                Text(L10n.tr("settings.animation.detail"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
             Section(L10n.tr("settings.section.keyboard")) {
                 HotKeyRecorderRow()
                 LabeledContent(L10n.tr("settings.keyboard.close"), value: "Esc")
                 LabeledContent(L10n.tr("settings.keyboard.select"), value: L10n.tr("settings.keyboard.arrows"))
                 LabeledContent(L10n.tr("settings.keyboard.open"), value: "Return")
-            }
-
-            Section(L10n.tr("settings.section.hotCorner")) {
-                Picker(
-                    L10n.tr("settings.hotCorner.position"),
-                    selection: Binding(
-                        get: { HotCornerPosition(rawValue: hotCornerPosition) ?? .none },
-                        set: {
-                            hotCornerPosition = $0.rawValue
-                            NotificationCenter.default.post(name: .qlaunchpadHotCornerChanged, object: nil)
-                        }
-                    )
-                ) {
-                    ForEach(HotCornerPosition.allCases) { corner in
-                        Text(corner.title).tag(corner)
-                    }
-                }
-                .pickerStyle(.menu)
-
-                Text(L10n.tr("settings.hotCorner.detail"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             Section(L10n.tr("settings.section.cache")) {

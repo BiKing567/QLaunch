@@ -186,6 +186,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private var lastResourceFolders: [AppFolder]?
     private var lastTextSignature: TextAtlasSignature?
     private var pendingTextSignature: TextAtlasSignature?
+    private var cachedResidentTextAtlasItems: [LaunchpadItem]?
+    private var folderAppInfoCache: [String: (name: String, app: AppInfo)] = [:]
     private var textAtlasBuildTask: Task<Void, Never>?
     private var lastFrameTime = CACurrentMediaTime()
     /// Prewarm only a sliding page window — full-catalog upload was hundreds of MB.
@@ -754,7 +756,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private func startDisplayLink() {
         guard displayLink == nil else { return }
         let link = displayLink(target: self, selector: #selector(displayLinkFired(_:)))
-        let maxFps = Float(min(120, NSScreen.main?.maximumFramesPerSecond ?? 60))
+        let targetScreen = window?.screen ?? NSScreen.main ?? NSScreen.screens.first
+        let maxFps = Float(min(120, targetScreen?.maximumFramesPerSecond ?? 60))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: maxFps, preferred: maxFps)
         link.add(to: .main, forMode: .common)
         displayLink = link
@@ -1170,6 +1173,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             let foldersChanged = lastResourceFolders != store.folders
             if catalogChanged || foldersChanged {
                 resourcePrewarmSignature = nil
+                cachedResidentTextAtlasItems = nil
+                folderAppInfoCache.removeAll()
             }
             scheduleResourcePrewarmingIfNeeded(prune: true)
         }
@@ -1216,6 +1221,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         cancelTextAtlasBuild()
         textAtlas.clear()
         lastTextSignature = nil
+        cachedResidentTextAtlasItems = nil
+        folderAppInfoCache.removeAll()
         iconsMissingTexture.removeAll(keepingCapacity: true)
         iconRevealStartedAt.removeAll(keepingCapacity: true)
         lastCatalogSignature = nil
@@ -1241,6 +1248,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         lastCatalogSignature = nil
         lastResourceFolders = nil
         lastTextSignature = nil
+        cachedResidentTextAtlasItems = nil
+        folderAppInfoCache.removeAll()
         resourcePrewarmSignature = nil
         lastTextureWindowPage = -1
         isResourcePrewarmingPaused = false
@@ -2019,6 +2028,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     /// Resident quality / performance keep this set so view swaps do not
     /// rebuild the atlas on the first fade-in frame.
     private func residentTextAtlasItems() -> [LaunchpadItem] {
+        if let cached = cachedResidentTextAtlasItems {
+            return cached
+        }
         var items: [LaunchpadItem] = []
         var seen = Set<String>()
         func append(_ item: LaunchpadItem) {
@@ -2031,6 +2043,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         for app in store.apps {
             append(.app(app))
         }
+        cachedResidentTextAtlasItems = items
         return items
     }
 
@@ -2047,16 +2060,21 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             case .app(let app):
                 append(app)
             case .folder(let folder):
-                let memberURL = folder.appIDs.lazy.compactMap { self.store.app(withID: $0)?.url }.first
-                    ?? URL(fileURLWithPath: "/Applications")
-                append(
-                    AppInfo(
+                if let cached = folderAppInfoCache[folder.id], cached.name == folder.name {
+                    append(cached.app)
+                } else {
+                    let memberURL = folder.appIDs.lazy.compactMap { self.store.app(withID: $0)?.url }.first
+                        ?? URL(fileURLWithPath: "/Applications")
+                    let fakeApp = AppInfo(
                         id: folder.id,
                         name: folder.name,
                         url: memberURL,
-                        bundleIdentifier: folder.id
+                        bundleIdentifier: folder.id,
+                        pinyin: .empty
                     )
-                )
+                    folderAppInfoCache[folder.id] = (folder.name, fakeApp)
+                    append(fakeApp)
+                }
             }
         }
         return result
@@ -4295,6 +4313,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if window?.isKeyWindow == false {
+            NSApp.activate(ignoringOtherApps: true)
+            window?.makeKey()
+        }
         updateCanvasEdgePointer(with: event)
         isMouseDown = true
         dragStart = convert(event.locationInWindow, from: nil)
@@ -5005,6 +5027,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        if window?.isKeyWindow == false {
+            NSApp.activate(ignoringOtherApps: true)
+            window?.makeKey()
+        }
         if GridLayoutPreset.current.isInfiniteCanvas {
             if event.hasPreciseScrollingDeltas {
                 panInfiniteCanvas(with: event)
@@ -5025,6 +5051,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     override var acceptsFirstResponder: Bool { true }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()

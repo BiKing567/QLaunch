@@ -39,6 +39,10 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
         return nil
     }
 
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if searchPadRect.contains(point) {
