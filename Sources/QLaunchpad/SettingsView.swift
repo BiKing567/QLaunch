@@ -111,17 +111,20 @@ private struct GeneralSettingsView: View {
     var body: some View {
         Form {
             Section(L10n.tr("settings.section.language")) {
-                Picker(L10n.tr("settings.language"), selection: $language.selection) {
+                Picker(selection: $language.selection) {
                     ForEach(AppLanguage.allCases) { option in
                         Text(option.displayName).tag(option)
                     }
-                }
-                .pickerStyle(.menu)
-
-                if language.selection == .system {
-                    Text(L10n.tr("settings.language.following", language.effectiveLanguage.displayName))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.language"))
+                        if language.selection == .system {
+                            Text(L10n.tr("settings.language.following", language.effectiveLanguage.displayName))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
             }
 
@@ -162,7 +165,6 @@ private struct GeneralSettingsView: View {
                 }
 
                 Picker(
-                    L10n.tr("settings.hotCorner.position"),
                     selection: Binding(
                         get: { HotCornerPosition(rawValue: hotCornerPosition) ?? .none },
                         set: {
@@ -174,12 +176,15 @@ private struct GeneralSettingsView: View {
                     ForEach(HotCornerPosition.allCases) { corner in
                         Text(corner.title).tag(corner)
                     }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.hotCorner.position"))
+                        Text(L10n.tr("settings.hotCorner.detail"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                .pickerStyle(.menu)
-
-                Text(L10n.tr("settings.hotCorner.detail"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             Section(L10n.tr("settings.section.display")) {
@@ -199,12 +204,29 @@ private struct GeneralSettingsView: View {
                     NotificationCenter.default.post(name: .qlaunchpadGridLayoutChanged, object: nil)
                 }
 
-                Picker(L10n.tr("settings.renderQuality"), selection: $iconRenderQuality) {
+                Picker(selection: $iconRenderQuality) {
                     ForEach(IconRenderQuality.allCases) { quality in
                         Text(quality.title).tag(quality.rawValue)
                     }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.renderQuality"))
+                        if store.isApplyingRenderQuality {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text(L10n.tr("settings.renderQuality.applying"))
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        } else if let quality = IconRenderQuality(rawValue: iconRenderQuality) {
+                            Text(quality.detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
-                .pickerStyle(.menu)
                 .disabled(store.isApplyingRenderQuality)
                 .onChange(of: iconRenderQuality) { _, newValue in
                     UserDefaults.standard.set(newValue, forKey: IconRenderQuality.defaultsKey)
@@ -213,49 +235,42 @@ private struct GeneralSettingsView: View {
                         object: nil
                     )
                 }
-                if store.isApplyingRenderQuality {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text(L10n.tr("settings.renderQuality.applying"))
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                } else if let quality = IconRenderQuality(rawValue: iconRenderQuality) {
-                    Text(quality.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
 
             Section(L10n.tr("settings.section.animation")) {
-                Picker(L10n.tr("settings.animation"), selection: $presentationAnimationStyle) {
+                Picker(selection: $presentationAnimationStyle) {
                     ForEach(LaunchpadAnimationStyle.allCases) { style in
                         Text(style.title).tag(style.rawValue)
                     }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.animation"))
+                        Text(L10n.tr("settings.animation.detail"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                Text(L10n.tr("settings.animation.detail"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             Section(L10n.tr("settings.section.background")) {
-                Picker(L10n.tr("settings.background.mode"), selection: $backgroundMode) {
+                Picker(selection: $backgroundMode) {
                     ForEach(LaunchpadBackgroundMode.allCases) { mode in
                         Text(mode.title).tag(mode.rawValue)
                     }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.background.mode"))
+                        if let mode = LaunchpadBackgroundMode(rawValue: backgroundMode) {
+                            Text(mode.detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
-                .pickerStyle(.menu)
                 .onChange(of: backgroundMode) { _, _ in
                     notifyBackgroundChanged()
-                }
-
-                if let mode = LaunchpadBackgroundMode(rawValue: backgroundMode) {
-                    Text(mode.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -1091,19 +1106,20 @@ private struct LayoutProfilePopUp: NSViewRepresentable {
 }
 
 private struct AISettingsView: View {
-    @State private var promptText = LayoutOrganizePrompt.make()
+    @ObservedObject private var language = LocalizationManager.shared
+    @State private var promptText = ""
     @State private var didCopy = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(L10n.tr("settings.ai.detail"))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Text(L10n.tr("settings.ai.detail"))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 Spacer(minLength: 12)
+
                 Button(didCopy ? L10n.tr("settings.ai.copied") : L10n.tr("settings.ai.copy")) {
                     copyPrompt()
                 }
@@ -1124,12 +1140,17 @@ private struct AISettingsView: View {
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
-            promptText = LayoutOrganizePrompt.make()
+            regeneratePrompt()
             didCopy = false
         }
-        .onChange(of: promptText) { _, _ in
-            didCopy = false
+        .onChange(of: language.selection) { _, _ in
+            regeneratePrompt()
         }
+    }
+
+    private func regeneratePrompt() {
+        promptText = LayoutOrganizePrompt.make(language: language.effectiveLanguage)
+        didCopy = false
     }
 
     private func copyPrompt() {
