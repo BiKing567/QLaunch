@@ -16,7 +16,7 @@ private struct SpriteInstance {
     /// xy = atlas UV origin (top-left), zw = atlas UV size
     var uvRect: SIMD4<Float>
     /// x = kind (0 focus plate, 1 icon, 2 pressed icon, 3 text), y = alpha,
-    /// z = 1 snap text origin + size to framebuffer pixels
+    /// z = 1 snap text origin + size to framebuffer pixels, w = rotation radians
     var kindAlpha: SIMD4<Float>
 
     static func focus(center: CGPoint, size: CGFloat, alpha: Float) -> SpriteInstance {
@@ -32,12 +32,13 @@ private struct SpriteInstance {
         size: CGFloat,
         uv: SIMD4<Float>,
         alpha: Float,
-        pressed: Bool
+        pressed: Bool,
+        rotation: CGFloat = 0
     ) -> SpriteInstance {
         SpriteInstance(
             centerSize: SIMD4(Float(center.x), Float(center.y), Float(size), Float(size)),
             uvRect: uv,
-            kindAlpha: SIMD4(pressed ? 2 : 1, alpha, 0, 0)
+            kindAlpha: SIMD4(pressed ? 2 : 1, alpha, 0, Float(rotation))
         )
     }
 
@@ -159,6 +160,41 @@ private final class FrameResources {
     var iconCapacity = 0
     var textBuffer: MTLBuffer?
     var textCapacity = 0
+}
+
+/// AppKit overlay for selection affordances. It ignores hits so Metal keeps
+/// ownership of every mouse gesture.
+private final class SelectionOverlayView: NSView {
+    var marqueeRect: CGRect? { didSet { needsDisplay = true } }
+    var badge: (center: CGPoint, count: Int, progress: CGFloat)? { didSet { needsDisplay = true } }
+
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        if let rect = marqueeRect {
+            let path = NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5)
+            NSColor.controlAccentColor.withAlphaComponent(0.15).setFill()
+            path.fill()
+            path.lineWidth = 1.5
+            NSColor.controlAccentColor.setStroke()
+            path.stroke()
+        }
+        if let badge {
+            let radius = 23 * max(0.01, badge.progress)
+            let rect = CGRect(x: badge.center.x - radius, y: badge.center.y - radius,
+                              width: radius * 2, height: radius * 2)
+            NSColor.systemRed.setFill()
+            NSBezierPath(ovalIn: rect).fill()
+            let title = String(badge.count) as NSString
+            let font = NSFont.boldSystemFont(ofSize: 22 * badge.progress)
+            let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
+            let size = title.size(withAttributes: attributes)
+            title.draw(at: CGPoint(x: badge.center.x - size.width / 2,
+                                   y: badge.center.y - size.height / 2), withAttributes: attributes)
+        }
+    }
 }
 
 // MARK: - Launchpad Metal view
@@ -307,6 +343,20 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private var panStartPoint: CGPoint = .zero
     private var contextMenuApp: AppInfo?
     private var contextMenuFolder: AppFolder?
+    private var contextMenuSelectionIDs: [String] = []
+    private var contextMenuSelectionFolderIDs: [String] = []
+    private let selectionOverlay = SelectionOverlayView(frame: .zero)
+    private var selectedItemIDs: Set<String> = []
+    private var marqueeStart: CGPoint?
+    private var marqueePoint: CGPoint?
+    private var marqueeBaseSelection: Set<String> = []
+    private var marqueeClickItemID: String?
+    private var isRightMarquee = false
+    private var rightMouseStart: CGPoint?
+    private var multiDragStartedAt: CFTimeInterval?
+    private var multiReleaseStartedAt: CFTimeInterval?
+    private var multiReleaseCenter: CGPoint = .zero
+    private var multiReorderTargetID: String?
     /// Session-only: first successful icon download after launch shows a hint.
     private static var didShowIconDownloadHint = false
 
@@ -468,6 +518,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         wantsLayer = true
         layer?.isOpaque = false
+        selectionOverlay.frame = bounds
+        selectionOverlay.autoresizingMask = [.width, .height]
+        addSubview(selectionOverlay)
         autoResizeDrawable = true
         applyDrawableConfiguration(for: IconRenderQuality.current)
 
@@ -603,7 +656,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     struct Sprite {
         float4 centerSize; // xy center, zw size (points, top-left y)
         float4 uvRect;     // xy origin, zw size (Metal top-left UV)
-        float4 kindAlpha;  // x kind, y alpha, z snap-to-pixel
+        float4 kindAlpha;  // x kind, y alpha, z snap-to-pixel, w rotation
     };
     struct Uniforms {
         float2 viewport;
@@ -652,7 +705,15 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         };
         Sprite s = sprites[iid];
         float2 local = corners[vid];
-        float2 pixel = s.centerSize.xy + local * s.centerSize.zw;
+        float2 extent = local * s.centerSize.zw;
+        float angle = s.kindAlpha.w;
+        if (abs(angle) > 0.0001) {
+            float sn = sin(angle);
+            float cs = cos(angle);
+            extent = float2(extent.x * cs - extent.y * sn,
+                            extent.x * sn + extent.y * cs);
+        }
+        float2 pixel = s.centerSize.xy + extent;
         // Resting labels: snap origin and size in framebuffer pixels so a
         // 1:1 atlas quad cannot pick up a half-pixel from Float / NDC.
         if (s.kindAlpha.z > 0.5 && u.drawable.x > 0.5 && u.viewport.x > 0.5) {
@@ -825,6 +886,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         if let animation = dragReleaseAnimation,
            now - animation.startTime >= dragReleaseDuration {
             dragReleaseAnimation = nil
+        }
+        if let started = multiReleaseStartedAt, now - started >= dragReleaseDuration {
+            multiReleaseStartedAt = nil
         }
     }
 
@@ -1027,6 +1091,21 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             return
         }
 
+        if selectedItemIDs.count > 1, selectedItemIDs.contains(draggedAppID ?? "") {
+            guard let destination = layoutItemIndex(at: point, hitRadiusScale: 1.05),
+                  displayedItems.indices.contains(destination),
+                  !selectedItemIDs.contains(displayedItems[destination].id) else { return }
+            let targetID = displayedItems[destination].id
+            guard targetID != multiReorderTargetID else { return }
+            let insertion = destination + (destination > source ? 1 : 0)
+            store.moveItems(selectedItemIDs, to: insertion, folderID: nil)
+            applyAnimatedLayout(store.activeDisplayItems)
+            dragSource = displayedItems.firstIndex(where: { $0.id == draggedAppID })
+            multiReorderTargetID = targetID
+            startDisplayLink()
+            return
+        }
+
         let metrics = GridMetrics(size: bounds.size)
         let draggedCenter = CGPoint(
             x: dragPoint.x - dragGrabOffset.x,
@@ -1150,6 +1229,19 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         guard let destination = layoutItemIndex(at: point, hitRadiusScale: 1.05) else { return }
         guard displayedItems.indices.contains(destination), destination != source else { return }
+
+        if selectedItemIDs.count > 1, selectedItemIDs.contains(draggedAppID ?? "") {
+            guard !selectedItemIDs.contains(displayedItems[destination].id) else { return }
+            let targetID = displayedItems[destination].id
+            guard targetID != multiReorderTargetID else { return }
+            let insertion = destination + (destination > source ? 1 : 0)
+            store.moveItems(selectedItemIDs, to: insertion, folderID: folderID)
+            applyAnimatedLayout(store.activeDisplayItems)
+            dragSource = displayedItems.firstIndex(where: { $0.id == draggedAppID })
+            multiReorderTargetID = targetID
+            startDisplayLink()
+            return
+        }
 
         if reorderVisualSlots.isEmpty {
             resetReorderVisualSlots(to: displayedItems)
@@ -3025,6 +3117,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 labelsBySheet: &labelsBySheet
             )
         }
+        refreshSelectionOverlay()
         prepareFrameResources(frameSlot)
 
         var uniforms = FrameUniforms(
@@ -3431,6 +3524,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         // Full-image UV for per-icon textures.
         let fullUV = SIMD4<Float>(0, 0, 1, 1)
         var draggedIconDraw: (texture: MTLTexture, sprite: SpriteInstance)?
+        let pileAnchorID = draggedAppID ?? dragReleaseAnimation?.itemID
+        let pileLayerIDs = Array(items.compactMap { item -> String? in
+            selectedItemIDs.contains(item.id) && item.id != pileAnchorID ? item.id : nil
+        }.prefix(3))
+        var pileIconDraws: [(layer: Int, texture: MTLTexture, sprite: SpriteInstance)] = []
 
         for page in first...last {
             let start = page * cap
@@ -3476,6 +3574,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 let isDragged = didDrag
                     && contentTransitionPhase == .idle
                     && draggedAppID == itemID
+                let isCollapsedSibling = didDrag && selectedItemIDs.count > 1
+                    && selectedItemIDs.contains(itemID) && draggedAppID != itemID
+                let isExpandingSibling = multiReleaseStartedAt != nil
+                    && selectedItemIDs.contains(itemID)
+                    && dragReleaseAnimation?.itemID != itemID
                 let zoom = isOpeningAppTarget
                     ? (
                         opacity: Float(1),
@@ -3551,6 +3654,18 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     c.x = midX + (c.x - midX) * style.recedeTowardCenter
                     c.y = midY + (c.y - midY) * style.recedeTowardCenter
                 }
+                if isCollapsedSibling, let started = multiDragStartedAt {
+                    let progress = smoothstep(min(1, CGFloat((now - started) / 0.18)))
+                    let anchor = CGPoint(x: dragPoint.x - dragGrabOffset.x,
+                                         y: dragPoint.y - dragGrabOffset.y)
+                    c.x += (anchor.x - c.x) * progress
+                    c.y += (anchor.y - c.y) * progress
+                }
+                if isExpandingSibling, let started = multiReleaseStartedAt {
+                    let remaining = 1 - smoothstep(min(1, CGFloat((now - started) / dragReleaseDuration)))
+                    c.x += (multiReleaseCenter.x - c.x) * remaining
+                    c.y += (multiReleaseCenter.y - c.y) * remaining
+                }
                 let pageFade: Float = infiniteCanvas || viewTransitionActive
                     ? 1
                     : Float(max(
@@ -3572,7 +3687,15 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     hasTexture: texture != nil,
                     now: now
                 )
+                let collapseProgress: CGFloat = multiDragStartedAt.map {
+                    smoothstep(min(1, CGFloat((now - $0) / 0.18)))
+                } ?? 0
+                let expandProgress: CGFloat = multiReleaseStartedAt.map {
+                    smoothstep(min(1, CGFloat((now - $0) / dragReleaseDuration)))
+                } ?? 1
                 let drawnAlpha = alpha * reveal
+                    * (isCollapsedSibling ? Float(1 - collapseProgress) : 1)
+                    * (isExpandingSibling ? Float(expandProgress) : 1)
 
                 // Preserve the exact 40% pressed opacity while the launched
                 // icon fades. Clearing dragSource on mouse-up must not briefly
@@ -3610,10 +3733,14 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                             )
                         )
                     }
+                    let isSelectedAtRest = selectedItemIDs.contains(itemID)
+                        && !isDragged && !isCollapsedSibling
+                    let isKeyboardFocused = store.isKeyboardNavigationActive
+                        && store.keyboardFocusID == itemID
                     if contentTransitionPhase == .idle,
                        !style.suppressPerIconMotion,
-                       store.isKeyboardNavigationActive,
-                       store.keyboardFocusID == itemID {
+                       !isDragged,
+                       (isSelectedAtRest || isKeyboardFocused) {
                         // Insert at the front so the focus plate is encoded before
                         // every icon and can never cover a neighbouring sprite.
                         iconDrawTextures.insert(texture, at: 0)
@@ -3621,6 +3748,30 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                             .focus(center: c, size: iconSize * 1.06, alpha: drawnAlpha),
                             at: 0
                         )
+                    }
+                    if let layer = pileLayerIDs.firstIndex(of: itemID),
+                       isCollapsedSibling || isExpandingSibling {
+                        let offsets: [CGPoint] = [
+                            CGPoint(x: -13, y: -11),
+                            CGPoint(x: 13, y: -9),
+                            CGPoint(x: -7, y: 9)
+                        ]
+                        let rotations: [CGFloat] = [-0.18, 0.15, -0.08]
+                        let progress = isCollapsedSibling ? collapseProgress : 1 - expandProgress
+                        let stackCenter = CGPoint(
+                            x: c.x + offsets[layer].x * itemScale * progress,
+                            y: c.y + offsets[layer].y * itemScale * progress
+                        )
+                        pileIconDraws.append((
+                            layer,
+                            texture,
+                            .icon(center: stackCenter,
+                                  size: iconSize * (1 - 0.045 * CGFloat(layer + 1) * progress),
+                                  uv: fullUV,
+                                  alpha: alpha * reveal * Float(progress),
+                                  pressed: false,
+                                  rotation: rotations[layer] * progress)
+                        ))
                     }
                     let iconSprite = SpriteInstance.icon(
                         center: c,
@@ -3672,6 +3823,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     )
                 }
             }
+        }
+        for layer in pileIconDraws.sorted(by: { $0.layer > $1.layer }) {
+            iconDrawTextures.append(layer.texture)
+            iconSprites.append(layer.sprite)
         }
         if let draggedIconDraw {
             iconDrawTextures.append(draggedIconDraw.texture)
@@ -4309,7 +4464,62 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         lastGroupingMotionPoint = nil
         groupingMotionSpeed = 0
         didDrag = false
+        multiDragStartedAt = nil
+        multiReleaseStartedAt = nil
+        multiReorderTargetID = nil
         store.setFolderDragState(isDragging: false)
+    }
+
+    private func selectionRect(from start: CGPoint, to end: CGPoint) -> CGRect {
+        CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
+               width: abs(start.x - end.x), height: abs(start.y - end.y))
+    }
+
+    private func updateMarquee(at point: CGPoint) {
+        guard let start = marqueeStart else { return }
+        marqueePoint = point
+        let rect = selectionRect(from: start, to: point)
+        let metrics = GridMetrics(size: bounds.size)
+        let size = interactionIconPointSize(metrics: metrics)
+        let hitIDs = Set(displayedItems.enumerated().compactMap { index, item -> String? in
+            let visualIndex = reorderVisualSlots[item.id] ?? Double(index)
+            let center = interactionIconCenter(globalIndex: visualIndex, metrics: metrics)
+            let iconRect = CGRect(x: center.x - size / 2, y: center.y - size / 2,
+                                  width: size, height: size)
+            return rect.intersects(iconRect) ? item.id : nil
+        })
+        // A new rectangle defines a new selection. Keep the prior selection
+        // only for a modifier-click, which is resolved on mouse-up below.
+        selectedItemIDs = hitIDs
+        selectionOverlay.marqueeRect = rect
+        refreshSelectionOverlay()
+        startDisplayLink()
+    }
+
+    private func refreshSelectionOverlay() {
+        let validIDs = Set(displayedItems.map(\.id))
+        selectedItemIDs.formIntersection(validIDs)
+        let metrics = GridMetrics(size: bounds.size)
+        let size = interactionIconPointSize(metrics: metrics)
+        if didDrag, selectedItemIDs.count > 1, let started = multiDragStartedAt {
+            let progress = smoothstep(min(1, CGFloat((CACurrentMediaTime() - started) / 0.18)))
+            let center = CGPoint(x: dragPoint.x - dragGrabOffset.x + size * 0.39,
+                                 y: dragPoint.y - dragGrabOffset.y - size * 0.39)
+            selectionOverlay.badge = (center, selectedItemIDs.count, progress)
+        } else {
+            selectionOverlay.badge = nil
+        }
+    }
+
+    private func beginMarquee(at point: CGPoint) {
+        multiReleaseStartedAt = nil
+        dragReleaseAnimation = nil
+        marqueeStart = CGPoint(x: point.x, y: bounds.height - point.y)
+        marqueePoint = marqueeStart
+        marqueeBaseSelection = selectedItemIDs
+        dragSource = nil
+        draggedAppID = nil
+        selectionOverlay.marqueeRect = nil
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -4333,11 +4543,14 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         lastGroupingMotionTime = 0
         groupingMotionSpeed = 0
         dragReleaseAnimation = nil
+        multiReleaseStartedAt = nil
         didDrag = false
         dragDestination = nil
         isPanningPage = false
         pageIndicatorClick = false
         pendingAutoLayoutReorderHint = false
+        marqueeClickItemID = nil
+        multiReorderTargetID = nil
         panStartPoint = dragStart
 
         if LaunchpadFieldHitArea.rect(in: bounds).contains(dragStart) {
@@ -4370,10 +4583,23 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             return
         }
 
+        if !store.isSearching,
+           !event.modifierFlags.intersection([.shift, .command]).isEmpty {
+            marqueeClickItemID = layoutItemIndex(at: dragStart).flatMap {
+                displayedItems.indices.contains($0) ? displayedItems[$0].id : nil
+            }
+            beginMarquee(at: dragStart)
+            return
+        }
+
         let metrics = GridMetrics(size: bounds.size)
         if let index = layoutItemIndex(at: dragStart) {
             if displayedItems.indices.contains(index) {
                 let item = displayedItems[index]
+                if !selectedItemIDs.contains(item.id) {
+                    selectedItemIDs.removeAll()
+                    refreshSelectionOverlay()
+                }
                 if store.openedFolderID != nil, case .app(let app) = item {
                     store.focusApp(id: app.id)
                 } else if store.openedFolderID != nil {
@@ -4410,7 +4636,43 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             return
         }
 
+        selectedItemIDs.removeAll()
+        refreshSelectionOverlay()
         beginEmptyAreaPagePan(from: dragStart)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        rightMouseStart = convert(event.locationInWindow, from: nil)
+        isRightMarquee = false
+        marqueeClickItemID = nil
+        didDrag = false
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        guard let start = rightMouseStart else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        if !isRightMarquee {
+            guard hypot(point.x - start.x, point.y - start.y) > 6,
+                  !store.isSearching, contentTransitionPhase == .idle,
+                  !isFolderTransitionActive else { return }
+            isRightMarquee = true
+            beginMarquee(at: start)
+        }
+        updateMarquee(at: CGPoint(x: point.x, y: bounds.height - point.y))
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        defer {
+            rightMouseStart = nil
+            isRightMarquee = false
+            marqueeStart = nil
+            marqueePoint = nil
+            selectionOverlay.marqueeRect = nil
+        }
+        guard !isRightMarquee else { return }
+        if let menu = menu(for: event) {
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+        }
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -4432,6 +4694,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         if let index = layoutItemIndex(at: point) {
             if displayedItems.indices.contains(index) {
+                if selectedItemIDs.count > 1,
+                   selectedItemIDs.contains(displayedItems[index].id) {
+                    return makeSelectionContextMenu()
+                }
                 if case .folder(let folder) = displayedItems[index] {
                     contextMenuApp = nil
                     contextMenuFolder = folder
@@ -4447,6 +4713,90 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         contextMenuApp = nil
         contextMenuFolder = nil
         return makeLayoutSelectorMenu()
+    }
+
+    private func makeSelectionContextMenu() -> NSMenu {
+        contextMenuSelectionIDs = displayedItems.compactMap { item in
+            guard selectedItemIDs.contains(item.id) else { return nil }
+            if case .app = item { return item.id }
+            return nil
+        }
+        contextMenuSelectionFolderIDs = displayedItems.compactMap { item in
+            guard selectedItemIDs.contains(item.id) else { return nil }
+            if case .folder = item { return item.id }
+            return nil
+        }
+        let menu = NSMenu(title: "")
+        let canEdit = store.allowsUserLayoutEditing
+        if store.openedFolderID == nil && contextMenuSelectionIDs.count == selectedItemIDs.count {
+            let create = menu.addItem(withTitle: L10n.tr("context.createFolder"),
+                                      action: #selector(createFolderFromSelection), keyEquivalent: "")
+            create.target = self
+            create.isEnabled = canEdit && !store.isSearching
+        }
+        if !contextMenuSelectionIDs.isEmpty || !contextMenuSelectionFolderIDs.isEmpty {
+            let key = contextMenuSelectionFolderIDs.isEmpty
+                ? "context.moveToFolder" : "context.mergeIntoFolder"
+            let move = NSMenuItem(title: L10n.tr(key), action: nil, keyEquivalent: "")
+            let submenu = NSMenu(title: L10n.tr(key))
+            for folder in store.orderedFolders {
+                let item = NSMenuItem(title: folder.name,
+                                      action: #selector(moveSelectionToFolder(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = folder.id
+                item.isEnabled = contextMenuSelectionIDs.contains { !folder.appIDs.contains($0) }
+                    || contextMenuSelectionFolderIDs.contains { $0 != folder.id }
+                submenu.addItem(item)
+            }
+            move.submenu = submenu
+            move.isEnabled = canEdit && !submenu.items.isEmpty
+            menu.addItem(move)
+        }
+        if store.openedFolderID != nil && !contextMenuSelectionIDs.isEmpty {
+            menu.addItem(.separator())
+            let remove = menu.addItem(
+                withTitle: L10n.tr("context.removeFromFolder"),
+                action: #selector(removeSelectionFromFolder),
+                keyEquivalent: ""
+            )
+            remove.target = self
+            remove.isEnabled = canEdit
+        }
+        return menu
+    }
+
+    @objc private func createFolderFromSelection() {
+        guard store.createFolder(with: contextMenuSelectionIDs) != nil else { return }
+        selectedItemIDs.removeAll()
+        contextMenuSelectionIDs.removeAll()
+        applyAnimatedLayout(store.activeDisplayItems)
+        refreshSelectionOverlay()
+        startDisplayLink()
+    }
+
+    @objc private func moveSelectionToFolder(_ sender: NSMenuItem) {
+        guard let folderID = sender.representedObject as? String else { return }
+        store.moveApps(contextMenuSelectionIDs, toFolder: folderID)
+        for sourceID in contextMenuSelectionFolderIDs where sourceID != folderID {
+            _ = store.mergeFolder(sourceID: sourceID, into: folderID)
+        }
+        selectedItemIDs.removeAll()
+        contextMenuSelectionIDs.removeAll()
+        contextMenuSelectionFolderIDs.removeAll()
+        applyAnimatedLayout(store.activeDisplayItems)
+        refreshSelectionOverlay()
+        startDisplayLink()
+    }
+
+    @objc private func removeSelectionFromFolder() {
+        guard let folderID = store.openedFolderID,
+              store.removeAppsFromFolder(contextMenuSelectionIDs, folderID: folderID) else { return }
+        selectedItemIDs.removeAll()
+        contextMenuSelectionIDs.removeAll()
+        contextMenuSelectionFolderIDs.removeAll()
+        applyAnimatedLayout(store.activeDisplayItems)
+        refreshSelectionOverlay()
+        startDisplayLink()
     }
 
     private func makeAppContextMenu(for app: AppInfo) -> NSMenu {
@@ -4777,6 +5127,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         dragPoint = CGPoint(x: point.x, y: bounds.height - point.y)
         canvasEdgePointer = dragPoint
         if hypot(point.x - dragStart.x, point.y - dragStart.y) > 6 { didDrag = true }
+        if marqueeStart != nil {
+            updateMarquee(at: dragPoint)
+            return
+        }
+        if didDrag && selectedItemIDs.count > 1 && draggedAppID != nil && multiDragStartedAt == nil {
+            multiDragStartedAt = CACurrentMediaTime()
+        }
         if !isPointerInCanvasEdgeZone(dragPoint) || didDrag {
             canvasEdgePanArmed = true
         }
@@ -4840,9 +5197,25 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             isSpacePanning = false
             pageIndicatorClick = false
             pendingAutoLayoutReorderHint = false
+            multiDragStartedAt = nil
+            multiReorderTargetID = nil
             store.setFolderDragState(isDragging: false)
             needsDisplay = true
             updateSpaceCursor()
+        }
+
+        if marqueeStart != nil {
+            if !didDrag, let id = marqueeClickItemID {
+                selectedItemIDs = marqueeBaseSelection
+                if selectedItemIDs.contains(id) { selectedItemIDs.remove(id) }
+                else { selectedItemIDs.insert(id) }
+            }
+            marqueeClickItemID = nil
+            marqueeStart = nil
+            marqueePoint = nil
+            selectionOverlay.marqueeRect = nil
+            refreshSelectionOverlay()
+            return
         }
 
         if isSpacePanning {
@@ -4916,10 +5289,19 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             guard let draggedAppID else { return }
             if didDrag {
                 if store.isFolderRemovalTargeted,
-                   let folderID = store.openedFolderID,
-                   store.removeAppFromFolder(appID: draggedAppID, folderID: folderID) {
+                   let folderID = store.openedFolderID {
+                    let ids = selectedItemIDs.count > 1 && selectedItemIDs.contains(draggedAppID)
+                        ? displayedItems.map(\.id).filter { selectedItemIDs.contains($0) }
+                        : [draggedAppID]
+                    _ = store.removeAppsFromFolder(ids, folderID: folderID)
+                    selectedItemIDs.removeAll()
                     applyAnimatedLayout(store.activeDisplayItems)
                 } else {
+                    if selectedItemIDs.count > 1 && selectedItemIDs.contains(draggedAppID) {
+                        multiReleaseCenter = CGPoint(x: dragPoint.x - dragGrabOffset.x,
+                                                     y: dragPoint.y - dragGrabOffset.y)
+                        multiReleaseStartedAt = CACurrentMediaTime()
+                    }
                     beginDragReleaseAnimation(itemID: draggedAppID)
                 }
                 return
@@ -4938,6 +5320,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
 
         if didDrag, let draggedAppID {
+            if selectedItemIDs.count > 1 && selectedItemIDs.contains(draggedAppID) {
+                multiReleaseCenter = CGPoint(x: dragPoint.x - dragGrabOffset.x,
+                                             y: dragPoint.y - dragGrabOffset.y)
+                multiReleaseStartedAt = CACurrentMediaTime()
+                beginDragReleaseAnimation(itemID: draggedAppID)
+                return
+            }
             var completedGrouping = false
             if let dragHoverTargetID,
                let source = displayedItems.first(where: { $0.id == draggedAppID }),

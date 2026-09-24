@@ -170,6 +170,7 @@
 "context.downloadCurrentIcon" = "下载当前图标尺寸";
 "context.downloadMaximumIcon" = "下载最大图标尺寸";
 "context.moveToFolder" = "移入文件夹";
+"context.createFolder" = "创建文件夹";
 "context.removeFromFolder" = "从文件夹移出";
 "context.mergeIntoFolder" = "合并入文件夹";
 "context.dissolveFolder" = "解散文件夹";

@@ -170,6 +170,7 @@
 "context.downloadCurrentIcon" = "現在のアイコンサイズでダウンロード";
 "context.downloadMaximumIcon" = "最大アイコンサイズでダウンロード";
 "context.moveToFolder" = "フォルダへ移動";
+"context.createFolder" = "フォルダを作成";
 "context.removeFromFolder" = "フォルダから取り出す";
 "context.mergeIntoFolder" = "フォルダに統合";
 "context.dissolveFolder" = "フォルダを解除";

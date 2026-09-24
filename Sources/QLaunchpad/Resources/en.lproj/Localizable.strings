@@ -170,6 +170,7 @@
 "context.downloadCurrentIcon" = "Download at Current Icon Size";
 "context.downloadMaximumIcon" = "Download at Maximum Icon Size";
 "context.moveToFolder" = "Move to Folder";
+"context.createFolder" = "Create Folder";
 "context.removeFromFolder" = "Remove from Folder";
 "context.mergeIntoFolder" = "Merge into Folder";
 "context.dissolveFolder" = "Dissolve Folder";

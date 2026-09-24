@@ -1665,6 +1665,79 @@ final class AppStore: ObservableObject {
         NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
     }
 
+    /// Move a selection as one ordered block. The destination is an index in
+    /// the current list, including the selected items.
+    func moveItems(_ selectedIDs: Set<String>, to destination: Int, folderID: String?) {
+        guard allowsUserLayoutEditing, !selectedIDs.isEmpty else { return }
+        if let folderID {
+            guard let index = folders.firstIndex(where: { $0.id == folderID }) else { return }
+            let ids = folders[index].appIDs
+            guard ids.contains(where: { selectedIDs.contains($0) }) else { return }
+            let block = ids.filter { selectedIDs.contains($0) }
+            var remaining = ids.filter { !selectedIDs.contains($0) }
+            let insertion = max(0, min(destination - ids.prefix(destination).filter { selectedIDs.contains($0) }.count, remaining.count))
+            remaining.insert(contentsOf: block, at: insertion)
+            guard remaining != ids else { return }
+            folders[index].appIDs = remaining
+            persistFolders()
+        } else {
+            let ids = launchpadItems.map(\.id)
+            guard ids.contains(where: { selectedIDs.contains($0) }) else { return }
+            let block = ids.filter { selectedIDs.contains($0) }
+            var remaining = ids.filter { !selectedIDs.contains($0) }
+            let insertion = max(0, min(destination - ids.prefix(destination).filter { selectedIDs.contains($0) }.count, remaining.count))
+            remaining.insert(contentsOf: block, at: insertion)
+            guard remaining != ids else { return }
+            itemOrderIDs = remaining
+            persistItemOrder()
+        }
+        reconcileLaunchpadItems()
+        NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
+    }
+
+    func moveApps(_ appIDs: [String], toFolder targetID: String) {
+        guard allowsUserLayoutEditing,
+              let target = folders.first(where: { $0.id == targetID }) else { return }
+        let moving = appIDs.filter { app(withID: $0) != nil && !target.appIDs.contains($0) }
+        guard !moving.isEmpty else { return }
+        let movingSet = Set(moving)
+        for index in folders.indices {
+            folders[index].appIDs.removeAll { movingSet.contains($0) }
+        }
+        let emptied = Set(folders.filter(\.appIDs.isEmpty).map(\.id))
+        folders.removeAll { emptied.contains($0.id) }
+        itemOrderIDs.removeAll { movingSet.contains($0) || emptied.contains($0) }
+        guard let targetIndex = folders.firstIndex(where: { $0.id == targetID }) else { return }
+        folders[targetIndex].appIDs.append(contentsOf: moving)
+        if let openedFolderID, emptied.contains(openedFolderID) { leaveOpenedFolder() }
+        persistFolders()
+        persistItemOrder()
+        reconcileLaunchpadItems()
+        NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
+    }
+
+    @discardableResult
+    func createFolder(with selectedAppIDs: [String]) -> AppFolder? {
+        guard allowsUserLayoutEditing, !isSearching, openedFolderID == nil,
+              selectedAppIDs.count >= 2 else { return nil }
+        let selected = Set(selectedAppIDs)
+        let ordered = launchpadItems.compactMap { item -> String? in
+            if case .app = item, selected.contains(item.id) { return item.id }
+            return nil
+        }
+        guard ordered.count >= 2, ordered.count == selected.count else { return nil }
+        let firstIndex = launchpadItems.firstIndex(where: { selected.contains($0.id) }) ?? 0
+        let folder = AppFolder(name: L10n.tr("launchpad.folder"), appIDs: ordered)
+        folders.append(folder)
+        itemOrderIDs = launchpadItems.map(\.id).filter { !selected.contains($0) }
+        itemOrderIDs.insert(folder.id, at: min(firstIndex, itemOrderIDs.count))
+        persistFolders()
+        persistItemOrder()
+        reconcileLaunchpadItems()
+        NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
+        return folder
+    }
+
     func moveAppInsideFolder(folderID: String, from source: Int, to destination: Int) {
         guard allowsUserLayoutEditing,
               let folderIndex = folders.firstIndex(where: { $0.id == folderID }),
@@ -1787,6 +1860,40 @@ final class AppStore: ObservableObject {
         return true
     }
 
+    /// Place selected members beside their folder on the root grid, preserving
+    /// the order they had inside the folder.
+    @discardableResult
+    func removeAppsFromFolder(_ appIDs: [String], folderID: String) -> Bool {
+        guard allowsUserLayoutEditing,
+              let folderIndex = folders.firstIndex(where: { $0.id == folderID }) else { return false }
+        let selected = Set(appIDs)
+        let removed = folders[folderIndex].appIDs.filter { selected.contains($0) }
+        guard !removed.isEmpty else { return false }
+        let removedSet = Set(removed)
+
+        let folderRootIndex = itemOrderIDs.firstIndex(of: folderID)
+            ?? launchpadItems.firstIndex(where: { $0.id == folderID })
+            ?? itemOrderIDs.endIndex
+        folders[folderIndex].appIDs.removeAll { removedSet.contains($0) }
+        itemOrderIDs.removeAll { removedSet.contains($0) }
+        if folders[folderIndex].appIDs.isEmpty {
+            folders.remove(at: folderIndex)
+            itemOrderIDs.removeAll { $0 == folderID }
+            itemOrderIDs.insert(contentsOf: removed, at: min(folderRootIndex, itemOrderIDs.endIndex))
+            if openedFolderID == folderID { leaveOpenedFolder() }
+        } else {
+            let currentFolderIndex = itemOrderIDs.firstIndex(of: folderID)
+                ?? min(folderRootIndex, itemOrderIDs.endIndex)
+            itemOrderIDs.insert(contentsOf: removed, at: min(currentFolderIndex + 1, itemOrderIDs.endIndex))
+        }
+
+        persistFolders()
+        persistItemOrder()
+        reconcileLaunchpadItems()
+        NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
+        return true
+    }
+
     /// Combine two top-level app items into one folder. The target app stays
     /// first, matching the usual Launchpad/iOS folder creation behavior.
     @discardableResult
@@ -1878,21 +1985,31 @@ final class AppStore: ObservableObject {
     }
 
     private func refreshFilteredApps(resetPage: Bool) {
+        let matcher = AppSearchMatcher(query: searchText)
         let query = normalized(searchText.trimmingCharacters(in: .whitespacesAndNewlines))
         // Pinyin input may contain spaces, apostrophes, hyphens, or other
-        // syllable separators. Search the compact form against metadata that
-        // is stored without separators.
-        let compactQuery = query.filter { $0.isLetter || $0.isNumber }
-        filteredApps = apps.filter { app in
+        // syllable separators; the matcher compacts it before checking metadata.
+        let rankedApps = apps.enumerated().compactMap { index, app -> (Int, Int, AppInfo)? in
             let isHidden = hiddenAppIDs.contains(app.id)
             if isHidden && (query.isEmpty || !showHiddenAppsInSearch) {
-                return false
+                return nil
             }
-            return query.isEmpty
-                || normalized(app.name).contains(query)
-                || normalized(app.bundleIdentifier).contains(query)
-                || app.pinyin.matches(compactQuery)
+
+            guard !query.isEmpty else { return (0, index, app) }
+            guard let rank = matcher.rank(
+                name: app.name,
+                bundleIdentifier: app.bundleIdentifier,
+                pinyin: app.pinyin
+            ) else {
+                return nil
+            }
+            return (rank.rawValue, index, app)
         }
+        filteredApps = rankedApps
+            .sorted { lhs, rhs in
+                lhs.0 == rhs.0 ? lhs.1 < rhs.1 : lhs.0 < rhs.0
+            }
+            .map(\.2)
 
         if resetPage {
             pageOffset = 0

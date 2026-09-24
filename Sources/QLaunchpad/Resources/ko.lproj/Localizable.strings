@@ -170,6 +170,7 @@
 "context.downloadCurrentIcon" = "현재 아이콘 크기로 다운로드";
 "context.downloadMaximumIcon" = "최대 아이콘 크기로 다운로드";
 "context.moveToFolder" = "폴더로 이동";
+"context.createFolder" = "폴더 만들기";
 "context.removeFromFolder" = "폴더에서 제거";
 "context.mergeIntoFolder" = "폴더에 합치기";
 "context.dissolveFolder" = "폴더 해제";
