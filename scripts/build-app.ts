@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import {
   chmodSync,
   cpSync,
@@ -34,7 +35,8 @@ export interface AppBuildResult {
   buildNumber: string;
 }
 
-const ROOT_DIR = join(import.meta.dir, "..");
+const CURRENT_DIR = import.meta.dirname ?? (import.meta as { dir?: string }).dir ?? ".";
+const ROOT_DIR = join(CURRENT_DIR, "..");
 const TARGET_NAME = "QLaunchpad";
 const RESOURCE_BUNDLE_NAME = TARGET_NAME + "_" + TARGET_NAME + ".bundle";
 /** Flat PNG fallback (About / `swift run` / actool unavailable). */
@@ -44,12 +46,13 @@ const ICON_FLAT_1024 = join(
   ROOT_DIR,
   "icons/QLaunch Exports/QLaunch-macOS-Default-1024@1x.png",
 );
+const procEnv = typeof Bun !== "undefined" ? Bun.env : process.env;
 /**
  * Icon Composer multi-layer source (preferred).
  * Override with env `QLAUNCHPAD_ICON` (path to a `.icon` package).
  */
 const ICON_COMPOSER_CANDIDATES = [
-  Bun.env.QLAUNCHPAD_ICON,
+  procEnv.QLAUNCHPAD_ICON,
   join(ROOT_DIR, "icons/QLaunch.icon"),
   join(ROOT_DIR, "icons/AppIcon.icon"),
   join(ROOT_DIR, "icons/QLaunchpad.icon"),
@@ -59,55 +62,65 @@ const BUNDLE_ICON_NAME = "QLaunch";
 /** Compiled icon artifacts reused across `bun run dev` until the source changes. */
 const ICON_CACHE_DIR = join(ROOT_DIR, "build/icon-cache");
 const ICON_CACHE_MANIFEST = join(ICON_CACHE_DIR, "manifest.json");
-const FORCE_ICON_REBUILD = Bun.env.QLAUNCHPAD_FORCE_ICON === "1";
+const FORCE_ICON_REBUILD = procEnv.QLAUNCHPAD_FORCE_ICON === "1";
 const DEFAULT_SWIFT_MODULE_CACHE = "/private/tmp/qlaunchpad-swift-module-cache";
 const DEFAULT_CLANG_MODULE_CACHE = "/private/tmp/qlaunchpad-clang-module-cache";
 /** 与 Qjiao / QCopy 共用的 Sparkle EdDSA 公钥；发布时 SPARKLE_ACCOUNT 默认 qjiao。 */
 export const SPARKLE_PUBLIC_ED_KEY =
-  Bun.env.SPARKLE_PUBLIC_ED_KEY?.trim() || "rIu1scWZ0i+1pucGPQPhBmKpHUNjrJuiU2jDHHRAA20=";
+  procEnv.SPARKLE_PUBLIC_ED_KEY?.trim() || "rIu1scWZ0i+1pucGPQPhBmKpHUNjrJuiU2jDHHRAA20=";
 export const SPARKLE_FEED_URL =
-  Bun.env.SPARKLE_FEED_URL?.trim() ||
+  procEnv.SPARKLE_FEED_URL?.trim() ||
   "https://download.qzrzz.com/qlaunch/appcast.xml";
 const SPARKLE_RPATH = "@executable_path/../Frameworks";
 
-const commandEnvironment = {
-  ...Bun.env,
-  SWIFT_MODULECACHE_PATH: Bun.env.SWIFT_MODULECACHE_PATH ?? DEFAULT_SWIFT_MODULE_CACHE,
-  CLANG_MODULE_CACHE_PATH: Bun.env.CLANG_MODULE_CACHE_PATH ?? DEFAULT_CLANG_MODULE_CACHE,
+const commandEnvironment: Record<string, string | undefined> = {
+  ...procEnv,
+  SWIFT_MODULECACHE_PATH: procEnv.SWIFT_MODULECACHE_PATH ?? DEFAULT_SWIFT_MODULE_CACHE,
+  CLANG_MODULE_CACHE_PATH: procEnv.CLANG_MODULE_CACHE_PATH ?? DEFAULT_CLANG_MODULE_CACHE,
 };
 
 export async function runCommand(command: string[]): Promise<void> {
-  const child = Bun.spawn(command, {
-    cwd: ROOT_DIR,
-    env: commandEnvironment,
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit",
+  const [file, ...args] = command;
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, {
+      cwd: ROOT_DIR,
+      env: commandEnvironment,
+      stdio: "inherit",
+    });
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error("命令失败 (exit " + code + "): " + command.join(" ")));
+      } else {
+        resolve();
+      }
+    });
+    child.on("error", reject);
   });
-  const code = await child.exited;
-  if (code !== 0) {
-    throw new Error("命令失败 (exit " + code + "): " + command.join(" "));
-  }
 }
 
 export async function captureCommand(command: string[]): Promise<string> {
-  const child = Bun.spawn(command, {
-    cwd: ROOT_DIR,
-    env: commandEnvironment,
-    stdout: "pipe",
-    stderr: "pipe",
+  const [file, ...args] = command;
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, {
+      cwd: ROOT_DIR,
+      env: commandEnvironment,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(
+          new Error("命令失败 (exit " + code + "): " + command.join(" ") + "\n" + stderr.trim()),
+        );
+      } else {
+        resolve(stdout.trim());
+      }
+    });
+    child.on("error", reject);
   });
-  const [code, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-  if (code !== 0) {
-    throw new Error(
-      "命令失败 (exit " + code + "): " + command.join(" ") + "\n" + stderr.trim(),
-    );
-  }
-  return stdout.trim();
 }
 
 async function runCommandCapture(command: string[]): Promise<{
@@ -115,18 +128,24 @@ async function runCommandCapture(command: string[]): Promise<{
   stdout: string;
   stderr: string;
 }> {
-  const child = Bun.spawn(command, {
-    cwd: ROOT_DIR,
-    env: commandEnvironment,
-    stdout: "pipe",
-    stderr: "pipe",
+  const [file, ...args] = command;
+  return new Promise((resolve) => {
+    const child = spawn(file, args, {
+      cwd: ROOT_DIR,
+      env: commandEnvironment,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+    child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    child.on("close", (code) => {
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
+    child.on("error", (err) => {
+      resolve({ code: 1, stdout, stderr: String(err) });
+    });
   });
-  const [code, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-  return { code, stdout, stderr };
 }
 
 function productDirectory(configuration: BuildConfiguration): string {
@@ -733,10 +752,10 @@ export async function buildApp(options: AppBuildOptions): Promise<AppBuildResult
 
   console.log("▸ 编译 " + (configuration === "debug" ? "Debug" : "Release") + " Swift Package…");
   await runCommand([
-    "swift", "build", "-c", configuration, "--scratch-path", scratchPath,
+    "swift", "build", "-c", configuration, "--scratch-path", scratchPath, "--disable-sandbox",
   ]);
   const binPath = await captureCommand([
-    "swift", "build", "-c", configuration, "--scratch-path", scratchPath,
+    "swift", "build", "-c", configuration, "--scratch-path", scratchPath, "--disable-sandbox",
     "--show-bin-path",
   ]);
 

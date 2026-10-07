@@ -6,11 +6,22 @@ import Darwin
 import ImageIO
 
 private enum BackgroundVisualTokens {
-    static let saturation: CGFloat = 1.16
+    static let saturation: CGFloat = 1.20
     static let maximumLongEdge: CGFloat = 2_000
-    static let tintAlpha: CGFloat = 0.18
-    static let vignetteBottomAlpha: CGFloat = 0.28
-    static let vignetteTopAlpha: CGFloat = 0.18
+    /// Scales slider blur down to a soft, translucent acrylic range (~20-24pt).
+    static let blurScale: CGFloat = 0.50
+    /// Restrained translucent light veil for milky frosted sheen while keeping black levels deep.
+    static let veilDarkAlpha: CGFloat = 0.02
+    static let veilLightAlpha: CGFloat = 0.02
+    /// Fine micro-grain noise to eliminate color banding and give tactile 1:1 pixel glass roughness.
+    static let noiseAlpha: CGFloat = 0.03
+    /// Solid darkening baseline to guarantee WCAG contrast for white icon labels.
+    static let tintAlpha: CGFloat = 0.16
+    /// Enhanced darkening under Increase Contrast accessibility preference.
+    static let contrastTintAlpha: CGFloat = 0.30
+    /// Restrained edge depth vignette (bottom deeper, top subtle).
+    static let vignetteBottomAlpha: CGFloat = 0.22
+    static let vignetteTopAlpha: CGFloat = 0.14
 }
 
 /// Best-effort bridge to WindowServer's private wallpaper capture SPI.
@@ -249,7 +260,7 @@ private actor PrivateWallpaperRenderer {
 
     func render(
         displayID: CGDirectDisplayID,
-        backingScale _: CGFloat,
+        backingScale: CGFloat,
         blurRadius: CGFloat,
         saturation: CGFloat
     ) async -> CGImage? {
@@ -257,17 +268,28 @@ private actor PrivateWallpaperRenderer {
             return nil
         }
 
+        let boundsWidth = CGDisplayBounds(displayID).width
+        let pointWidth: CGFloat
+        if boundsWidth > 0 {
+            pointWidth = boundsWidth
+        } else {
+            let pixelsWide = CGFloat(CGDisplayPixelsWide(displayID))
+            let safeScale = max(1.0, backingScale)
+            pointWidth = pixelsWide > 0 ? (pixelsWide / safeScale) : 1710
+        }
         return render(
             image: capturedImage,
             blurRadius: blurRadius,
-            saturation: saturation
+            saturation: saturation,
+            pointWidth: max(1, pointWidth)
         )
     }
 
     private func render(
         image: CGImage,
         blurRadius: CGFloat,
-        saturation: CGFloat
+        saturation: CGFloat,
+        pointWidth: CGFloat
     ) -> CGImage? {
         let input = CIImage(cgImage: image)
         let inputExtent = input.extent
@@ -281,11 +303,13 @@ private actor PrivateWallpaperRenderer {
         let scaled = input.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         let scaledExtent = scaled.extent
 
+        let effectiveRadius = blurRadius * BackgroundVisualTokens.blurScale
         let blurredImage: CIImage
-        if blurRadius > 0 {
+        if effectiveRadius > 0 {
+            let screenPixelScale = scaledExtent.width / max(1, pointWidth)
             let blur = CIFilter.gaussianBlur()
             blur.inputImage = scaled.clampedToExtent()
-            blur.radius = Float(max(0.1, blurRadius * max(scale, 0.5)))
+            blur.radius = Float(max(0.1, effectiveRadius * screenPixelScale))
             blurredImage = blur.outputImage ?? scaled
         } else {
             blurredImage = scaled
@@ -328,6 +352,15 @@ private actor PrivateWallpaperRenderer {
         case .screen:
             return nil
         case .custom:
+            let boundsWidth = CGDisplayBounds(displayID).width
+            let pointWidth: CGFloat
+            if boundsWidth > 0 {
+                pointWidth = boundsWidth
+            } else {
+                let pixelsWide = CGFloat(CGDisplayPixelsWide(displayID))
+                let safeScale = max(1.0, backingScale)
+                pointWidth = pixelsWide > 0 ? (pixelsWide / safeScale) : 1710
+            }
             guard let customURL,
                   let image = WallpaperFileSource.loadCGImage(
                       from: customURL,
@@ -343,7 +376,8 @@ private actor PrivateWallpaperRenderer {
             return render(
                 image: image,
                 blurRadius: blurRadius,
-                saturation: BackgroundVisualTokens.saturation
+                saturation: BackgroundVisualTokens.saturation,
+                pointWidth: max(1, pointWidth)
             )
         }
     }
@@ -404,16 +438,112 @@ private actor PrivateWallpaperRenderer {
     }
 }
 
+private enum AcrylicNoiseTexture {
+    static let baseCGImage: CGImage? = {
+        let width = 128
+        let height = 128
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        var seed: UInt32 = 0x7A3B19E5
+        for i in 0..<(width * height) {
+            seed = seed &* 1664525 &+ 1013904223
+            let val = UInt8((seed >> 16) & 0xFF)
+            let offset = i * 4
+            pixels[offset] = val     // R
+            pixels[offset + 1] = val // G
+            pixels[offset + 2] = val // B
+            pixels[offset + 3] = 255 // A
+        }
+        guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
+        return CGImage(
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        )
+    }()
+
+    static func patternColor(forBackingScale scale: CGFloat) -> NSColor? {
+        guard let baseCGImage else { return nil }
+        let safeScale = max(1.0, scale)
+        let ptSize = NSSize(width: 128.0 / safeScale, height: 128.0 / safeScale)
+        let image = NSImage(cgImage: baseCGImage, size: ptSize)
+        return NSColor(patternImage: image)
+    }
+}
+
+private final class AcrylicNoiseView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.opacity = Float(BackgroundVisualTokens.noiseAlpha)
+        updatePattern()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updatePattern()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updatePattern()
+    }
+
+    func updatePattern() {
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        if let patternColor = AcrylicNoiseTexture.patternColor(forBackingScale: scale) {
+            layer?.backgroundColor = patternColor.cgColor
+        }
+    }
+}
+
+private final class AcrylicVeilView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        updateVeilColor()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateVeilColor()
+    }
+
+    func updateVeilColor() {
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let alpha = isDark ? BackgroundVisualTokens.veilDarkAlpha : BackgroundVisualTokens.veilLightAlpha
+        layer?.backgroundColor = NSColor(white: 1.0, alpha: alpha).cgColor
+    }
+}
+
 @MainActor
 final class DesktopBackgroundView: NSView {
     private let visualEffectView = NSVisualEffectView()
     private let wallpaperImageView = NSImageView()
+    private let veilView = AcrylicVeilView(frame: .zero)
+    private let noiseView = AcrylicNoiseView(frame: .zero)
     private let tintView = NSView()
     private let vignetteView = GradientVignetteView()
     private let renderer = PrivateWallpaperRenderer()
     private var captureTask: Task<Void, Never>?
     private var captureGeneration = 0
     private var preparedScreenIdentifier: CGDirectDisplayID?
+    private var displayOptionsObserver: NSObjectProtocol?
 
     init(screen _: NSScreen?) {
         super.init(frame: .zero)
@@ -437,6 +567,12 @@ final class DesktopBackgroundView: NSView {
         wallpaperImageView.autoresizingMask = [.width, .height]
         addSubview(wallpaperImageView)
 
+        veilView.autoresizingMask = [.width, .height]
+        addSubview(veilView)
+
+        noiseView.autoresizingMask = [.width, .height]
+        addSubview(noiseView)
+
         tintView.wantsLayer = true
         tintView.layer?.backgroundColor = NSColor(
             calibratedWhite: 0,
@@ -447,6 +583,17 @@ final class DesktopBackgroundView: NSView {
 
         vignetteView.autoresizingMask = [.width, .height]
         addSubview(vignetteView)
+
+        displayOptionsObserver = NotificationCenter.default.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.applyAccessibilityPreferences()
+            }
+        }
+        applyAccessibilityPreferences()
     }
 
     required init?(coder: NSCoder) {
@@ -455,11 +602,16 @@ final class DesktopBackgroundView: NSView {
 
     deinit {
         captureTask?.cancel()
+        if let displayOptionsObserver {
+            NotificationCenter.default.removeObserver(displayOptionsObserver)
+        }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard let screen = window?.screen ?? NSScreen.main else { return }
+        guard let window else { return }
+        applyAccessibilityPreferences()
+        guard let screen = window.screen ?? NSScreen.main else { return }
         prepare(for: screen)
     }
 
@@ -467,6 +619,8 @@ final class DesktopBackgroundView: NSView {
         super.layout()
         visualEffectView.frame = bounds
         wallpaperImageView.frame = bounds
+        veilView.frame = bounds
+        noiseView.frame = bounds
         tintView.frame = bounds
         vignetteView.frame = bounds
         applyLiveBlurRadius()
@@ -617,8 +771,10 @@ final class DesktopBackgroundView: NSView {
 
     private func applyLiveBlurRadius() {
         guard let layer = gaussianBlurLayer(in: visualEffectView.layer) else { return }
+        let effectiveRadius = Double(LaunchpadBackgroundPreferences.blurAmount)
+            * Double(BackgroundVisualTokens.blurScale)
         layer.setValue(
-            NSNumber(value: Double(LaunchpadBackgroundPreferences.blurAmount)),
+            NSNumber(value: effectiveRadius),
             forKeyPath: "filters.gaussianBlur.inputRadius"
         )
     }
@@ -641,6 +797,28 @@ final class DesktopBackgroundView: NSView {
         }
         return nil
     }
+
+    private func applyAccessibilityPreferences() {
+        let reduceTransparency = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+
+        veilView.isHidden = reduceTransparency
+        noiseView.isHidden = reduceTransparency
+
+        let tintAlpha: CGFloat
+        if reduceTransparency {
+            tintAlpha = 0.85
+        } else if increaseContrast {
+            tintAlpha = BackgroundVisualTokens.contrastTintAlpha
+        } else {
+            tintAlpha = BackgroundVisualTokens.tintAlpha
+        }
+
+        tintView.layer?.backgroundColor = NSColor(
+            calibratedWhite: 0,
+            alpha: tintAlpha
+        ).cgColor
+    }
 }
 
 private final class GradientVignetteView: NSView {
@@ -649,8 +827,8 @@ private final class GradientVignetteView: NSView {
         wantsLayer = true
 
         let gradient = CAGradientLayer()
-        gradient.startPoint = CGPoint(x: 0.5, y: 1)
-        gradient.endPoint = CGPoint(x: 0.5, y: 0)
+        gradient.startPoint = CGPoint(x: 0.5, y: 0)
+        gradient.endPoint = CGPoint(x: 0.5, y: 1)
         gradient.colors = [
             NSColor.black.withAlphaComponent(BackgroundVisualTokens.vignetteBottomAlpha).cgColor,
             NSColor.clear.cgColor,

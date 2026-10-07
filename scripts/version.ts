@@ -3,7 +3,8 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const PACKAGE_JSON_PATH = join(import.meta.dir, "..", "package.json");
+const CURRENT_DIR = import.meta.dirname ?? (import.meta as { dir?: string }).dir ?? ".";
+const PACKAGE_JSON_PATH = join(CURRENT_DIR, "..", "package.json");
 
 interface PackageMetadata {
   version?: unknown;

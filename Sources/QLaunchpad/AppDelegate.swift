@@ -186,8 +186,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return true
     }
 
+    private var currentTargetScreen: NSScreen? {
+        let mouseLocation = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) }
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+    }
+
     @objc private func screensChanged() {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = launchpadPanel?.screen ?? currentTargetScreen else { return }
         if launchpadPanel.isVisible {
             launchpadPanel.setFrame(screen.frame, display: true)
         }
@@ -521,7 +528,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func showLaunchpad() {
         guard !isAnimating else { return }
-        guard let screen = NSScreen.main else { return }
+        guard let screen = currentTargetScreen else { return }
 
         isAnimating = true
         presentationGeneration &+= 1

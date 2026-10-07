@@ -10,10 +10,12 @@ private let layoutLogger = Logger(subsystem: "com.qzrzz.qlaunchpad", category: "
 enum QLaunchpadPreferences {
     static let showMenuBarIconKey = "showMenuBarIcon"
     static let showDockIconKey = "showDockIcon"
+    static let loopPagesKey = "loopPages"
 
     // Default to a Dock-visible app. The menu bar icon is opt-in.
     static let defaultShowMenuBarIcon = false
     static let defaultShowDockIcon = true
+    static let defaultLoopPages = true
 }
 
 enum LaunchpadHotKeyPreferences {
@@ -653,6 +655,11 @@ final class AppStore: ObservableObject {
 
     var currentPage: Int {
         min(max(Int(pageOffset.rounded()), 0), max(pageCount - 1, 0))
+    }
+
+    var loopPages: Bool {
+        UserDefaults.standard.object(forKey: QLaunchpadPreferences.loopPagesKey) as? Bool
+            ?? QLaunchpadPreferences.defaultLoopPages
     }
 
     var isSearching: Bool {
@@ -1298,12 +1305,21 @@ final class AppStore: ObservableObject {
                 let previousEnd = min(previousStart + pageCapacity, items.count)
                 destination = min(previousStart + row * navigationColumns + navigationColumns - 1,
                                   previousEnd - 1)
+            } else if loopPages && pageCount > 1 {
+                let lastPage = pageCount - 1
+                let lastStart = lastPage * pageCapacity
+                let lastEnd = min(lastStart + pageCapacity, items.count)
+                destination = min(lastStart + row * navigationColumns + navigationColumns - 1,
+                                  lastEnd - 1)
             }
         case .right:
             if column + 1 < navigationColumns, current + 1 < pageEnd {
                 destination = current + 1
             } else if page + 1 < pageCount {
                 let nextStart = (page + 1) * pageCapacity
+                destination = min(nextStart + row * navigationColumns, items.count - 1)
+            } else if loopPages && pageCount > 1 {
+                let nextStart = 0
                 destination = min(nextStart + row * navigationColumns, items.count - 1)
             }
         case .up:
@@ -1365,7 +1381,13 @@ final class AppStore: ObservableObject {
     }
 
     func movePage(byPages delta: Int) {
-        goToPage(currentPage + delta)
+        let proposed = currentPage + delta
+        if loopPages && pageCount > 1 {
+            let wrapped = ((proposed % pageCount) + pageCount) % pageCount
+            goToPage(wrapped)
+        } else {
+            goToPage(proposed)
+        }
     }
 
     // MARK: Mouse drag pan (empty area)
@@ -1572,11 +1594,36 @@ final class AppStore: ObservableObject {
             page = pageOffset.rounded()
         }
 
-        applySettledPage(min(max(page, minPage), maxPage))
+        if loopPages && pageCount > 1 {
+            if page > maxPage {
+                page = 0
+            } else if page < minPage {
+                page = maxPage
+            }
+        } else {
+            page = min(max(page, minPage), maxPage)
+        }
+
+        applySettledPage(page)
     }
 
     /// Mouse empty-area pan: lower commit / flick thresholds than trackpad.
     private func settleMousePagePan(withVelocity velocity: Double) {
+        let maxPage = Double(max(pageCount - 1, 0))
+        let delta = pageOffset - pagePanOrigin
+        let flickedForward = velocity > LaunchpadPageSnap.mouseFlickThreshold && delta >= -0.02
+        let flickedBack = velocity < -LaunchpadPageSnap.mouseFlickThreshold && delta <= 0.02
+
+        if loopPages && pageCount > 1 {
+            if pagePanOrigin >= maxPage && (delta > LaunchpadPageSnap.mouseCommitThreshold || flickedForward) {
+                applySettledPage(0)
+                return
+            } else if pagePanOrigin <= 0 && (delta < -LaunchpadPageSnap.mouseCommitThreshold || flickedBack) {
+                applySettledPage(maxPage)
+                return
+            }
+        }
+
         applySettledPage(
             LaunchpadPageSnap.settledPage(
                 offset: pageOffset,

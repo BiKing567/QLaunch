@@ -1069,12 +1069,18 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             return
         }
 
-        let destination = store.currentPage + edgePageDirection
-        guard destination >= 0, destination < store.pageCount else {
-            // Do not repeatedly try to page past the catalog ends while the
-            // pointer remains against the edge.
-            edgePageDirection = 0
-            return
+        var destination = store.currentPage + edgePageDirection
+        if destination < 0 || destination >= store.pageCount {
+            if store.loopPages && store.pageCount > 1 {
+                destination = destination < 0 ? store.pageCount - 1 : 0
+                // Prevent runaway continuous looping while the pointer stays at the screen edge.
+                edgePageDirection = 0
+            } else {
+                // Do not repeatedly try to page past the catalog ends while the
+                // pointer remains against the edge.
+                edgePageDirection = 0
+                return
+            }
         }
 
         store.goToPage(destination)

@@ -25,6 +25,8 @@ xcuserdata/
 
 ## App packaging
 *.ipa
+*.app
+*.zip
 *.dSYM.zip
 *.dSYM
 
@@ -34,4 +36,6 @@ playground.xcworkspace
 
 .env*
 *.log
+.codegraph/
+.omo/
 

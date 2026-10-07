@@ -40,7 +40,8 @@ public enum MacOSLaunchpadReader {
     }
 
     public static func readLayoutDocument(
-        from databaseURL: URL? = nil
+        from databaseURL: URL? = nil,
+        defaultFolderName: String = AppFolder.defaultName
     ) throws -> LaunchpadLayoutDocument {
         guard let dbURL = databaseURL ?? defaultDatabaseURL(),
               FileManager.default.fileExists(atPath: dbURL.path) else {
@@ -87,7 +88,7 @@ public enum MacOSLaunchpadReader {
 
                 case .folder(let folderRowID, let folderTitle):
                     let trimmedTitle = folderTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    let folderName = trimmedTitle.isEmpty ? "文件夹" : trimmedTitle
+                    let folderName = trimmedTitle.isEmpty ? defaultFolderName : trimmedTitle
                     let folderPageIDs = queryChildPages(db, parentID: folderRowID)
                     var folderAppIDs: [String] = []
 

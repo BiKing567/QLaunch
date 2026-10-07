@@ -90,6 +90,8 @@ private struct GeneralSettingsView: View {
     @AppStorage(QLaunchpadPreferences.showDockIconKey)
     private var showDockIcon = QLaunchpadPreferences.defaultShowDockIcon
     @AppStorage("showLabels") private var showLabels = true
+    @AppStorage(QLaunchpadPreferences.loopPagesKey)
+    private var loopPages = QLaunchpadPreferences.defaultLoopPages
     @AppStorage(GridLayoutPreset.defaultsKey)
     private var gridLayoutPreset = GridLayoutPreset.defaultPreset.rawValue
     @AppStorage(IconRenderQuality.defaultsKey)
@@ -164,6 +166,9 @@ private struct GeneralSettingsView: View {
                     notifyAppearanceChanged()
                 }
 
+            }
+
+            Section(L10n.tr("settings.section.hotCorner")) {
                 Picker(
                     selection: Binding(
                         get: { HotCornerPosition(rawValue: hotCornerPosition) ?? .none },
@@ -189,6 +194,17 @@ private struct GeneralSettingsView: View {
 
             Section(L10n.tr("settings.section.display")) {
                 Toggle(L10n.tr("settings.showAppNames"), isOn: $showLabels)
+                    .toggleStyle(.switch)
+                Toggle(isOn: $loopPages) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.loopPages"))
+                        Text(L10n.tr("settings.loopPages.detail"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
                 Picker(L10n.tr("settings.layout"), selection: $gridLayoutPreset) {
                     ForEach(GridLayoutPreset.menuGroups.indices, id: \.self) { groupIndex in
                         if groupIndex > 0 {
