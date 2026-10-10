@@ -226,13 +226,21 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
             }
             tracking.lastTime = timestamp
 
-            if !tracking.active || tracking.fingers != fingers {
+            if !tracking.active {
                 tracking.active = true
                 tracking.fingers = fingers
                 tracking.baseline = spread
                 tracking.originX = cx
                 tracking.originY = cy
                 return
+            } else {
+                // If fingers are spreading or additional fingers joined before contracting,
+                // adapt baseline to the maximum spread so contraction is calculated from peak
+                if spread > tracking.baseline {
+                    tracking.baseline = spread
+                    tracking.originX = cx
+                    tracking.originY = cy
+                }
             }
 
             guard tracking.baseline > 0.01 else { return }
@@ -247,15 +255,15 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
             guard !tracking.triggeredInSession else { return }
 
             let now = CACurrentMediaTime()
-            guard now - lastActionTime > 0.55 else { return }
+            guard now - lastActionTime > 0.35 else { return }
 
-            // Pinch in threshold: fingers gathered inward by >= 28%
-            if ratio <= 0.72 {
+            // Pinch in threshold: natural contraction (ratio <= 0.82)
+            if ratio <= 0.82 {
                 tracking.triggeredInSession = true
                 lastActionTime = now
                 actionToTrigger = .pinchIn
-            } else if ratio >= 1.35 {
-                // Pinch out threshold: fingers spread outward by >= 35%
+            } else if ratio >= 1.22 {
+                // Pinch out threshold: natural expansion (ratio >= 1.22)
                 tracking.triggeredInSession = true
                 lastActionTime = now
                 actionToTrigger = .pinchOut

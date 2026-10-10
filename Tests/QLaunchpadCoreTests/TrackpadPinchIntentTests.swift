@@ -33,21 +33,29 @@ final class TrackpadPinchIntentTests: XCTestCase {
 
     func testSwipeIsDetectedWhenCenterOfGravityTranslatesSignificantly() {
         var intent = TrackpadPinchIntent()
-        // Four fingers moving across trackpad (travel > 0.05) while spread barely changed
-        let confirmed = intent.update(ratio: 0.99, travel: 0.08)
+        // Fingers moving together across trackpad (travel >= 0.25) while spread barely changed
+        let confirmed = intent.update(ratio: 0.98, travel: 0.25)
         XCTAssertFalse(confirmed)
         XCTAssertEqual(intent.phase, .swipe)
 
         // Even if fingers subsequently gather inward upon liftoff, swipe status persists
-        let subsequent = intent.update(ratio: 0.65, travel: 0.12)
+        let subsequent = intent.update(ratio: 0.65, travel: 0.30)
         XCTAssertFalse(subsequent)
         XCTAssertEqual(intent.phase, .swipe)
     }
 
+    func testAsymmetricalPinchWithMildTravelIsConfirmed() {
+        var intent = TrackpadPinchIntent()
+        // Natural human pinch where thumb is relatively stationary and index/middle sweep inward (travel = 0.12, ratio = 0.85)
+        let confirmed = intent.update(ratio: 0.85, travel: 0.12)
+        XCTAssertTrue(confirmed)
+        XCTAssertEqual(intent.phase, .pinch)
+    }
+
     func testSimultaneousHighTravelAndRatioDeviationFavorsSwipeToPreventFalseOpens() {
         var intent = TrackpadPinchIntent()
-        // If travel and ratio both exceed thresholds on the same frame, must reject as swipe
-        let confirmed = intent.update(ratio: 0.80, travel: 0.09)
+        // If travel is huge (full hand sweep across pad, travel >= 0.35), reject as swipe even if fingers contract
+        let confirmed = intent.update(ratio: 0.80, travel: 0.40)
         XCTAssertFalse(confirmed)
         XCTAssertEqual(intent.phase, .swipe)
     }

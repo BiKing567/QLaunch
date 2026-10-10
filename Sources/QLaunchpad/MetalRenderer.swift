@@ -5450,8 +5450,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         standardPinchCumulativeMagnification += event.magnification
 
-        // Inward pinch threshold: dismiss Launchpad or exit current folder
-        if standardPinchCumulativeMagnification <= -0.12 {
+        // Inward pinch threshold: dismiss Launchpad or exit current folder (crisp, light pinch)
+        if standardPinchCumulativeMagnification <= -0.06 {
             standardPinchHandledInGesture = true
             standardPinchCumulativeMagnification = 0
             if store.openedFolderID != nil {
@@ -5463,7 +5463,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
 
         // Outward pinch threshold: open hovered folder if on root grid
-        if standardPinchCumulativeMagnification >= 0.15 {
+        if standardPinchCumulativeMagnification >= 0.08 {
             if store.openedFolderID == nil {
                 let appKitPoint = convert(event.locationInWindow, from: nil)
                 let point = CGPoint(x: appKitPoint.x, y: bounds.height - appKitPoint.y)
