@@ -56,6 +56,9 @@
 "settings.hotCorner.bottomLeft" = "Bottom Left";
 "settings.hotCorner.bottomRight" = "Bottom Right";
 "settings.hotCorner.detail" = "Move the mouse pointer to a screen corner and pause to open QLaunch.";
+"settings.section.trackpad" = "Trackpad";
+"settings.trackpadPinch" = "Pinch Gesture";
+"settings.trackpadPinch.detail" = "Pinch with thumb and three fingers to toggle Launchpad, or pinch with two fingers inside to exit.";
 "settings.section.cache" = "Clear Cache";
 "settings.cache.clear" = "Clear Cache";
 "settings.cache.detail" = "Clear and rebuild the icon, text, and wallpaper caches";

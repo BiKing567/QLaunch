@@ -56,6 +56,9 @@
 "settings.hotCorner.bottomLeft" = "左下";
 "settings.hotCorner.bottomRight" = "右下";
 "settings.hotCorner.detail" = "マウスポインタを画面の隅に移動して少し待つと、QLaunch が開きます。";
+"settings.section.trackpad" = "トラックパッド";
+"settings.trackpadPinch" = "ピンチジェスチャ";
+"settings.trackpadPinch.detail" = "親指と3本指のピンチでLaunchpadを開閉し、起動台内で2本指ピンチして終了します。";
 "settings.section.cache" = "キャッシュを消去";
 "settings.cache.clear" = "キャッシュを消去";
 "settings.cache.detail" = "アイコン、テキスト、壁紙のキャッシュを消去して再構築します";

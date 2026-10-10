@@ -5394,9 +5394,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         axis == .horizontal
     }
 
+    private var standardPinchCumulativeMagnification: CGFloat = 0
+    private var standardPinchHandledInGesture = false
+    private var lastStandardPinchTime: CFTimeInterval = 0
+
     override func magnify(with event: NSEvent) {
         guard GridLayoutPreset.current.isInfiniteCanvas else {
-            super.magnify(with: event)
+            handleStandardPinch(with: event)
             return
         }
 
@@ -5418,6 +5422,65 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
         if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
             canvasPinchNeedsRipple = false
+        }
+    }
+
+    private func handleStandardPinch(with event: NSEvent) {
+        guard TrackpadGesturePreferences.isEnabled else {
+            super.magnify(with: event)
+            return
+        }
+        // Do not interrupt item dragging or marquee selection
+        guard draggedAppID == nil, marqueeStart == nil else { return }
+
+        let now = CACurrentMediaTime()
+        if event.phase.contains(.began) || (now - lastStandardPinchTime > 0.35) {
+            standardPinchCumulativeMagnification = 0
+            standardPinchHandledInGesture = false
+        }
+        lastStandardPinchTime = now
+
+        if standardPinchHandledInGesture {
+            if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+                standardPinchCumulativeMagnification = 0
+                standardPinchHandledInGesture = false
+            }
+            return
+        }
+
+        standardPinchCumulativeMagnification += event.magnification
+
+        // Inward pinch threshold: dismiss Launchpad or exit current folder
+        if standardPinchCumulativeMagnification <= -0.12 {
+            standardPinchHandledInGesture = true
+            standardPinchCumulativeMagnification = 0
+            if store.openedFolderID != nil {
+                store.exitFolder()
+            } else {
+                NotificationCenter.default.post(name: .qlaunchpadDismiss, object: nil)
+            }
+            return
+        }
+
+        // Outward pinch threshold: open hovered folder if on root grid
+        if standardPinchCumulativeMagnification >= 0.15 {
+            if store.openedFolderID == nil {
+                let appKitPoint = convert(event.locationInWindow, from: nil)
+                let point = CGPoint(x: appKitPoint.x, y: bounds.height - appKitPoint.y)
+                if let index = layoutItemIndex(at: point), displayedItems.indices.contains(index) {
+                    if case .folder(let folder) = displayedItems[index] {
+                        standardPinchHandledInGesture = true
+                        standardPinchCumulativeMagnification = 0
+                        store.enterFolder(folder.id)
+                        return
+                    }
+                }
+            }
+        }
+
+        if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+            standardPinchCumulativeMagnification = 0
+            standardPinchHandledInGesture = false
         }
     }
 

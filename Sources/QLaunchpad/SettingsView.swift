@@ -106,6 +106,8 @@ private struct GeneralSettingsView: View {
     private var presentationAnimationStyle = LaunchpadAnimationStyle.fly.rawValue
     @AppStorage(HotCornerPreferences.positionKey)
     private var hotCornerPosition = HotCornerPreferences.defaultPosition.rawValue
+    @AppStorage(TrackpadGesturePreferences.enabledKey)
+    private var trackpadPinchEnabled = TrackpadGesturePreferences.defaultEnabled
     @State private var launchAtLogin = false
     @State private var launchAtLoginNeedsApproval = false
     @State private var didClearCache = false
@@ -190,6 +192,25 @@ private struct GeneralSettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+            }
+
+            Section(L10n.tr("settings.section.trackpad")) {
+                Toggle(isOn: Binding(
+                    get: { trackpadPinchEnabled },
+                    set: { newValue in
+                        trackpadPinchEnabled = newValue
+                        NotificationCenter.default.post(name: .qlaunchpadTrackpadGestureChanged, object: nil)
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.trackpadPinch"))
+                        Text(L10n.tr("settings.trackpadPinch.detail"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
             }
 
             Section(L10n.tr("settings.section.display")) {

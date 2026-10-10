@@ -70,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         store.load()
         installHotKey()
         installHotCorner()
+        installTrackpadGesture()
         installStatusItem()
         NotificationCenter.default.addObserver(
             self,
@@ -128,6 +129,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(trackpadGestureChanged),
+            name: .qlaunchpadTrackpadGestureChanged,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(appWindowDidBecomeKey(_:)),
             name: NSWindow.didBecomeKeyNotification,
             object: nil
@@ -153,6 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         LaunchpadHotKeyCenter.shared.uninstall()
         LaunchpadHotCornerCenter.shared.uninstall()
+        LaunchpadTrackpadGestureCenter.shared.uninstall()
         if let localHotKeyMonitor { NSEvent.removeMonitor(localHotKeyMonitor) }
         DistributedNotificationCenter.default().removeObserver(
             self,
@@ -301,6 +309,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func hotCornerChanged() {
         LaunchpadHotCornerCenter.shared.reloadWindows()
+    }
+
+    private func installTrackpadGesture() {
+        let center = LaunchpadTrackpadGestureCenter.shared
+        center.onPinchIn = { [weak self] in
+            guard let self else { return }
+            guard !self.isAnimating else { return }
+            if !self.store.isPresented && self.launchpadPanel?.isVisible != true {
+                self.showLaunchpad()
+            } else {
+                self.dismissLaunchpad()
+            }
+        }
+        center.onPinchOut = { [weak self] in
+            guard let self else { return }
+            guard !self.isAnimating else { return }
+            if self.store.isPresented || self.launchpadPanel?.isVisible == true {
+                self.dismissLaunchpad()
+            }
+        }
+        center.install()
+    }
+
+    @objc private func trackpadGestureChanged() {
+        LaunchpadTrackpadGestureCenter.shared.reloadPreference()
     }
 
     /// In-panel navigation only. The toggle shortcut is a Carbon system hotkey.

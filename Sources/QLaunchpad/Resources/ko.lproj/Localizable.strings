@@ -56,6 +56,9 @@
 "settings.hotCorner.bottomLeft" = "왼쪽 하단";
 "settings.hotCorner.bottomRight" = "오른쪽 하단";
 "settings.hotCorner.detail" = "마우스 포인터를 화면 모서리로 이동하고 잠시 멈추면 QLaunch가 열립니다.";
+"settings.section.trackpad" = "트랙패드";
+"settings.trackpadPinch" = "핀치 제스처";
+"settings.trackpadPinch.detail" = "엄지와 세 손가락으로 핀치하여 Launchpad를 열거나 닫고, 실행기 내에서 두 손가락으로 핀치하여 종료합니다.";
 "settings.section.cache" = "캐시 지우기";
 "settings.cache.clear" = "캐시 지우기";
 "settings.cache.detail" = "아이콘, 텍스트 및 배경화면 캐시를 지우고 다시 생성합니다";
