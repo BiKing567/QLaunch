@@ -249,6 +249,8 @@ final class LaunchpadContainerView: NSView {
 
     var metal: LaunchpadMetalView { metalView }
     var background: DesktopBackgroundView { backgroundView }
+    var onInteractiveDismissProgress: ((CGFloat) -> Void)?
+    var onInteractiveDismissEnd: ((Bool) -> Void)?
 
     init(store: AppStore) {
         self.store = store
@@ -261,6 +263,12 @@ final class LaunchpadContainerView: NSView {
         addSubview(backgroundView)
         addSubview(metalView)
         addSubview(overlayView)
+        metalView.onInteractiveDismissProgress = { [weak self] progress in
+            self?.onInteractiveDismissProgress?(progress)
+        }
+        metalView.onInteractiveDismissEnd = { [weak self] completed in
+            self?.onInteractiveDismissEnd?(completed)
+        }
         overlayView.onSelectPageAt = { [weak self] point in
             guard let self else { return }
             _ = self.store.selectPage(
@@ -415,6 +423,42 @@ final class LaunchpadContainerView: NSView {
         overlayView.alphaValue = 0
         backgroundView.prepare(for: screen)
         backgroundView.prepareForPresentation()
+    }
+
+    func prepareForInteractiveShow(on screen: NSScreen) {
+        setPresentationScale(1)
+        metalView.alphaValue = 1
+        overlayView.alphaValue = 0
+        backgroundView.prepare(for: screen)
+        backgroundView.prepareForPresentation()
+        metalView.prepareForInteractivePresentation()
+    }
+
+    func setInteractivePresentationProgress(_ progress: CGFloat) {
+        let p = min(1, max(0, progress))
+        metalView.applyInteractivePresentationProgress(p)
+        backgroundView.alphaValue = p
+        let overlayAlpha = max(0, min(1, (p - 0.35) / 0.65))
+        overlayView.alphaValue = overlayAlpha
+    }
+
+    func animateInteractivePresentation(
+        from start: CGFloat,
+        to target: CGFloat,
+        duration: CFTimeInterval,
+        completion: @escaping () -> Void
+    ) {
+        metalView.animateInteractivePresentation(
+            from: start,
+            to: target,
+            duration: duration,
+            onUpdate: { [weak self] phase in
+                self?.backgroundView.alphaValue = phase
+                let overlayAlpha = max(0, min(1, (phase - 0.35) / 0.65))
+                self?.overlayView.alphaValue = overlayAlpha
+            },
+            completion: completion
+        )
     }
 
     func revealPrimedMetalContent() {

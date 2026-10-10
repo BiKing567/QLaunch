@@ -47,8 +47,21 @@ private final class UnfairLock: @unchecked Sendable {
 final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
     static let shared = LaunchpadTrackpadGestureCenter()
 
+    public enum InteractivePinchEvent: Sendable {
+        case began(isOpening: Bool)
+        case changed(isOpening: Bool, progress: CGFloat)
+        case ended(isOpening: Bool, completed: Bool)
+        case cancelled(isOpening: Bool)
+    }
+
     var onPinchIn: (@MainActor () -> Void)?
     var onPinchOut: (@MainActor () -> Void)?
+
+    private var _onInteractiveEvent: (@MainActor (InteractivePinchEvent) -> Void)?
+    var onInteractiveEvent: (@MainActor (InteractivePinchEvent) -> Void)? {
+        get { lock.withLock { _onInteractiveEvent } }
+        set { lock.withLock { _onInteractiveEvent = newValue } }
+    }
 
     private typealias ContactCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, Int32, Double, Int32) -> Int32
     private typealias CreateListFn = @convention(c) () -> Unmanaged<CFMutableArray>?
@@ -98,6 +111,9 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
         var intent = TrackpadPinchIntent()
         var lastTime: Double = 0
         var triggeredInSession = false
+        var interactiveStarted = false
+        var interactiveIsOpening = false
+        var currentProgress: CGFloat = 0
     }
 
     private let lock = UnfairLock()
@@ -171,14 +187,24 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
     private func process(touches: UnsafeMutableRawPointer?, count: Int, timestamp: Double) {
         // Three or more fingers required (supports 3-finger pinch and classic 4-finger pinch)
         guard count >= 3, let touches else {
+            var eventToDeliver: InteractivePinchEvent?
             lock.withLock {
+                if tracking.interactiveStarted {
+                    let isOpening = tracking.interactiveIsOpening
+                    let completed = tracking.currentProgress >= 0.35
+                    eventToDeliver = .ended(isOpening: isOpening, completed: completed)
+                }
                 if count == 0 {
                     tracking = Tracking()
                 } else if timestamp - tracking.lastTime > Self.sessionGap {
-                    tracking.intent = TrackpadPinchIntent()
-                    tracking.triggeredInSession = false
+                    tracking = Tracking()
                 }
                 tracking.lastTime = timestamp
+            }
+            if let eventToDeliver {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onInteractiveEvent?(eventToDeliver)
+                }
             }
             return
         }
@@ -199,12 +225,22 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
 
         let fingers = xs.count
         guard fingers >= 3 else {
+            var eventToDeliver: InteractivePinchEvent?
             lock.withLock {
+                if tracking.interactiveStarted {
+                    let isOpening = tracking.interactiveIsOpening
+                    let completed = tracking.currentProgress >= 0.35
+                    eventToDeliver = .ended(isOpening: isOpening, completed: completed)
+                }
                 if timestamp - tracking.lastTime > Self.sessionGap {
-                    tracking.intent = TrackpadPinchIntent()
-                    tracking.triggeredInSession = false
+                    tracking = Tracking()
                 }
                 tracking.lastTime = timestamp
+            }
+            if let eventToDeliver {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onInteractiveEvent?(eventToDeliver)
+                }
             }
             return
         }
@@ -218,11 +254,16 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
             case pinchOut
         }
         var actionToTrigger: TriggerAction?
+        var eventToDeliver: InteractivePinchEvent?
 
         lock.withLock {
             if timestamp - tracking.lastTime > Self.sessionGap {
-                tracking.intent = TrackpadPinchIntent()
-                tracking.triggeredInSession = false
+                if tracking.interactiveStarted {
+                    let isOpening = tracking.interactiveIsOpening
+                    let completed = tracking.currentProgress >= 0.35
+                    eventToDeliver = .ended(isOpening: isOpening, completed: completed)
+                }
+                tracking = Tracking()
             }
             tracking.lastTime = timestamp
 
@@ -245,21 +286,54 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
             let isPinch = tracking.intent.update(ratio: ratio, travel: travel)
             guard isPinch else { return }
 
-            guard !tracking.triggeredInSession else { return }
+            if _onInteractiveEvent != nil {
+                if !tracking.interactiveStarted {
+                    if ratio <= 0.96 {
+                        tracking.interactiveStarted = true
+                        tracking.interactiveIsOpening = true
+                        tracking.currentProgress = 0.0
+                        eventToDeliver = .began(isOpening: true)
+                    } else if ratio >= 1.05 {
+                        tracking.interactiveStarted = true
+                        tracking.interactiveIsOpening = false
+                        tracking.currentProgress = 0.0
+                        eventToDeliver = .began(isOpening: false)
+                    }
+                } else {
+                    if tracking.interactiveIsOpening {
+                        let p = (0.96 - ratio) / 0.18
+                        let progress = min(1.0, max(0.0, CGFloat(p)))
+                        tracking.currentProgress = progress
+                        eventToDeliver = .changed(isOpening: true, progress: progress)
+                    } else {
+                        let p = (ratio - 1.05) / 0.18
+                        let progress = min(1.0, max(0.0, CGFloat(p)))
+                        tracking.currentProgress = progress
+                        eventToDeliver = .changed(isOpening: false, progress: progress)
+                    }
+                }
+            } else {
+                guard !tracking.triggeredInSession else { return }
+                let now = CACurrentMediaTime()
+                guard now - lastActionTime > 0.35 else { return }
 
-            let now = CACurrentMediaTime()
-            guard now - lastActionTime > 0.35 else { return }
+                // Pinch in threshold: natural contraction (ratio <= 0.82)
+                if ratio <= 0.82 {
+                    tracking.triggeredInSession = true
+                    lastActionTime = now
+                    actionToTrigger = .pinchIn
+                } else if ratio >= 1.20 {
+                    // Pinch out threshold: natural expansion (ratio >= 1.20)
+                    tracking.triggeredInSession = true
+                    lastActionTime = now
+                    actionToTrigger = .pinchOut
+                }
+            }
+        }
 
-            // Pinch in threshold: natural contraction (ratio <= 0.82)
-            if ratio <= 0.82 {
-                tracking.triggeredInSession = true
-                lastActionTime = now
-                actionToTrigger = .pinchIn
-            } else if ratio >= 1.20 {
-                // Pinch out threshold: natural expansion (ratio >= 1.20)
-                tracking.triggeredInSession = true
-                lastActionTime = now
-                actionToTrigger = .pinchOut
+        if let eventToDeliver {
+            DispatchQueue.main.async { [weak self] in
+                self?.onInteractiveEvent?(eventToDeliver)
             }
         }
 

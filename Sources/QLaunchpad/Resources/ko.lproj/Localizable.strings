@@ -58,7 +58,7 @@
 "settings.hotCorner.detail" = "마우스 포인터를 화면 모서리로 이동하고 잠시 멈추면 QLaunch가 열립니다.";
 "settings.section.trackpad" = "트랙패드";
 "settings.trackpadPinch" = "핀치 제스처";
-"settings.trackpadPinch.detail" = "3손가락 또는 4손가락 핀치로 Launchpad를 열고, 펼쳐서 종료합니다.";
+"settings.trackpadPinch.detail" = "3손가락 또는 4손가락 핀치로 Launchpad를 연속적으로 열고, 펼쳐서 종료합니다.";
 "settings.trackpadPinch.conflictNotice" = "macOS 기본 Launchpad 제스처가 켜져 있습니다. 3손가락 핀치로 충돌 없이 바로 QLaunch를 열거나, 시스템 설정에서 'Launchpad'를 꺼서 4손가락 제스처를 QLaunch에 전담시킬 수 있습니다.";
 "settings.trackpadPinch.openSettings" = "트랙패드 설정 열기…";
 "settings.section.cache" = "캐시 지우기";

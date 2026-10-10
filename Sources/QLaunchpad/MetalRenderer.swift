@@ -384,6 +384,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private var presentationPhase: CGFloat = 1
     private var isShowingPresentation = false
     private var isPrimingPresentationFrame = false
+    private var isInteractivePresentationActive = false
+    private var isInteractiveFinishing = false
+    private var interactivePresentationUpdate: ((CGFloat) -> Void)?
+    private var interactivePresentationCompletion: (() -> Void)?
+    var onInteractiveDismissProgress: ((CGFloat) -> Void)?
+    var onInteractiveDismissEnd: ((Bool) -> Void)?
+    private var standardPinchInteractiveDismissActive = false
     private var presentationStyle: LaunchpadAnimationStyle = .fly
     private var stationaryDismissedAppID: String?
 
@@ -1487,6 +1494,50 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             contentOffsetY = 0
         }
         store.presentationProgress = progress
+    }
+
+    func prepareForInteractivePresentation() {
+        if displayedItems.isEmpty, !store.activeDisplayItems.isEmpty {
+            displayedItems = store.activeDisplayItems
+            displayedFolderID = store.isSearching ? nil : store.openedFolderID
+            lastDisplaySignature = AppListSignature(items: displayedItems)
+            contentTransitionPhase = .idle
+            contentTransitionAlpha = 1
+        }
+        applyInteractivePresentationProgress(0.0)
+    }
+
+    func applyInteractivePresentationProgress(_ progress: CGFloat) {
+        let p = min(1, max(0, progress))
+        isInteractivePresentationActive = true
+        animatingPresentation = false
+        isPrimingPresentationFrame = false
+        isShowingPresentation = true
+        presentationPhase = p
+        contentAlpha = p
+        contentScale = 1.0 + 0.12 * (1.0 - p)
+        iconEntranceProgress = p
+        store.presentationProgress = p
+        needsDisplay = true
+    }
+
+    func animateInteractivePresentation(
+        from start: CGFloat,
+        to target: CGFloat,
+        duration: CFTimeInterval,
+        onUpdate: @escaping (CGFloat) -> Void,
+        completion: @escaping () -> Void
+    ) {
+        presentFrom = start
+        presentTo = target
+        presentStartTime = CACurrentMediaTime()
+        presentDurationActive = max(0.08, duration)
+        animatingPresentation = true
+        isInteractiveFinishing = true
+        interactivePresentationUpdate = onUpdate
+        interactivePresentationCompletion = completion
+        startDisplayLink()
+        needsDisplay = true
     }
 
     /// True while wallpaper is up and Metal must stay hidden until a phase-0
@@ -3009,12 +3060,32 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         if animatingPresentation {
             let t = min(1, max(0, (now - presentStartTime) / presentDurationActive))
-            let phase = presentFrom + (presentTo - presentFrom) * CGFloat(t)
-            applyPresentationPhase(phase)
+            let easedT = CGFloat(1.0 - pow(1.0 - t, 3))
+            let phase = presentFrom + (presentTo - presentFrom) * easedT
+            if isInteractiveFinishing {
+                applyInteractivePresentationProgress(phase)
+                interactivePresentationUpdate?(phase)
+            } else {
+                applyPresentationPhase(phase)
+            }
             if t >= 1 {
                 animatingPresentation = false
-                applyPresentationPhase(presentTo)
-                if isShowingPresentation {
+                let wasInteractive = isInteractiveFinishing
+                isInteractiveFinishing = false
+                if wasInteractive {
+                    applyInteractivePresentationProgress(presentTo)
+                    interactivePresentationUpdate?(presentTo)
+                } else {
+                    applyPresentationPhase(presentTo)
+                }
+                let comp = interactivePresentationCompletion
+                interactivePresentationUpdate = nil
+                interactivePresentationCompletion = nil
+                if let comp {
+                    DispatchQueue.main.async {
+                        comp()
+                    }
+                } else if isShowingPresentation {
                     store.markVisible()
                     resumeResourcePrewarming()
                 } else {
@@ -3029,6 +3100,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         // would reveal settled icons and then replay the open animation.
         if !isPrimingPresentationFrame,
            !animatingPresentation,
+           !isInteractivePresentationActive,
            store.presentation != .dismissing,
            contentAlpha < 0.01,
            window?.isVisible == true {
@@ -5437,6 +5509,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         if event.phase.contains(.began) || (now - lastStandardPinchTime > 0.35) {
             standardPinchCumulativeMagnification = 0
             standardPinchHandledInGesture = false
+            standardPinchInteractiveDismissActive = false
         }
         lastStandardPinchTime = now
 
@@ -5444,6 +5517,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
                 standardPinchCumulativeMagnification = 0
                 standardPinchHandledInGesture = false
+                standardPinchInteractiveDismissActive = false
             }
             return
         }
@@ -5455,6 +5529,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             if store.openedFolderID != nil {
                 standardPinchHandledInGesture = true
                 standardPinchCumulativeMagnification = 0
+                standardPinchInteractiveDismissActive = false
                 store.exitFolder()
                 return
             } else {
@@ -5462,29 +5537,39 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             }
         }
 
-        // Outward spread threshold: open hovered folder if on root grid, otherwise dismiss Launchpad (show desktop)
-        if standardPinchCumulativeMagnification >= 0.08 {
+        // Outward spread: check folder hover first, otherwise drive interactive dismissal
+        if standardPinchCumulativeMagnification > 0.005 {
             if store.openedFolderID == nil {
                 let appKitPoint = convert(event.locationInWindow, from: nil)
                 let point = CGPoint(x: appKitPoint.x, y: bounds.height - appKitPoint.y)
                 if let index = layoutItemIndex(at: point), displayedItems.indices.contains(index) {
                     if case .folder(let folder) = displayedItems[index] {
-                        standardPinchHandledInGesture = true
-                        standardPinchCumulativeMagnification = 0
-                        store.enterFolder(folder.id)
+                        if standardPinchCumulativeMagnification >= 0.08 {
+                            standardPinchHandledInGesture = true
+                            standardPinchCumulativeMagnification = 0
+                            standardPinchInteractiveDismissActive = false
+                            store.enterFolder(folder.id)
+                        }
                         return
                     }
                 }
             }
-            standardPinchHandledInGesture = true
-            standardPinchCumulativeMagnification = 0
-            NotificationCenter.default.post(name: .qlaunchpadDismiss, object: nil)
-            return
+
+            // Not hovering over a folder: continuous interactive dismissal
+            standardPinchInteractiveDismissActive = true
+            let dismissRatio = min(1.0, max(0.0, standardPinchCumulativeMagnification / 0.18))
+            let presentationProgress = 1.0 - dismissRatio
+            onInteractiveDismissProgress?(presentationProgress)
         }
 
         if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+            if standardPinchInteractiveDismissActive {
+                let completed = standardPinchCumulativeMagnification >= 0.06
+                onInteractiveDismissEnd?(completed)
+            }
             standardPinchCumulativeMagnification = 0
             standardPinchHandledInGesture = false
+            standardPinchInteractiveDismissActive = false
         }
     }
 

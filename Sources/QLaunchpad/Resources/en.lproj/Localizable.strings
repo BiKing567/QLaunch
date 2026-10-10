@@ -58,7 +58,7 @@
 "settings.hotCorner.detail" = "Move the mouse pointer to a screen corner and pause to open QLaunch.";
 "settings.section.trackpad" = "Trackpad";
 "settings.trackpadPinch" = "Pinch Gesture";
-"settings.trackpadPinch.detail" = "Pinch with 3 or 4 fingers to open Launchpad, and spread to exit.";
+"settings.trackpadPinch.detail" = "Continuous 3 or 4-finger pinch to open Launchpad, and spread to exit.";
 "settings.trackpadPinch.conflictNotice" = "macOS has its built-in Launchpad gesture enabled for 4-finger pinch. You can use 3-finger pinch directly without conflicts, or turn off Launchpad in System Settings to let QLaunch handle 4-finger pinch.";
 "settings.trackpadPinch.openSettings" = "Open Trackpad Settings…";
 "settings.section.cache" = "Clear Cache";

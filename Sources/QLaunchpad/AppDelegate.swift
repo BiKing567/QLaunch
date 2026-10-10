@@ -41,6 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusMenu: NSMenu?
     private var localHotKeyMonitor: Any?
     private var isAnimating = false
+    private var isInteractiveOpening = false
+    private var isInteractiveDismissing = false
     private var presentationGeneration: UInt = 0
     private var activeAnimationStyle: LaunchpadAnimationStyle = .fly
     private var launchReason: LaunchpadLaunchReason = .user
@@ -313,6 +315,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func installTrackpadGesture() {
         let center = LaunchpadTrackpadGestureCenter.shared
+        center.onInteractiveEvent = { [weak self] event in
+            guard let self else { return }
+            guard !self.isAnimating else { return }
+            switch event {
+            case .began(let isOpening):
+                if isOpening {
+                    if !self.store.isPresented && self.launchpadPanel?.isVisible != true {
+                        self.beginInteractiveOpen()
+                    }
+                } else {
+                    if self.store.isPresented || self.launchpadPanel?.isVisible == true {
+                        self.beginInteractiveDismiss()
+                    }
+                }
+            case .changed(let isOpening, let progress):
+                if isOpening {
+                    if self.isInteractiveOpening {
+                        self.containerView.setInteractivePresentationProgress(progress)
+                    }
+                } else {
+                    if self.isInteractiveDismissing {
+                        let p = max(0, min(1, 1.0 - progress))
+                        self.containerView.setInteractivePresentationProgress(p)
+                    }
+                }
+            case .ended(let isOpening, let completed):
+                if isOpening {
+                    if self.isInteractiveOpening {
+                        self.finishInteractivePresentation(to: completed ? 1.0 : 0.0)
+                    }
+                } else {
+                    if self.isInteractiveDismissing {
+                        self.finishInteractivePresentation(to: completed ? 0.0 : 1.0)
+                    }
+                }
+            case .cancelled(let isOpening):
+                if isOpening {
+                    if self.isInteractiveOpening {
+                        self.finishInteractivePresentation(to: 0.0)
+                    }
+                } else {
+                    if self.isInteractiveDismissing {
+                        self.finishInteractivePresentation(to: 1.0)
+                    }
+                }
+            }
+        }
         center.onPinchIn = { [weak self] in
             guard let self else { return }
             guard !self.isAnimating else { return }
@@ -328,6 +377,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         center.install()
+
+        containerView.onInteractiveDismissProgress = { [weak self] progress in
+            guard let self else { return }
+            guard !self.isAnimating else { return }
+            if !self.isInteractiveDismissing {
+                self.beginInteractiveDismiss()
+            }
+            self.containerView.setInteractivePresentationProgress(progress)
+        }
+
+        containerView.onInteractiveDismissEnd = { [weak self] completed in
+            guard let self else { return }
+            self.finishInteractivePresentation(to: completed ? 0.0 : 1.0)
+        }
     }
 
     @objc private func trackpadGestureChanged() {
@@ -553,6 +616,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             showLaunchpad()
         }
         updateStatusMenu()
+    }
+
+    // MARK: - Interactive Trackpad Presentation
+
+    private func beginInteractiveOpen() {
+        guard !isAnimating, !isInteractiveOpening, !isInteractiveDismissing else { return }
+        guard store.presentation != .visible, launchpadPanel?.isVisible != true else { return }
+        guard let screen = currentTargetScreen else { return }
+
+        isInteractiveOpening = true
+        presentationGeneration &+= 1
+        activeAnimationStyle = LaunchpadAnimationStyle.current
+        store.beginPresenting()
+
+        launchpadPanel.setFrame(screen.frame, display: false)
+        launchpadPanel.animationBehavior = .none
+        containerView.prepareForInteractiveShow(on: screen)
+
+        launchpadPanel.alphaValue = 1
+        launchpadPanel.orderFrontRegardless()
+        containerView.setInteractivePresentationProgress(0.0)
+    }
+
+    private func beginInteractiveDismiss() {
+        guard !isAnimating, !isInteractiveOpening, !isInteractiveDismissing else { return }
+        guard store.presentation == .visible || launchpadPanel?.isVisible == true else { return }
+
+        isInteractiveDismissing = true
+        presentationGeneration &+= 1
+        store.beginDismissing()
+    }
+
+    private func finishInteractivePresentation(to target: CGFloat) {
+        guard isInteractiveOpening || isInteractiveDismissing else { return }
+        isInteractiveOpening = false
+        isInteractiveDismissing = false
+        isAnimating = true
+        let generation = presentationGeneration
+
+        let currentProgress = store.presentationProgress
+        let distance = abs(target - currentProgress)
+        let duration = max(0.12, min(0.30, CFTimeInterval(distance * 0.32)))
+
+        containerView.animateInteractivePresentation(
+            from: currentProgress,
+            to: target,
+            duration: duration
+        ) { [weak self] in
+            guard let self, self.presentationGeneration == generation else { return }
+            self.isAnimating = false
+            if target >= 0.999 {
+                self.store.markVisible()
+                self.containerView.showWallpaperImmediately()
+                self.containerView.setInteractivePresentationProgress(1.0)
+                NSApp.activate(ignoringOtherApps: true)
+                self.launchpadPanel.makeKey()
+                self.syncSettingsWindowLevel()
+                NotificationCenter.default.post(name: .qlaunchpadFocusSearch, object: nil)
+                self.updateStatusMenu()
+            } else {
+                self.completeDismissal(generation: generation)
+            }
+        }
     }
 
     // MARK: - Show / hide with correct fade
