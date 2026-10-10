@@ -226,21 +226,14 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
             }
             tracking.lastTime = timestamp
 
-            if !tracking.active {
+            if !tracking.active || fingers != tracking.fingers {
                 tracking.active = true
                 tracking.fingers = fingers
                 tracking.baseline = spread
                 tracking.originX = cx
                 tracking.originY = cy
+                tracking.intent = TrackpadPinchIntent()
                 return
-            } else {
-                // If fingers are spreading or additional fingers joined before contracting,
-                // adapt baseline to the maximum spread so contraction is calculated from peak
-                if spread > tracking.baseline {
-                    tracking.baseline = spread
-                    tracking.originX = cx
-                    tracking.originY = cy
-                }
             }
 
             guard tracking.baseline > 0.01 else { return }
@@ -262,8 +255,8 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
                 tracking.triggeredInSession = true
                 lastActionTime = now
                 actionToTrigger = .pinchIn
-            } else if ratio >= 1.22 {
-                // Pinch out threshold: natural expansion (ratio >= 1.22)
+            } else if ratio >= 1.20 {
+                // Pinch out threshold: natural expansion (ratio >= 1.20)
                 tracking.triggeredInSession = true
                 lastActionTime = now
                 actionToTrigger = .pinchOut

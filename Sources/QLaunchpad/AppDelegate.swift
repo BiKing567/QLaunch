@@ -318,8 +318,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard !self.isAnimating else { return }
             if !self.store.isPresented && self.launchpadPanel?.isVisible != true {
                 self.showLaunchpad()
-            } else {
-                self.dismissLaunchpad()
             }
         }
         center.onPinchOut = { [weak self] in

@@ -5450,19 +5450,19 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         standardPinchCumulativeMagnification += event.magnification
 
-        // Inward pinch threshold: dismiss Launchpad or exit current folder (crisp, light pinch)
+        // Inward pinch threshold: exit current folder if inside one. On root grid, pinch in does not dismiss Launchpad.
         if standardPinchCumulativeMagnification <= -0.06 {
-            standardPinchHandledInGesture = true
-            standardPinchCumulativeMagnification = 0
             if store.openedFolderID != nil {
+                standardPinchHandledInGesture = true
+                standardPinchCumulativeMagnification = 0
                 store.exitFolder()
+                return
             } else {
-                NotificationCenter.default.post(name: .qlaunchpadDismiss, object: nil)
+                standardPinchCumulativeMagnification = 0
             }
-            return
         }
 
-        // Outward pinch threshold: open hovered folder if on root grid
+        // Outward spread threshold: open hovered folder if on root grid, otherwise dismiss Launchpad (show desktop)
         if standardPinchCumulativeMagnification >= 0.08 {
             if store.openedFolderID == nil {
                 let appKitPoint = convert(event.locationInWindow, from: nil)
@@ -5476,6 +5476,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     }
                 }
             }
+            standardPinchHandledInGesture = true
+            standardPinchCumulativeMagnification = 0
+            NotificationCenter.default.post(name: .qlaunchpadDismiss, object: nil)
+            return
         }
 
         if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
