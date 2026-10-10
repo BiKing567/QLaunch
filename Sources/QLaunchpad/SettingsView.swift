@@ -211,6 +211,27 @@ private struct GeneralSettingsView: View {
                     }
                 }
                 .toggleStyle(.switch)
+
+                if trackpadPinchEnabled && TrackpadGesturePreferences.isSystemLaunchpadGestureEnabled {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            Text(L10n.tr("settings.trackpadPinch.conflictNotice"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Button {
+                            TrackpadGesturePreferences.openSystemTrackpadSettings()
+                        } label: {
+                            Label(L10n.tr("settings.trackpadPinch.openSettings"), systemImage: "arrow.up.forward.app")
+                        }
+                        .controlSize(.small)
+                    }
+                    .padding(.vertical, 2)
+                }
             }
 
             Section(L10n.tr("settings.section.display")) {

@@ -58,7 +58,9 @@
 "settings.hotCorner.detail" = "将鼠标移动到屏幕角落并稍作停顿即可打开 QLaunch。";
 "settings.section.trackpad" = "触控板";
 "settings.trackpadPinch" = "捏合手势";
-"settings.trackpadPinch.detail" = "使用拇指与三指捏合手势唤起或关闭启动台，并支持在启动台内双指捏合退出。";
+"settings.trackpadPinch.detail" = "支持三指或四指捏合唤起/关闭启动台，并在启动台内双指捏合退出。";
+"settings.trackpadPinch.conflictNotice" = "系统已启用原生启动台四指捏合。你可以直接使用「三指捏合（大拇指与两指）」唤起 QLaunch（无需更改设置），或在系统触控板设置中关闭「启动台」选项以完全由 QLaunch 接管四指捏合。";
+"settings.trackpadPinch.openSettings" = "打开系统触控板设置…";
 "settings.section.cache" = "清除缓存";
 "settings.cache.clear" = "清除缓存";
 "settings.cache.detail" = "清除图标、文字和壁纸缓存并重新构建";

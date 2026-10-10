@@ -9,6 +9,25 @@ public enum TrackpadGesturePreferences {
     public static var isEnabled: Bool {
         UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? defaultEnabled
     }
+
+    /// Check whether macOS system Launchpad gesture is active in System Settings.
+    public static var isSystemLaunchpadGestureEnabled: Bool {
+        let domain = "com.apple.AppleMultitouchTrackpad" as CFString
+        let key = "TrackpadFourFingerPinchGesture" as CFString
+        if let val = CFPreferencesCopyAppValue(key, domain) {
+            if let num = val as? NSNumber {
+                return num.intValue != 0
+            }
+        }
+        return false
+    }
+
+    /// Open macOS Trackpad Settings pane in System Settings.
+    public static func openSystemTrackpadSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.Trackpad-Settings.extension") {
+            NSWorkspace.shared.open(url)
+        }
+    }
 }
 
 extension Notification.Name {
@@ -150,8 +169,8 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
     }
 
     private func process(touches: UnsafeMutableRawPointer?, count: Int, timestamp: Double) {
-        // Four or more fingers required for classic macOS thumb + three fingers pinch
-        guard count >= 4, let touches else {
+        // Three or more fingers required (supports 3-finger pinch and classic 4-finger pinch)
+        guard count >= 3, let touches else {
             lock.withLock {
                 if count == 0 {
                     tracking = Tracking()
@@ -179,7 +198,7 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
         }
 
         let fingers = xs.count
-        guard fingers >= 4 else {
+        guard fingers >= 3 else {
             lock.withLock {
                 if timestamp - tracking.lastTime > Self.sessionGap {
                     tracking.intent = TrackpadPinchIntent()

@@ -58,7 +58,9 @@
 "settings.hotCorner.detail" = "マウスポインタを画面の隅に移動して少し待つと、QLaunch が開きます。";
 "settings.section.trackpad" = "トラックパッド";
 "settings.trackpadPinch" = "ピンチジェスチャ";
-"settings.trackpadPinch.detail" = "親指と3本指のピンチでLaunchpadを開閉し、起動台内で2本指ピンチして終了します。";
+"settings.trackpadPinch.detail" = "3本指または4本指のピンチでLaunchpadを開閉し、起動台内で2本指ピンチして終了します。";
+"settings.trackpadPinch.conflictNotice" = "macOSの標準Launchpadジェスチャが有効です。3本指ピンチなら競合なく直接起動できます。4本指ピンチを完全にQLaunchに割り当てるには、システム設定で「Launchpad」をオフにしてください。";
+"settings.trackpadPinch.openSettings" = "トラックパッド設定を開く…";
 "settings.section.cache" = "キャッシュを消去";
 "settings.cache.clear" = "キャッシュを消去";
 "settings.cache.detail" = "アイコン、テキスト、壁紙のキャッシュを消去して再構築します";
