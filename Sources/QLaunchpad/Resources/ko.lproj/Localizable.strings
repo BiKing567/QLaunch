@@ -58,8 +58,9 @@
 "settings.hotCorner.detail" = "마우스 포인터를 화면 모서리로 이동하고 잠시 멈추면 QLaunch가 열립니다.";
 "settings.section.trackpad" = "트랙패드";
 "settings.trackpadPinch" = "핀치 제스처";
-"settings.trackpadPinch.detail" = "3손가락 또는 4손가락 핀치로 Launchpad를 연속적으로 열고, 펼쳐서 종료합니다.";
+"settings.trackpadPinch.detail" = "세 손가락 또는 네 손가락 핀치로 부드럽게 실행. 열려 있을 때 모으거나 벌려서 부드럽게 종료.";
 "settings.trackpadPinch.conflictNotice" = "현재 macOS 기본 핀치 제스처가 켜져 있습니다. '시스템 제스처 원클릭 인계'를 눌러 자동으로 인계받거나, 3손가락 핀치를 사용하세요.";
+"settings.trackpadPinch.desktopConflictNotice" = "macOS는 기본적으로 네 손가락 벌리기를 \"데스크탑 보기\"로 설정합니다. 열려 있을 때는 네 손가락 또는 세 손가락을 모아서 닫는 것을 권장합니다(충돌 없음). 네 손가락 벌리기로 닫으려면 시스템 설정에서 \"데스크탑 보기\"를 끄십시오.";
 "settings.trackpadPinch.takeOver" = "시스템 핀치 제스처 인계받기";
 "settings.trackpadPinch.takeOver.detail" = "macOS 기본 제스처를 자동으로 비활성화하고 QLaunch가 4손가락 연속 핀치를 독점 처리합니다.";
 "settings.trackpadPinch.takeOverAction" = "시스템 제스처 원클릭 인계";

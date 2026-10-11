@@ -286,6 +286,18 @@ private struct GeneralSettingsView: View {
                         }
                         .padding(.vertical, 2)
                     }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(.blue)
+                            Text(L10n.tr("settings.trackpadPinch.desktopConflictNotice"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.vertical, 2)
                 }
             }
 

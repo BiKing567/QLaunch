@@ -144,6 +144,12 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
         set { lock.withLock { _onInteractiveEvent = newValue } }
     }
 
+    private var _isLaunchpadPresented = false
+    var isLaunchpadPresented: Bool {
+        get { lock.withLock { _isLaunchpadPresented } }
+        set { lock.withLock { _isLaunchpadPresented = newValue } }
+    }
+
     private typealias ContactCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, Int32, Double, Int32) -> Int32
     private typealias CreateListFn = @convention(c) () -> Unmanaged<CFMutableArray>?
     private typealias RegisterFn = @convention(c) (UnsafeMutableRawPointer, ContactCallback) -> Void
@@ -184,6 +190,10 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
     }
 
     private struct Tracking {
+        enum TriggerMode {
+            case pinch
+            case spread
+        }
         var active = false
         var fingers = 0
         var baseline: Double = 0
@@ -194,6 +204,7 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
         var triggeredInSession = false
         var interactiveStarted = false
         var interactiveIsOpening = false
+        var interactiveTriggerMode: TriggerMode = .pinch
         var currentProgress: CGFloat = 0
     }
 
@@ -428,53 +439,74 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
             let isPinch = tracking.intent.update(ratio: ratio, travel: travel)
             guard isPinch else { return sessionGeneration }
 
+            let isPresented = _isLaunchpadPresented
             if _onInteractiveEvent != nil {
                 if !tracking.interactiveStarted {
-                    if ratio <= 0.96 {
-                        tracking.interactiveStarted = true
-                        tracking.interactiveIsOpening = true
-                        let p = (0.96 - ratio) / 0.18
-                        let progress = min(1.0, max(0.0, CGFloat(p)))
-                        tracking.currentProgress = progress
-                        eventsToDeliver.append(.began(isOpening: true))
-                        eventsToDeliver.append(.changed(isOpening: true, progress: progress))
-                    } else if ratio >= 1.05 {
-                        tracking.interactiveStarted = true
-                        tracking.interactiveIsOpening = false
-                        let p = (ratio - 1.05) / 0.18
-                        let progress = min(1.0, max(0.0, CGFloat(p)))
-                        tracking.currentProgress = progress
-                        eventsToDeliver.append(.began(isOpening: false))
-                        eventsToDeliver.append(.changed(isOpening: false, progress: progress))
+                    if isPresented {
+                        // When Launchpad is open:
+                        // Both Pinch-in (ratio <= 0.96) and Spread-out (ratio >= 1.05) trigger interactive dismiss.
+                        // Pinch-in is completely conflict-free (never triggers macOS Show Desktop).
+                        if ratio <= 0.96 {
+                            tracking.interactiveStarted = true
+                            tracking.interactiveIsOpening = false
+                            tracking.interactiveTriggerMode = .pinch
+                            let p = (0.96 - ratio) / 0.18
+                            let progress = min(1.0, max(0.0, CGFloat(p)))
+                            tracking.currentProgress = progress
+                            eventsToDeliver.append(.began(isOpening: false))
+                            eventsToDeliver.append(.changed(isOpening: false, progress: progress))
+                        } else if ratio >= 1.05 {
+                            tracking.interactiveStarted = true
+                            tracking.interactiveIsOpening = false
+                            tracking.interactiveTriggerMode = .spread
+                            let p = (ratio - 1.05) / 0.18
+                            let progress = min(1.0, max(0.0, CGFloat(p)))
+                            tracking.currentProgress = progress
+                            eventsToDeliver.append(.began(isOpening: false))
+                            eventsToDeliver.append(.changed(isOpening: false, progress: progress))
+                        }
+                    } else {
+                        // When Launchpad is closed:
+                        // Only pinch-in (ratio <= 0.96) triggers interactive open.
+                        if ratio <= 0.96 {
+                            tracking.interactiveStarted = true
+                            tracking.interactiveIsOpening = true
+                            tracking.interactiveTriggerMode = .pinch
+                            let p = (0.96 - ratio) / 0.18
+                            let progress = min(1.0, max(0.0, CGFloat(p)))
+                            tracking.currentProgress = progress
+                            eventsToDeliver.append(.began(isOpening: true))
+                            eventsToDeliver.append(.changed(isOpening: true, progress: progress))
+                        }
                     }
                 } else {
-                    if tracking.interactiveIsOpening {
-                        let p = (0.96 - ratio) / 0.18
-                        let progress = min(1.0, max(0.0, CGFloat(p)))
-                        tracking.currentProgress = progress
-                        eventsToDeliver.append(.changed(isOpening: true, progress: progress))
+                    let p: Double
+                    if tracking.interactiveTriggerMode == .pinch {
+                        p = (0.96 - ratio) / 0.18
                     } else {
-                        let p = (ratio - 1.05) / 0.18
-                        let progress = min(1.0, max(0.0, CGFloat(p)))
-                        tracking.currentProgress = progress
-                        eventsToDeliver.append(.changed(isOpening: false, progress: progress))
+                        p = (ratio - 1.05) / 0.18
                     }
+                    let progress = min(1.0, max(0.0, CGFloat(p)))
+                    tracking.currentProgress = progress
+                    eventsToDeliver.append(.changed(isOpening: tracking.interactiveIsOpening, progress: progress))
                 }
             } else {
                 guard !tracking.triggeredInSession else { return sessionGeneration }
                 let now = CACurrentMediaTime()
                 guard now - lastActionTime > 0.35 else { return sessionGeneration }
 
-                // Pinch in threshold: natural contraction (ratio <= 0.82)
-                if ratio <= 0.82 {
-                    tracking.triggeredInSession = true
-                    lastActionTime = now
-                    actionToTrigger = .pinchIn
-                } else if ratio >= 1.20 {
-                    // Pinch out threshold: natural expansion (ratio >= 1.20)
-                    tracking.triggeredInSession = true
-                    lastActionTime = now
-                    actionToTrigger = .pinchOut
+                if isPresented {
+                    if ratio <= 0.82 || ratio >= 1.20 {
+                        tracking.triggeredInSession = true
+                        lastActionTime = now
+                        actionToTrigger = .pinchOut
+                    }
+                } else {
+                    if ratio <= 0.82 {
+                        tracking.triggeredInSession = true
+                        lastActionTime = now
+                        actionToTrigger = .pinchIn
+                    }
                 }
             }
             return sessionGeneration

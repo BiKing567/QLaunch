@@ -658,6 +658,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         launchpadPanel.orderFrontRegardless()
         launchpadPanel.makeKey()
+        LaunchpadTrackpadGestureCenter.shared.isLaunchpadPresented = true
         containerView.setInteractivePresentationProgress(0.0)
     }
 
@@ -690,6 +691,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.isAnimating = false
             if target >= 0.999 {
                 self.store.markVisible()
+                LaunchpadTrackpadGestureCenter.shared.isLaunchpadPresented = true
                 self.containerView.showWallpaperImmediately()
                 self.containerView.setInteractivePresentationProgress(1.0)
                 NSApp.activate(ignoringOtherApps: true)
@@ -716,6 +718,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         activeAnimationStyle = animationStyle
 
         store.beginPresenting()
+        LaunchpadTrackpadGestureCenter.shared.isLaunchpadPresented = true
         containerView.metal.beginPresentationHold()
 
         launchpadPanel.setFrame(screen.frame, display: false)
@@ -854,6 +857,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         launchpadPanel.orderOut(nil)
         containerView.background.refreshAfterHide()
         store.markHidden()
+        LaunchpadTrackpadGestureCenter.shared.isLaunchpadPresented = false
         isAnimating = false
         isInteractiveOpening = false
         isInteractiveDismissing = false
