@@ -659,7 +659,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         launchpadPanel.orderFrontRegardless()
         launchpadPanel.makeKey()
-        LaunchpadTrackpadGestureCenter.shared.isLaunchpadPresented = true
         containerView.setInteractivePresentationProgress(0.0)
     }
 
@@ -702,14 +701,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 NSApp.activate(ignoringOtherApps: true)
                 self.launchpadPanel.makeKey()
                 self.syncSettingsWindowLevel()
-                NotificationCenter.default.post(
-                    name: .qlaunchpadPresentationChanged,
-                    object: nil,
-                    userInfo: [
-                        "showing": true,
-                        "animationStyle": self.activeAnimationStyle.rawValue
-                    ]
-                )
                 NotificationCenter.default.post(name: .qlaunchpadFocusSearch, object: nil)
                 self.updateStatusMenu()
             } else {

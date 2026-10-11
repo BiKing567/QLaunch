@@ -3131,6 +3131,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 interactivePresentationUpdate = nil
                 interactivePresentationCompletion = nil
                 if let comp {
+                    if presentTo >= 0.999 {
+                        resumeResourcePrewarming()
+                    } else if presentTo <= 0.001 {
+                        releaseIconGPUResources()
+                    }
                     DispatchQueue.main.async {
                         comp()
                     }

@@ -468,19 +468,32 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
             }
             tracking.lastTime = timestamp
 
-            if !tracking.active || fingers != tracking.fingers {
-                if tracking.interactiveStarted {
-                    let isOpening = tracking.interactiveIsOpening
-                    let completed = tracking.currentProgress >= 0.35
-                    eventsToDeliver.append(.ended(isOpening: isOpening, completed: completed))
-                    tracking.interactiveStarted = false
-                }
+            if !tracking.active {
                 tracking.active = true
                 tracking.fingers = fingers
                 tracking.baseline = spread
                 tracking.originX = cx
                 tracking.originY = cy
                 tracking.intent = TrackpadPinchIntent()
+                return sessionGeneration
+            }
+
+            if fingers != tracking.fingers {
+                tracking.fingers = fingers
+                tracking.originX = cx
+                tracking.originY = cy
+                if tracking.interactiveStarted {
+                    let currentRatio: Double
+                    if tracking.interactiveTriggerMode == .pinch {
+                        currentRatio = 0.96 - Double(tracking.currentProgress) * 0.18
+                    } else {
+                        currentRatio = 1.05 + Double(tracking.currentProgress) * 0.18
+                    }
+                    tracking.baseline = spread / max(0.1, currentRatio)
+                } else {
+                    tracking.baseline = spread
+                    tracking.intent = TrackpadPinchIntent()
+                }
                 return sessionGeneration
             }
 
