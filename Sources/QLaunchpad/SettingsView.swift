@@ -1452,44 +1452,60 @@ private struct AboutSettingsView: View {
     }
 
     private var githubMenuRow: some View {
-        Menu {
-            Button {
-                openURL(Self.githubURL)
-            } label: {
-                Label(L10n.tr("about.github.original"), systemImage: "arrow.up.right")
+        HStack(spacing: 12) {
+            templateIcon("RemixGithub", systemFallback: "chevron.left.forwardslash.chevron.right", tint: .primary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Github")
+                    .font(.body)
+                Text("qzrzz/QLaunch · BiKing567/QLaunch")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+
+            Spacer(minLength: 12)
+
             Button {
-                openURL(Self.myGithubURL)
+                showGithubMenu()
             } label: {
-                Label(L10n.tr("about.github.my"), systemImage: "arrow.up.right")
-            }
-        } label: {
-            HStack(spacing: 12) {
-                templateIcon("RemixGithub", systemFallback: "chevron.left.forwardslash.chevron.right", tint: .primary)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Github")
-                        .font(.body)
-                        .foregroundStyle(.primary)
-                    Text("qzrzz/QLaunch · BiKing567/QLaunch")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer(minLength: 12)
-
                 Image(systemName: "chevron.down")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
-                    .frame(width: 28, height: 28)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .frame(width: 28, height: 28)
+            .help("qzrzz/QLaunch · BiKing567/QLaunch")
         }
-        .menuStyle(.borderlessButton)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .contentShape(Rectangle())
+        .onTapGesture { showGithubMenu() }
+    }
+
+    private func showGithubMenu() {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        let authorItem = ActionMenuItem(title: L10n.tr("about.github.original")) { [self] in
+            openURL(Self.githubURL)
+        }
+        menu.addItem(authorItem)
+
+        let myItem = ActionMenuItem(title: L10n.tr("about.github.my")) { [self] in
+            openURL(Self.myGithubURL)
+        }
+        menu.addItem(myItem)
+
+        if let event = NSApp.currentEvent,
+           let window = NSApp.keyWindow ?? NSApp.mainWindow,
+           let view = window.contentView {
+            NSMenu.popUpContextMenu(menu, with: event, for: view)
+        } else {
+            menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        }
     }
 
     private var authorLogo: some View {
@@ -1605,5 +1621,23 @@ private struct AboutSettingsView: View {
         guard let url = URL(string: urlString) else { return }
         NotificationCenter.default.post(name: .qlaunchpadDismiss, object: nil)
         NSWorkspace.shared.open(url)
+    }
+}
+
+private final class ActionMenuItem: NSMenuItem {
+    private let handler: () -> Void
+
+    init(title: String, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(title: title, action: #selector(performAction), keyEquivalent: "")
+        self.target = self
+    }
+
+    required init(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc private func performAction() {
+        handler()
     }
 }
