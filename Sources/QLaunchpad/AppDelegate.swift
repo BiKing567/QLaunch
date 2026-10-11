@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var isAnimating = false
     private var isInteractiveOpening = false
     private var isInteractiveDismissing = false
+    private var isInteractiveFinishing = false
     private var presentationGeneration: UInt = 0
     private var activeAnimationStyle: LaunchpadAnimationStyle = .fly
     private var launchReason: LaunchpadLaunchReason = .user
@@ -332,24 +333,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let center = LaunchpadTrackpadGestureCenter.shared
         center.onInteractiveEvent = { [weak self] event in
             guard let self else { return }
-            guard !self.isAnimating else { return }
             switch event {
             case .began(let isOpening):
+                if self.isInteractiveFinishing {
+                    self.interruptInteractiveFinishing()
+                } else if self.isAnimating {
+                    return
+                }
+
                 if isOpening {
-                    if !self.store.isPresented && self.launchpadPanel?.isVisible != true {
+                    if self.store.presentation != .visible {
                         self.beginInteractiveOpen()
                     }
                 } else {
-                    if self.store.isPresented || self.launchpadPanel?.isVisible == true {
+                    if self.store.presentation == .visible || self.launchpadPanel?.isVisible == true {
                         self.beginInteractiveDismiss()
                     }
                 }
             case .changed(let isOpening, let progress):
                 if isOpening {
+                    if !self.isInteractiveOpening && !self.isInteractiveDismissing && self.store.presentation != .visible {
+                        if self.isInteractiveFinishing {
+                            self.interruptInteractiveFinishing()
+                        }
+                        if !self.isAnimating {
+                            self.beginInteractiveOpen()
+                        }
+                    }
                     if self.isInteractiveOpening {
                         self.containerView.setInteractivePresentationProgress(progress)
                     }
                 } else {
+                    if !self.isInteractiveOpening && !self.isInteractiveDismissing && (self.store.presentation == .visible || self.launchpadPanel?.isVisible == true) {
+                        if self.isInteractiveFinishing {
+                            self.interruptInteractiveFinishing()
+                        }
+                        if !self.isAnimating {
+                            self.beginInteractiveDismiss()
+                        }
+                    }
                     if self.isInteractiveDismissing {
                         let p = max(0, min(1, 1.0 - progress))
                         self.containerView.setInteractivePresentationProgress(p)
@@ -379,14 +401,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         center.onPinchIn = { [weak self] in
             guard let self else { return }
-            guard !self.isAnimating else { return }
+            if self.isInteractiveFinishing {
+                self.interruptInteractiveFinishing()
+            } else if self.isAnimating {
+                return
+            }
             if !self.store.isPresented && self.launchpadPanel?.isVisible != true {
                 self.showLaunchpad()
             }
         }
         center.onPinchOut = { [weak self] in
             guard let self else { return }
-            guard !self.isAnimating else { return }
+            if self.isInteractiveFinishing {
+                self.interruptInteractiveFinishing()
+            } else if self.isAnimating {
+                return
+            }
             if self.store.isPresented || self.launchpadPanel?.isVisible == true {
                 self.dismissLaunchpad()
             }
@@ -640,9 +670,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - Interactive Trackpad Presentation
 
+    private func interruptInteractiveFinishing() {
+        guard isInteractiveFinishing else { return }
+        presentationGeneration &+= 1
+        containerView.cancelInteractiveFinishing()
+        isInteractiveFinishing = false
+        isAnimating = false
+        isInteractiveOpening = false
+        isInteractiveDismissing = false
+    }
+
     private func beginInteractiveOpen() {
         guard !isAnimating, !isInteractiveOpening, !isInteractiveDismissing else { return }
-        guard store.presentation != .visible, launchpadPanel?.isVisible != true else { return }
+        guard store.presentation != .visible else { return }
         guard let screen = currentTargetScreen else { return }
 
         let animationStyle = LaunchpadAnimationStyle.current
@@ -679,8 +719,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard isInteractiveOpening || isInteractiveDismissing else { return }
         isInteractiveOpening = false
         isInteractiveDismissing = false
+        isInteractiveFinishing = true
         isAnimating = true
         let generation = presentationGeneration
+        if target <= 0.001 {
+            store.beginDismissing()
+        }
 
         let currentProgress = store.presentationProgress
         let distance = abs(target - currentProgress)
@@ -692,6 +736,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             duration: duration
         ) { [weak self] in
             guard let self, self.presentationGeneration == generation else { return }
+            self.isInteractiveFinishing = false
             self.isAnimating = false
             if target >= 0.999 {
                 self.store.markVisible()
@@ -712,6 +757,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: - Show / hide with correct fade
 
     private func showLaunchpad() {
+        if isInteractiveFinishing {
+            interruptInteractiveFinishing()
+        }
         guard !isAnimating else { return }
         guard let screen = currentTargetScreen else { return }
 
@@ -798,6 +846,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func beginDismissal(openingAppID: String?) {
+        if isInteractiveFinishing {
+            interruptInteractiveFinishing()
+        }
         // Ignore when already dismissed or mid-dismiss.
         if store.presentation == .dismissing || store.presentation == .hidden {
             return
@@ -807,6 +858,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         ignoreLaunchReopen = false
+        isInteractiveFinishing = false
         isInteractiveOpening = false
         isInteractiveDismissing = false
         isAnimating = true
@@ -863,6 +915,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         store.markHidden()
         LaunchpadTrackpadGestureCenter.shared.isLaunchpadPresented = false
         isAnimating = false
+        isInteractiveFinishing = false
         isInteractiveOpening = false
         isInteractiveDismissing = false
         syncSettingsWindowLevel()

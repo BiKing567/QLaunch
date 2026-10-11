@@ -1566,6 +1566,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         displayLink = nil
     }
 
+    func cancelInteractiveFinishing() {
+        animatingPresentation = false
+        isInteractiveFinishing = false
+        interactivePresentationUpdate = nil
+        interactivePresentationCompletion = nil
+    }
+
     func animateInteractivePresentation(
         from start: CGFloat,
         to target: CGFloat,
@@ -3121,7 +3128,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 if wasInteractive {
                     applyInteractivePresentationProgress(presentTo)
                     interactivePresentationUpdate?(presentTo)
-                    if presentTo <= 0.001 || presentTo >= 0.999 {
+                    if presentTo >= 0.999 {
                         isInteractivePresentationActive = false
                     }
                 } else {
@@ -3145,6 +3152,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 } else {
                     // Panel closed — free GPU icon textures so RSS does not stay elevated.
                     releaseIconGPUResources()
+                    isInteractivePresentationActive = false
                 }
             }
         }
@@ -3152,10 +3160,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         // Never stick at zero alpha while the panel is on-screen.
         // Skip during the transparent prime frame — forcing alpha to 1 here
         // would reveal settled icons and then replay the open animation.
+        // Only rescue alpha when the store presentation state is .visible.
         if !isPrimingPresentationFrame,
            !animatingPresentation,
            !isInteractivePresentationActive,
-           store.presentation != .dismissing,
+           store.presentation == .visible,
            contentAlpha < 0.01,
            window?.isVisible == true {
             contentAlpha = 1

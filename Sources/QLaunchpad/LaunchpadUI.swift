@@ -465,6 +465,10 @@ final class LaunchpadContainerView: NSView {
         )
     }
 
+    func cancelInteractiveFinishing() {
+        metalView.cancelInteractiveFinishing()
+    }
+
     func revealPrimedMetalContent() {
         metalView.alphaValue = 1
     }
