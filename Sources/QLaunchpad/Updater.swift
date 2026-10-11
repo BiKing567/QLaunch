@@ -1,73 +1,168 @@
 import AppKit
 import Combine
-import Sparkle
+import QLaunchpadCore
 
-/// Sparkle 更新管理器（对齐 QCopy / Qjiao）。
-///
-/// Feed URL 与 EdDSA 公钥来自 Info.plist 的 `SUFeedURL` / `SUPublicEDKey`。
-/// `SUEnableAutomaticChecks` 默认开启；用户可在设置-关于中改。
-/// 单例在 `AppDelegate` 启动时武装，关于页「检查更新」复用同一实例。
+/// GitHub Releases 更新管理器（从当前分支维护的仓库获取更新）。
 @MainActor
 final class Updater: ObservableObject {
     static let shared = Updater()
 
-    private let controller: SPUStandardUpdaterController
+    public static let githubRepo = "BiKing567/QLaunch"
+    public static let releasesAPI = "https://api.github.com/repos/\(githubRepo)/releases"
+    public static let releasesWebURL = "https://github.com/\(githubRepo)/releases"
 
     /// 正在检查时禁用按钮，避免重复触发。
-    @Published private(set) var canCheckForUpdates = false
+    @Published private(set) var canCheckForUpdates = true
 
-    /// 是否按 Sparkle 计划自动检查。值由 Sparkle 持久化在 UserDefaults。
-    /// 只在用户改设置时写入，不要在启动时强行覆盖。
+    /// 是否自动检查更新，持久化在 UserDefaults。
     @Published var automaticallyChecksForUpdates: Bool {
         didSet {
-            controller.updater.automaticallyChecksForUpdates = automaticallyChecksForUpdates
+            UserDefaults.standard.set(automaticallyChecksForUpdates, forKey: "automaticallyChecksForUpdates")
         }
     }
 
-    /// Debug 在 updater 尚未启动时仍可点（首次点击再武装）；Release 跟随 Sparkle 会话状态。
     var isCheckEnabled: Bool {
-        canCheckForUpdates || !didStartUpdater
+        canCheckForUpdates
     }
 
-    private var didStartUpdater: Bool
+    private var backgroundTimer: Timer?
 
     private init() {
-        // Debug 不自动启动：避免把 Dev.app 换成 Release，也不弹出后台检查。
-        // 关于页「检查更新」会按需启动。
-        #if DEBUG
-        let startImmediately = false
-        #else
-        let startImmediately = true
-        #endif
+        self.automaticallyChecksForUpdates = UserDefaults.standard.object(forKey: "automaticallyChecksForUpdates") as? Bool ?? true
 
-        controller = SPUStandardUpdaterController(
-            startingUpdater: startImmediately,
-            updaterDelegate: nil,
-            userDriverDelegate: nil
-        )
-        didStartUpdater = startImmediately
-        // didSet 在 init 赋值时不触发，手动从 Sparkle 种子。
-        automaticallyChecksForUpdates = controller.updater.automaticallyChecksForUpdates
-        controller.updater.publisher(for: \.canCheckForUpdates)
-            .assign(to: &$canCheckForUpdates)
-
-        // 启动 updater 只会武装「按间隔」调度（约一天一次）。
-        // 若开启了自动检查，在启动后立即做一次静默后台检查。
-        if startImmediately && automaticallyChecksForUpdates {
-            controller.updater.checkForUpdatesInBackground()
+        if automaticallyChecksForUpdates {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+                self?.performCheck(isBackground: true)
+            }
+            backgroundTimer = Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    if self?.automaticallyChecksForUpdates == true {
+                        self?.performCheck(isBackground: true)
+                    }
+                }
+            }
         }
     }
 
-    /// 用户可见的检查更新（进度窗与确认提示），不打开网页。
     func checkForUpdates() {
         NotificationCenter.default.post(name: .qlaunchpadDismiss, object: nil)
-        startUpdaterIfNeeded()
-        controller.checkForUpdates(nil)
+        performCheck(isBackground: false)
     }
 
-    private func startUpdaterIfNeeded() {
-        guard !didStartUpdater else { return }
-        controller.startUpdater()
-        didStartUpdater = true
+    private func performCheck(isBackground: Bool) {
+        guard canCheckForUpdates else { return }
+        canCheckForUpdates = false
+
+        Task {
+            defer {
+                canCheckForUpdates = true
+            }
+
+            do {
+                guard let url = URL(string: Self.releasesAPI) else { return }
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 15
+                request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+                request.setValue("QLaunch", forHTTPHeaderField: "User-Agent")
+
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                    if !isBackground {
+                        showErrorAlert()
+                    }
+                    return
+                }
+
+                guard let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                    if !isBackground {
+                        showErrorAlert()
+                    }
+                    return
+                }
+
+                // 过滤草稿，获取最新 release
+                let validReleases = jsonArray.filter { ($0["draft"] as? Bool) != true }
+                guard let latest = validReleases.first else {
+                    if !isBackground {
+                        showUpToDateAlert()
+                    }
+                    return
+                }
+
+                let tagName = latest["tag_name"] as? String ?? ""
+                let releaseName = latest["name"] as? String ?? tagName
+                let body = latest["body"] as? String ?? ""
+                let htmlURL = latest["html_url"] as? String ?? Self.releasesWebURL
+
+                let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
+
+                if Self.isVersion(tagName, greaterThan: currentVersion) || Self.isVersion(releaseName, greaterThan: currentVersion) {
+                    showNewVersionAlert(name: releaseName, tag: tagName, body: body, urlString: htmlURL)
+                } else {
+                    if !isBackground {
+                        showUpToDateAlert()
+                    }
+                }
+            } catch {
+                if !isBackground {
+                    showErrorAlert()
+                }
+            }
+        }
+    }
+
+    static func isVersion(_ v1: String, greaterThan v2: String) -> Bool {
+        VersionComparator.isVersion(v1, greaterThan: v2)
+    }
+
+    private func showNewVersionAlert(name: String, tag: String, body: String, urlString: String) {
+        let alert = NSAlert()
+        alert.messageText = "发现新版本 \(name)"
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
+        let notes = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        let notePreview = notes.isEmpty ? "" : "\n\n更新说明：\n" + (notes.count > 500 ? String(notes.prefix(500)) + "…" : notes)
+        alert.informativeText = "当前版本：v\(currentVersion)\n最新版本：\(tag)\(notePreview)"
+        alert.addButton(withTitle: "前往下载")
+        alert.addButton(withTitle: "稍后")
+        alert.alertStyle = .informational
+
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            alert.beginSheetModal(for: window) { response in
+                if response == .alertFirstButtonReturn, let url = URL(string: urlString) {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        } else {
+            if alert.runModal() == .alertFirstButtonReturn, let url = URL(string: urlString) {
+                NSWorkspace.shared.open(url)
+            }
+        }
+    }
+
+    private func showUpToDateAlert() {
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
+        let alert = NSAlert()
+        alert.messageText = "已是最新版本"
+        alert.informativeText = "QLaunch \(currentVersion) 当前已是最新版本，无需更新。"
+        alert.addButton(withTitle: "好")
+        alert.alertStyle = .informational
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
+    private func showErrorAlert() {
+        let alert = NSAlert()
+        alert.messageText = "检查更新失败"
+        alert.informativeText = "无法连接至 GitHub 获取更新信息，请检查网络连接或稍后重试。"
+        alert.addButton(withTitle: "好")
+        alert.alertStyle = .warning
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
     }
 }
