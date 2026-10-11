@@ -498,18 +498,9 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
                 if !tracking.interactiveStarted {
                     if isPresented {
                         // When Launchpad is open:
-                        // Both Pinch-in (ratio <= 0.96) and Spread-out (ratio >= 1.05) trigger interactive dismiss.
-                        // Pinch-in is completely conflict-free (never triggers macOS Show Desktop).
-                        if ratio <= 0.96 {
-                            tracking.interactiveStarted = true
-                            tracking.interactiveIsOpening = false
-                            tracking.interactiveTriggerMode = .pinch
-                            let p = (0.96 - ratio) / 0.18
-                            let progress = min(1.0, max(0.0, CGFloat(p)))
-                            tracking.currentProgress = progress
-                            eventsToDeliver.append(.began(isOpening: false))
-                            eventsToDeliver.append(.changed(isOpening: false, progress: progress))
-                        } else if ratio >= 1.05 {
+                        // ONLY Spread-out (ratio >= 1.05) triggers interactive dismiss.
+                        // Pinch-in has NO response.
+                        if ratio >= 1.05 {
                             tracking.interactiveStarted = true
                             tracking.interactiveIsOpening = false
                             tracking.interactiveTriggerMode = .spread
@@ -521,7 +512,7 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
                         }
                     } else {
                         // When Launchpad is closed:
-                        // Only pinch-in (ratio <= 0.96) triggers interactive open.
+                        // ONLY Pinch-in (ratio <= 0.96) triggers interactive open.
                         if ratio <= 0.96 {
                             tracking.interactiveStarted = true
                             tracking.interactiveIsOpening = true
@@ -550,7 +541,7 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
                 guard now - lastActionTime > 0.35 else { return sessionGeneration }
 
                 if isPresented {
-                    if ratio <= 0.82 || ratio >= 1.20 {
+                    if ratio >= 1.20 {
                         tracking.triggeredInSession = true
                         lastActionTime = now
                         actionToTrigger = .pinchOut

@@ -58,9 +58,9 @@
 "settings.hotCorner.detail" = "マウスポインタを画面の隅に移動して少し待つと、QLaunch が開きます。";
 "settings.section.trackpad" = "トラックパッド";
 "settings.trackpadPinch" = "ピンチジェスチャ";
-"settings.trackpadPinch.detail" = "3本指または4本指のピンチで無段階に起動。展開時はピンチインまたはピンチアウトで無段階に終了。";
+"settings.trackpadPinch.detail" = "3本指または4本指のピンチでLaunchpadを無段階に開き、4本指または3本指を広げて終了します。";
 "settings.trackpadPinch.conflictNotice" = "macOSの標準ピンチジェスチャが有効です。「システムジェスチャを一括引き継ぎ」をクリックして自動で引き継ぐか、3本指ピンチで競合なく起動できます。";
-"settings.trackpadPinch.desktopConflictNotice" = "macOS では4本指を広げる操作が「デスクトップを表示」に割り当てられています。展開時は4本指または3本指をピンチイン（つまむ）して終了することを推奨します。4本指を広げて終了したい場合は、システム設定で「デスクトップを表示」をオフにしてください。";
+"settings.trackpadPinch.desktopConflictNotice" = "💡 ヒント: 4本指を広げて終了する際に「デスクトップを表示」と競合する場合は、macOSのトラックパッド設定で「デスクトップを表示」をオフにするか、3本指を広げて終了してください。";
 "settings.trackpadPinch.takeOver" = "システムピンチジェスチャを引き継ぐ";
 "settings.trackpadPinch.takeOver.detail" = "システム標準のジェスチャを自動で無効化し、QLaunchが排他的に4本指無段階ピンチを処理します。";
 "settings.trackpadPinch.takeOverAction" = "システムジェスチャを一括引き継ぎ";
