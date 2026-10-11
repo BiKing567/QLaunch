@@ -3072,12 +3072,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         if animatingPresentation {
             let t = min(1, max(0, (now - presentStartTime) / presentDurationActive))
-            let easedT = CGFloat(1.0 - pow(1.0 - t, 3))
-            let phase = presentFrom + (presentTo - presentFrom) * easedT
             if isInteractiveFinishing {
+                let easedT = CGFloat(1.0 - pow(1.0 - t, 3))
+                let phase = presentFrom + (presentTo - presentFrom) * easedT
                 applyInteractivePresentationProgress(phase)
                 interactivePresentationUpdate?(phase)
             } else {
+                let phase = presentFrom + (presentTo - presentFrom) * CGFloat(t)
                 applyPresentationPhase(phase)
             }
             if t >= 1 {
