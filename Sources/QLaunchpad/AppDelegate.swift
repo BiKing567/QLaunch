@@ -787,6 +787,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         ignoreLaunchReopen = false
+        isInteractiveOpening = false
+        isInteractiveDismissing = false
         isAnimating = true
         presentationGeneration &+= 1
         let generation = presentationGeneration
@@ -840,6 +842,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         containerView.background.refreshAfterHide()
         store.markHidden()
         isAnimating = false
+        isInteractiveOpening = false
+        isInteractiveDismissing = false
         syncSettingsWindowLevel()
         updateStatusMenu()
     }

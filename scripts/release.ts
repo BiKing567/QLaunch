@@ -44,6 +44,7 @@ import {
   buildApp,
   captureCommand,
   runCommand,
+  runCommandCapture,
 } from "./build-app";
 import { generateAppcast } from "./generate-appcast";
 import {
@@ -598,6 +599,41 @@ async function publishWithQrlsRelease(options: {
   }
 }
 
+async function verifyReleaseAssets(
+  version: string,
+  buildNumber: string,
+  assets: { dmgPath: string; zipPath: string; notesPath: string; appcastPath: string },
+): Promise<void> {
+  // 1. Verify appcast.xml content and Sparkle signature
+  const appcastContent = readFileSync(assets.appcastPath, "utf8");
+  if (appcastContent.includes("<!-- unsigned local appcast")) {
+    throw new Error(`发布产物 ${assets.appcastPath} 是未签名的本地占位 appcast，禁止发布`);
+  }
+  if (!appcastContent.includes("sparkle:edSignature=")) {
+    throw new Error(`发布产物 ${assets.appcastPath} 缺少 Sparkle EdDSA 签名 (sparkle:edSignature)`);
+  }
+  if (
+    !appcastContent.includes(`sparkle:version="${buildNumber}"`) &&
+    !appcastContent.includes(`sparkle:shortVersionString="${version}"`)
+  ) {
+    throw new Error(
+      `appcast.xml 中的版本与发布版本不匹配 (期望 version=${version}, build=${buildNumber})`,
+    );
+  }
+
+  // 2. Verify DMG code signature and Developer ID
+  const verify = await runCommandCapture(["codesign", "--verify", "--deep", "--strict", assets.dmgPath]);
+  if (verify.code !== 0) {
+    throw new Error(`DMG 代码签名校验失败 (${assets.dmgPath}): ${verify.stderr.trim()}`);
+  }
+
+  const info = await runCommandCapture(["codesign", "-dvv", assets.dmgPath]);
+  const combined = info.stderr + info.stdout;
+  if (!combined.includes("Developer ID Application")) {
+    throw new Error(`DMG 签名身份非 Developer ID Application，禁止发布 (${assets.dmgPath})`);
+  }
+}
+
 async function publishExistingBuild(
   version: string,
   buildNumber: string,
@@ -606,6 +642,7 @@ async function publishExistingBuild(
 ): Promise<void> {
   const repository = env.GITHUB_REPOSITORY || DEFAULT_GITHUB_REPOSITORY;
   const { dmgPath, zipPath, notesPath, appcastPath } = collectReleaseAssets(version);
+  await verifyReleaseAssets(version, buildNumber, { dmgPath, zipPath, notesPath, appcastPath });
   const changelog = existsSync(notesPath) ? readFileSync(notesPath, "utf8") : "";
   console.log("\n📦 QLaunch 补发 QRls 发布");
   console.log("▸ 版本: " + version + " | Build: " + buildNumber);

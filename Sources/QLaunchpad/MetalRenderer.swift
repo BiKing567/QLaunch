@@ -1510,7 +1510,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     func applyInteractivePresentationProgress(_ progress: CGFloat) {
         let p = min(1, max(0, progress))
         isInteractivePresentationActive = true
-        animatingPresentation = false
+        if !isInteractiveFinishing {
+            animatingPresentation = false
+        }
         isPrimingPresentationFrame = false
         isShowingPresentation = true
         presentationPhase = p
@@ -1519,6 +1521,16 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         iconEntranceProgress = p
         store.presentationProgress = p
         needsDisplay = true
+    }
+
+    func resetInteractivePresentationState() {
+        animatingPresentation = false
+        isInteractiveFinishing = false
+        isInteractivePresentationActive = false
+        interactivePresentationUpdate = nil
+        interactivePresentationCompletion = nil
+        displayLink?.invalidate()
+        displayLink = nil
     }
 
     func animateInteractivePresentation(
@@ -3075,6 +3087,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 if wasInteractive {
                     applyInteractivePresentationProgress(presentTo)
                     interactivePresentationUpdate?(presentTo)
+                    if presentTo <= 0.001 || presentTo >= 0.999 {
+                        isInteractivePresentationActive = false
+                    }
                 } else {
                     applyPresentationPhase(presentTo)
                 }

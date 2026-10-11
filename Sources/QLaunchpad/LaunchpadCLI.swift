@@ -277,24 +277,29 @@ enum LaunchpadCLI {
         includePaths: Bool,
         appVersion: String?
     ) -> LaunchpadLayoutDocument {
+        let idMap = buildSanitizedIDMap(for: snapshot.apps, includePaths: includePaths)
+        let sanitize: (String) -> String = { id in
+            sanitizeID(id, idMap: idMap, includePaths: includePaths)
+        }
+
         let folderByID = Dictionary(uniqueKeysWithValues: snapshot.folders.map { ($0.id, $0) })
         var seen = Set<String>()
         var items: [LaunchpadLayoutItem] = []
         for id in snapshot.order {
             guard seen.insert(id).inserted else { continue }
             if let folder = folderByID[id] {
-                items.append(.folder(id: folder.id, name: folder.name, apps: folder.appIDs))
+                items.append(.folder(id: folder.id, name: folder.name, apps: folder.appIDs.map(sanitize)))
             } else if snapshot.apps.contains(where: { $0.id == id }) {
-                items.append(.app(id: id))
+                items.append(.app(id: sanitize(id)))
             }
         }
         for folder in snapshot.folders where seen.insert(folder.id).inserted {
-            items.append(.folder(id: folder.id, name: folder.name, apps: folder.appIDs))
+            items.append(.folder(id: folder.id, name: folder.name, apps: folder.appIDs.map(sanitize)))
         }
         let catalog: [LaunchpadLayoutCatalogEntry]? = includeCatalog
             ? snapshot.apps.map { app in
                 LaunchpadLayoutCatalogEntry(
-                    id: app.id,
+                    id: sanitize(app.id),
                     bundleIdentifier: app.bundleIdentifier,
                     name: app.name,
                     path: includePaths ? app.path : nil
@@ -306,9 +311,48 @@ enum LaunchpadCLI {
             appVersion: appVersion,
             grid: grid,
             items: items,
-            hidden: snapshot.hidden.sorted(),
+            hidden: snapshot.hidden.map(sanitize).sorted(),
             catalog: catalog
         )
+    }
+
+    static func buildSanitizedIDMap(for apps: [LaunchpadKnownApp], includePaths: Bool) -> [String: String] {
+        guard !includePaths else { return [:] }
+        var map: [String: String] = [:]
+        var usedIDs = Set<String>()
+        for app in apps where !app.id.contains("#") {
+            usedIDs.insert(app.id)
+        }
+        for app in apps {
+            guard let hash = app.id.firstIndex(of: "#") else {
+                map[app.id] = app.id
+                continue
+            }
+            let bundle = String(app.id[..<hash])
+            let path = String(app.id[app.id.index(after: hash)...])
+            let fileName = URL(fileURLWithPath: path).lastPathComponent
+            var candidate = "\(bundle)#\(fileName)"
+            if usedIDs.contains(candidate) {
+                var index = 2
+                while usedIDs.contains("\(bundle)#\(fileName)#\(index)") {
+                    index += 1
+                }
+                candidate = "\(bundle)#\(fileName)#\(index)"
+            }
+            usedIDs.insert(candidate)
+            map[app.id] = candidate
+        }
+        return map
+    }
+
+    static func sanitizeID(_ id: String, idMap: [String: String], includePaths: Bool) -> String {
+        guard !includePaths else { return id }
+        if let mapped = idMap[id] { return mapped }
+        guard let hash = id.firstIndex(of: "#") else { return id }
+        let bundle = String(id[..<hash])
+        let path = String(id[id.index(after: hash)...])
+        let fileName = URL(fileURLWithPath: path).lastPathComponent
+        return "\(bundle)#\(fileName)"
     }
 
     private static func appVersion(_ options: LaunchpadCLIInvocation.Options) -> String? {

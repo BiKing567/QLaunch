@@ -105,7 +105,7 @@ bun run layout:validate -- --in "$HOME/Library/Application Support/QLaunch/qlaun
 CLI 标志：
 
 - `--no-catalog`：省略 `catalog`。解析步骤 3 不可用；1 / 2 / 4 仍在。
-- `--no-paths`：仍导出 `catalog`，但去掉每条 `path`。分享或提交到公共仓库时使用。默认 **带 path**（副本 `id` 本身就嵌着路径）。
+- `--no-paths`：仍导出 `catalog`，但去掉每条 `path`，并将副本 ID（`bundle#path`）脱敏为文件名或序号（如 `bundle#Foo.app`），避免泄露本机用户主目录路径。分享或提交到公共仓库时使用。默认 **带 path**。
 - `--pretty` / `--compact`：互斥。写文件默认 pretty + sortedKeys。stdout 且 TTY → pretty；管道 → compact。`--compact` 仍 sortedKeys。
 - 无 `--out` → stdout。`--out -` 显式 stdout。
 
@@ -116,8 +116,8 @@ CLI 标志：
 解析器对每一个引用的 id（根 `items`、folder `apps`、`hidden`）按下列顺序对齐到当前扫描结果。Catalog **绝不**把应用加入网格。
 
 1. 精确匹配 `id`（含 `bundle#path` 副本形式）。
-2. 从 id 自身按第一个 `#` 切开，用 `bundleIdentifier + standardizedPath` 匹配。
-3. 用同一个 raw id 查 `catalog[]`；若条目含 `bundleIdentifier` + `path`，按标准化路径匹配扫描结果。
+2. 从 id 自身按第一个 `#` 切开，用 `bundleIdentifier + standardizedPath` 匹配；若为脱敏或相对文件名，用 `lastPathComponent` 匹配。
+3. 用同一个 raw id 查 `catalog[]`；若条目含 `bundleIdentifier` + `path`，按标准化路径匹配扫描结果；若同名条目存在亦比对文件名。
 4. 该 bundle 在本机只剩一份：取 `#` 前的 bundle 段，或整个 raw id 当 bundle id。
 5. 仍失败 → `skippedUnknown`，不写入顺序 / 文件夹 / hidden。
 

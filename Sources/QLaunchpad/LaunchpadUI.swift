@@ -466,6 +466,7 @@ final class LaunchpadContainerView: NSView {
     }
 
     func hideImmediately() {
+        metalView.resetInteractivePresentationState()
         [backgroundView, metalView, overlayView].forEach { view in
             view.layer?.removeAllAnimations()
             view.alphaValue = 0

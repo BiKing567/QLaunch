@@ -18,6 +18,19 @@ public enum LaunchpadLayoutResolver {
             }) {
                 return match
             }
+            let parsedName: String
+            if let disambiguationHash = parsed.path.lastIndex(of: "#") {
+                parsedName = String(parsed.path[..<disambiguationHash])
+            } else {
+                parsedName = parsed.path
+            }
+            if let match = scanned.first(where: {
+                $0.bundleIdentifier == parsed.bundle
+                    && (URL(fileURLWithPath: $0.path).lastPathComponent == parsedName
+                        || URL(fileURLWithPath: $0.path).lastPathComponent == URL(fileURLWithPath: parsedName).lastPathComponent)
+            }) {
+                return match
+            }
         }
 
         if let catalog,

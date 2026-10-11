@@ -584,7 +584,7 @@ final class DesktopBackgroundView: NSView {
         vignetteView.autoresizingMask = [.width, .height]
         addSubview(vignetteView)
 
-        displayOptionsObserver = NotificationCenter.default.addObserver(
+        displayOptionsObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil,
             queue: .main
@@ -603,7 +603,7 @@ final class DesktopBackgroundView: NSView {
     deinit {
         captureTask?.cancel()
         if let displayOptionsObserver {
-            NotificationCenter.default.removeObserver(displayOptionsObserver)
+            NSWorkspace.shared.notificationCenter.removeObserver(displayOptionsObserver)
         }
     }
 

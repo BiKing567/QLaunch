@@ -24,6 +24,11 @@ public enum TrackpadGesturePreferences {
         "com.apple.AppleMultitouchTrackpad",
         "com.apple.driver.AppleBluetoothMultitouch.trackpad"
     ]
+    private static let gestureKeys = [
+        "TrackpadFourFingerPinchGesture",
+        "TrackpadFiveFingerPinchGesture"
+    ]
+    private static let backupKey = "launchpadOriginalSystemGestureBackup"
 
     /// Check whether macOS system Launchpad gesture is active in System Settings.
     public static var isSystemLaunchpadGestureEnabled: Bool {
@@ -38,25 +43,49 @@ public enum TrackpadGesturePreferences {
     }
 
     /// Programmatically take over macOS system pinch gesture.
-    /// Sets TrackpadFourFingerPinchGesture and TrackpadFiveFingerPinchGesture to 0.
+    /// Saves current values before setting TrackpadFourFingerPinchGesture and TrackpadFiveFingerPinchGesture to 0.
     @discardableResult
     public static func takeOverSystemPinchGesture() -> Bool {
+        if UserDefaults.standard.dictionary(forKey: backupKey) == nil {
+            var backup: [String: [String: Int]] = [:]
+            for domain in trackpadDomains {
+                var domainBackup: [String: Int] = [:]
+                for key in gestureKeys {
+                    if let val = CFPreferencesCopyAppValue(key as CFString, domain as CFString) as? NSNumber, val.intValue > 0 {
+                        domainBackup[key] = val.intValue
+                    } else {
+                        domainBackup[key] = 2 // standard macOS gesture value
+                    }
+                }
+                backup[domain] = domainBackup
+            }
+            UserDefaults.standard.set(backup, forKey: backupKey)
+        }
+
         for domain in trackpadDomains {
             CFPreferencesSetAppValue("TrackpadFourFingerPinchGesture" as CFString, 0 as CFNumber, domain as CFString)
             CFPreferencesSetAppValue("TrackpadFiveFingerPinchGesture" as CFString, 0 as CFNumber, domain as CFString)
-            CFPreferencesAppSynchronize(domain as CFString)
+            _ = CFPreferencesAppSynchronize(domain as CFString)
         }
         postTrackpadSettingsChangeNotifications()
         return true
     }
 
-    /// Restore macOS system pinch gesture back to default (2).
+    /// Restore macOS system pinch gesture back to saved original values (or 2 if no backup).
     public static func restoreSystemPinchGesture() {
+        let backup = UserDefaults.standard.dictionary(forKey: backupKey) as? [String: [String: Int]]
         for domain in trackpadDomains {
-            CFPreferencesSetAppValue("TrackpadFourFingerPinchGesture" as CFString, 2 as CFNumber, domain as CFString)
-            CFPreferencesSetAppValue("TrackpadFiveFingerPinchGesture" as CFString, 2 as CFNumber, domain as CFString)
-            CFPreferencesAppSynchronize(domain as CFString)
+            let domainBackup = backup?[domain]
+            for key in gestureKeys {
+                if let originalValue = domainBackup?[key], originalValue > 0 {
+                    CFPreferencesSetAppValue(key as CFString, originalValue as CFNumber, domain as CFString)
+                } else {
+                    CFPreferencesSetAppValue(key as CFString, 2 as CFNumber, domain as CFString)
+                }
+            }
+            _ = CFPreferencesAppSynchronize(domain as CFString)
         }
+        UserDefaults.standard.removeObject(forKey: backupKey)
         postTrackpadSettingsChangeNotifications()
     }
 
@@ -173,6 +202,7 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
     private var tracking = Tracking()
     private var lastActionTime: Double = 0
     private var isListening = false
+    private var sessionGeneration: UInt = 0
 
     var isAvailable: Bool { Self.functions != nil }
 
@@ -188,16 +218,22 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
 
     func uninstall() {
         stop()
+        if TrackpadGesturePreferences.isTakeOverEnabled {
+            TrackpadGesturePreferences.restoreSystemPinchGesture()
+        }
     }
 
     func reloadPreference() {
         if TrackpadGesturePreferences.isEnabled {
-            if TrackpadGesturePreferences.isTakeOverEnabled {
-                TrackpadGesturePreferences.takeOverSystemPinchGesture()
+            let started = start()
+            if started && TrackpadGesturePreferences.isTakeOverEnabled {
+                _ = TrackpadGesturePreferences.takeOverSystemPinchGesture()
             }
-            start()
         } else {
             stop()
+            if TrackpadGesturePreferences.isTakeOverEnabled {
+                TrackpadGesturePreferences.restoreSystemPinchGesture()
+            }
         }
     }
 
@@ -215,22 +251,48 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
                 _ = fn.start(device, 0)
                 refs.append(device)
             }
+            guard !refs.isEmpty else {
+                devices = Devices()
+                isListening = false
+                return false
+            }
             devices = Devices(list: list, refs: refs)
             isListening = true
-            return !refs.isEmpty
+            sessionGeneration &+= 1
+            return true
         }
     }
 
     func stop() {
+        var eventToDeliver: InteractivePinchEvent?
+        var gen: UInt = 0
         lock.withLock {
-            guard isListening, let fn = Self.functions else { return }
-            for device in devices.refs {
-                fn.unregister(device, Self.callback)
-                _ = fn.stop(device)
+            guard isListening else { return }
+            sessionGeneration &+= 1
+            gen = sessionGeneration
+            if tracking.interactiveStarted {
+                let isOpening = tracking.interactiveIsOpening
+                eventToDeliver = .cancelled(isOpening: isOpening)
+            }
+            if let fn = Self.functions {
+                for device in devices.refs {
+                    fn.unregister(device, Self.callback)
+                    _ = fn.stop(device)
+                }
             }
             devices = Devices()
             tracking = Tracking()
             isListening = false
+        }
+        if let eventToDeliver {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let shouldDeliver = self.lock.withLock {
+                    self.sessionGeneration == gen
+                }
+                guard shouldDeliver else { return }
+                self.onInteractiveEvent?(eventToDeliver)
+            }
         }
     }
 
@@ -242,12 +304,13 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
     private func process(touches: UnsafeMutableRawPointer?, count: Int, timestamp: Double) {
         // Three or more fingers required (supports 3-finger pinch and classic 4-finger pinch)
         guard count >= 3, let touches else {
-            var eventToDeliver: InteractivePinchEvent?
-            lock.withLock {
+            var eventsToDeliver: [InteractivePinchEvent] = []
+            let gen: UInt = lock.withLock {
                 if tracking.interactiveStarted {
                     let isOpening = tracking.interactiveIsOpening
                     let completed = tracking.currentProgress >= 0.35
-                    eventToDeliver = .ended(isOpening: isOpening, completed: completed)
+                    eventsToDeliver = [.ended(isOpening: isOpening, completed: completed)]
+                    tracking.interactiveStarted = false
                 }
                 if count == 0 {
                     tracking = Tracking()
@@ -255,10 +318,18 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
                     tracking = Tracking()
                 }
                 tracking.lastTime = timestamp
+                return sessionGeneration
             }
-            if let eventToDeliver {
+            if !eventsToDeliver.isEmpty {
                 DispatchQueue.main.async { [weak self] in
-                    self?.onInteractiveEvent?(eventToDeliver)
+                    guard let self else { return }
+                    let shouldDeliver = self.lock.withLock {
+                        self.isListening && self.sessionGeneration == gen
+                    }
+                    guard shouldDeliver else { return }
+                    for event in eventsToDeliver {
+                        self.onInteractiveEvent?(event)
+                    }
                 }
             }
             return
@@ -280,21 +351,30 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
 
         let fingers = xs.count
         guard fingers >= 3 else {
-            var eventToDeliver: InteractivePinchEvent?
-            lock.withLock {
+            var eventsToDeliver: [InteractivePinchEvent] = []
+            let gen: UInt = lock.withLock {
                 if tracking.interactiveStarted {
                     let isOpening = tracking.interactiveIsOpening
                     let completed = tracking.currentProgress >= 0.35
-                    eventToDeliver = .ended(isOpening: isOpening, completed: completed)
+                    eventsToDeliver = [.ended(isOpening: isOpening, completed: completed)]
+                    tracking.interactiveStarted = false
                 }
                 if timestamp - tracking.lastTime > Self.sessionGap {
                     tracking = Tracking()
                 }
                 tracking.lastTime = timestamp
+                return sessionGeneration
             }
-            if let eventToDeliver {
+            if !eventsToDeliver.isEmpty {
                 DispatchQueue.main.async { [weak self] in
-                    self?.onInteractiveEvent?(eventToDeliver)
+                    guard let self else { return }
+                    let shouldDeliver = self.lock.withLock {
+                        self.isListening && self.sessionGeneration == gen
+                    }
+                    guard shouldDeliver else { return }
+                    for event in eventsToDeliver {
+                        self.onInteractiveEvent?(event)
+                    }
                 }
             }
             return
@@ -309,68 +389,81 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
             case pinchOut
         }
         var actionToTrigger: TriggerAction?
-        var eventToDeliver: InteractivePinchEvent?
+        var eventsToDeliver: [InteractivePinchEvent] = []
 
-        lock.withLock {
+        let gen: UInt = lock.withLock {
             if timestamp - tracking.lastTime > Self.sessionGap {
                 if tracking.interactiveStarted {
                     let isOpening = tracking.interactiveIsOpening
                     let completed = tracking.currentProgress >= 0.35
-                    eventToDeliver = .ended(isOpening: isOpening, completed: completed)
+                    eventsToDeliver.append(.ended(isOpening: isOpening, completed: completed))
+                    tracking.interactiveStarted = false
                 }
                 tracking = Tracking()
             }
             tracking.lastTime = timestamp
 
             if !tracking.active || fingers != tracking.fingers {
+                if tracking.interactiveStarted {
+                    let isOpening = tracking.interactiveIsOpening
+                    let completed = tracking.currentProgress >= 0.35
+                    eventsToDeliver.append(.ended(isOpening: isOpening, completed: completed))
+                    tracking.interactiveStarted = false
+                }
                 tracking.active = true
                 tracking.fingers = fingers
                 tracking.baseline = spread
                 tracking.originX = cx
                 tracking.originY = cy
                 tracking.intent = TrackpadPinchIntent()
-                return
+                return sessionGeneration
             }
 
-            guard tracking.baseline > 0.01 else { return }
+            guard tracking.baseline > 0.01 else { return sessionGeneration }
             let ratio = spread / tracking.baseline
             let dx = cx - tracking.originX
             let dy = cy - tracking.originY
             let travel = (dx * dx + dy * dy).squareRoot() / tracking.baseline
 
             let isPinch = tracking.intent.update(ratio: ratio, travel: travel)
-            guard isPinch else { return }
+            guard isPinch else { return sessionGeneration }
 
             if _onInteractiveEvent != nil {
                 if !tracking.interactiveStarted {
                     if ratio <= 0.96 {
                         tracking.interactiveStarted = true
                         tracking.interactiveIsOpening = true
-                        tracking.currentProgress = 0.0
-                        eventToDeliver = .began(isOpening: true)
+                        let p = (0.96 - ratio) / 0.18
+                        let progress = min(1.0, max(0.0, CGFloat(p)))
+                        tracking.currentProgress = progress
+                        eventsToDeliver.append(.began(isOpening: true))
+                        eventsToDeliver.append(.changed(isOpening: true, progress: progress))
                     } else if ratio >= 1.05 {
                         tracking.interactiveStarted = true
                         tracking.interactiveIsOpening = false
-                        tracking.currentProgress = 0.0
-                        eventToDeliver = .began(isOpening: false)
+                        let p = (ratio - 1.05) / 0.18
+                        let progress = min(1.0, max(0.0, CGFloat(p)))
+                        tracking.currentProgress = progress
+                        eventsToDeliver.append(.began(isOpening: false))
+                        eventsToDeliver.append(.changed(isOpening: false, progress: progress))
                     }
                 } else {
                     if tracking.interactiveIsOpening {
                         let p = (0.96 - ratio) / 0.18
                         let progress = min(1.0, max(0.0, CGFloat(p)))
                         tracking.currentProgress = progress
-                        eventToDeliver = .changed(isOpening: true, progress: progress)
+                        eventsToDeliver.append(.changed(isOpening: true, progress: progress))
                     } else {
                         let p = (ratio - 1.05) / 0.18
                         let progress = min(1.0, max(0.0, CGFloat(p)))
                         tracking.currentProgress = progress
-                        eventToDeliver = .changed(isOpening: false, progress: progress)
+                        eventsToDeliver.append(.changed(isOpening: false, progress: progress))
                     }
                 }
             } else {
-                guard !tracking.triggeredInSession else { return }
+                guard !tracking.triggeredInSession else { return sessionGeneration }
                 let now = CACurrentMediaTime()
-                guard now - lastActionTime > 0.35 else { return }
+                guard now - lastActionTime > 0.35 else { return sessionGeneration }
 
                 // Pinch in threshold: natural contraction (ratio <= 0.82)
                 if ratio <= 0.82 {
@@ -384,17 +477,29 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
                     actionToTrigger = .pinchOut
                 }
             }
+            return sessionGeneration
         }
 
-        if let eventToDeliver {
+        if !eventsToDeliver.isEmpty {
             DispatchQueue.main.async { [weak self] in
-                self?.onInteractiveEvent?(eventToDeliver)
+                guard let self else { return }
+                let shouldDeliver = self.lock.withLock {
+                    self.isListening && self.sessionGeneration == gen
+                }
+                guard shouldDeliver else { return }
+                for event in eventsToDeliver {
+                    self.onInteractiveEvent?(event)
+                }
             }
         }
 
         if let actionToTrigger {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                let shouldDeliver = self.lock.withLock {
+                    self.isListening && self.sessionGeneration == gen
+                }
+                guard shouldDeliver else { return }
                 switch actionToTrigger {
                 case .pinchIn:
                     self.onPinchIn?()

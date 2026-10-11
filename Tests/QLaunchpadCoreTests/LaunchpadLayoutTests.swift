@@ -346,6 +346,20 @@ final class LaunchpadLayoutTests: XCTestCase {
         }
     }
 
+    func testResolverResolvesSanitizedCompositeIDByFilename() {
+        let scanned = [
+            LaunchpadKnownApp(id: "com.example.Foo", bundleIdentifier: "com.example.Foo", name: "Foo", path: "/Applications/Foo.app"),
+            LaunchpadKnownApp(id: "com.example.Foo#/Users/alice/Applications/Foo Copy.app", bundleIdentifier: "com.example.Foo", name: "Foo Copy", path: "/Users/alice/Applications/Foo Copy.app")
+        ]
+        let resolved = LaunchpadLayoutResolver.resolve(
+            rawID: "com.example.Foo#Foo Copy.app",
+            scanned: scanned,
+            catalog: nil
+        )
+        XCTAssertNotNil(resolved)
+        XCTAssertEqual(resolved?.id, "com.example.Foo#/Users/alice/Applications/Foo Copy.app")
+    }
+
     private func known(_ items: (String, String, String)...) -> [LaunchpadKnownApp] {
         items
             .map { LaunchpadKnownApp(id: $0.0, bundleIdentifier: $0.0, name: $0.1, path: $0.2) }

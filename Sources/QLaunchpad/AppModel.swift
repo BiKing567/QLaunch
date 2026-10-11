@@ -576,6 +576,8 @@ final class AppStore: ObservableObject {
     private let discreteWheelCooldown: CFTimeInterval = 0.8
     /// Un-rubber-banded page at mouse-down. Pointer X maps 1:1 onto this origin.
     private var pagePanOrigin: Double = 0
+    /// Initial page when trackpad gesture began.
+    private var pageScrollOrigin: Double = 0
     /// The renderer owns adaptive infinite-canvas geometry because it depends
     /// on the live viewport. Keyboard navigation reads the same column count.
     private var infiniteCanvasNavigationColumns = InfiniteCanvasMetrics.columns
@@ -833,24 +835,29 @@ final class AppStore: ObservableObject {
     }
 
     func exportLayout(includeCatalog: Bool = true, includePaths: Bool = true) -> LaunchpadLayoutDocument {
+        let idMap = Self.buildSanitizedIDMap(for: apps, includePaths: includePaths)
+        let sanitize: (String) -> String = { id in
+            Self.sanitizeID(id, idMap: idMap, includePaths: includePaths)
+        }
+
         let folderByID = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0) })
         var seen = Set<String>()
         var items: [LaunchpadLayoutItem] = []
         for id in itemOrderIDs {
             guard seen.insert(id).inserted else { continue }
             if let folder = folderByID[id] {
-                items.append(.folder(id: folder.id, name: folder.name, apps: folder.appIDs))
+                items.append(.folder(id: folder.id, name: folder.name, apps: folder.appIDs.map(sanitize)))
             } else {
-                items.append(.app(id: id))
+                items.append(.app(id: sanitize(id)))
             }
         }
         for folder in folders where seen.insert(folder.id).inserted {
-            items.append(.folder(id: folder.id, name: folder.name, apps: folder.appIDs))
+            items.append(.folder(id: folder.id, name: folder.name, apps: folder.appIDs.map(sanitize)))
         }
         let catalog: [LaunchpadLayoutCatalogEntry]? = includeCatalog
             ? apps.map { app in
                 LaunchpadLayoutCatalogEntry(
-                    id: app.id,
+                    id: sanitize(app.id),
                     bundleIdentifier: app.bundleIdentifier,
                     name: app.name,
                     path: includePaths ? app.url.standardizedFileURL.path : nil
@@ -869,9 +876,48 @@ final class AppStore: ObservableObject {
                 pageCapacity: preset.columns * exportedRows
             ),
             items: items,
-            hidden: hiddenAppIDs.sorted(),
+            hidden: hiddenAppIDs.map(sanitize).sorted(),
             catalog: catalog
         )
+    }
+
+    private static func buildSanitizedIDMap(for apps: [AppInfo], includePaths: Bool) -> [String: String] {
+        guard !includePaths else { return [:] }
+        var map: [String: String] = [:]
+        var usedIDs = Set<String>()
+        for app in apps where !app.id.contains("#") {
+            usedIDs.insert(app.id)
+        }
+        for app in apps {
+            guard let hash = app.id.firstIndex(of: "#") else {
+                map[app.id] = app.id
+                continue
+            }
+            let bundle = String(app.id[..<hash])
+            let path = String(app.id[app.id.index(after: hash)...])
+            let fileName = URL(fileURLWithPath: path).lastPathComponent
+            var candidate = "\(bundle)#\(fileName)"
+            if usedIDs.contains(candidate) {
+                var index = 2
+                while usedIDs.contains("\(bundle)#\(fileName)#\(index)") {
+                    index += 1
+                }
+                candidate = "\(bundle)#\(fileName)#\(index)"
+            }
+            usedIDs.insert(candidate)
+            map[app.id] = candidate
+        }
+        return map
+    }
+
+    private static func sanitizeID(_ id: String, idMap: [String: String], includePaths: Bool) -> String {
+        guard !includePaths else { return id }
+        if let mapped = idMap[id] { return mapped }
+        guard let hash = id.firstIndex(of: "#") else { return id }
+        let bundle = String(id[..<hash])
+        let path = String(id[id.index(after: hash)...])
+        let fileName = URL(fileURLWithPath: path).lastPathComponent
+        return "\(bundle)#\(fileName)"
     }
 
     func applyLayout(
@@ -1492,6 +1538,7 @@ final class AppStore: ObservableObject {
             isPageGestureActive = true
             scrollAccumulated = 0
             pageVelocity = 0
+            pageScrollOrigin = pageOffset
             scrollAxis = .undecided
             scrollAxisAccumX = 0
             scrollAxisAccumY = 0
@@ -1595,7 +1642,13 @@ final class AppStore: ObservableObject {
         }
 
         if loopPages && pageCount > 1 {
-            if page > maxPage {
+            let flickedForward = velocity > LaunchpadPageSnap.trackpadFlickThreshold && scrollAccumulated >= -0.02
+            let flickedBack = velocity < -LaunchpadPageSnap.trackpadFlickThreshold && scrollAccumulated <= 0.02
+            if pageScrollOrigin >= maxPage && (scrollAccumulated > LaunchpadPageSnap.trackpadCommitThreshold || flickedForward) {
+                page = 0
+            } else if pageScrollOrigin <= 0 && (scrollAccumulated < -LaunchpadPageSnap.trackpadCommitThreshold || flickedBack) {
+                page = maxPage
+            } else if page > maxPage {
                 page = 0
             } else if page < minPage {
                 page = maxPage
@@ -2134,6 +2187,16 @@ final class AppStore: ObservableObject {
         rebuildLaunchpadItems()
     }
 
+    private func clampPageOffsetToCatalogBounds() {
+        let lastPage = Double(max(pageCount - 1, 0))
+        if pageOffset > lastPage || targetPage > lastPage {
+            pageOffset = min(max(pageOffset, 0), lastPage)
+            targetPage = min(max(targetPage, 0), lastPage)
+            pageVelocity = 0
+            ensureKeyboardFocus(onPage: Int(targetPage))
+        }
+    }
+
     private func rebuildLaunchpadItems() {
         let folderByID = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0) })
         launchpadItems = itemOrderIDs.compactMap { id in
@@ -2141,6 +2204,7 @@ final class AppStore: ObservableObject {
             guard let app = apps.first(where: { $0.id == id }) else { return nil }
             return .app(app)
         }
+        clampPageOffsetToCatalogBounds()
     }
 
     private func persistLayout() {

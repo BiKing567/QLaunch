@@ -123,7 +123,7 @@ export async function captureCommand(command: string[]): Promise<string> {
   });
 }
 
-async function runCommandCapture(command: string[]): Promise<{
+export async function runCommandCapture(command: string[]): Promise<{
   code: number;
   stdout: string;
   stderr: string;
