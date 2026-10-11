@@ -51,6 +51,12 @@ public enum TrackpadGesturePreferences {
         Target(appID: kCFPreferencesAnyApplication, host: kCFPreferencesCurrentHost, key: "com.apple.trackpad.fiveFingerPinchSwipeGesture", defaultValue: 2),
         Target(appID: kCFPreferencesAnyApplication, host: kCFPreferencesAnyHost, key: "com.apple.trackpad.fourFingerPinchSwipeGesture", defaultValue: 2),
         Target(appID: kCFPreferencesAnyApplication, host: kCFPreferencesAnyHost, key: "com.apple.trackpad.fiveFingerPinchSwipeGesture", defaultValue: 2),
+
+        // Dock FluidGesture (modern macOS Spotlight Apps / Launchpad replacement)
+        Target(appID: "com.apple.dock" as CFString, host: kCFPreferencesAnyHost, key: "showSpotlightGestureEnabled", defaultValue: 1),
+        Target(appID: "com.apple.dock" as CFString, host: kCFPreferencesCurrentHost, key: "showSpotlightGestureEnabled", defaultValue: 1),
+        Target(appID: "com.apple.dock" as CFString, host: kCFPreferencesAnyHost, key: "showLaunchpadGestureEnabled", defaultValue: 1),
+        Target(appID: "com.apple.dock" as CFString, host: kCFPreferencesCurrentHost, key: "showLaunchpadGestureEnabled", defaultValue: 1),
     ]
 
     private static let backupKey = "launchpadOriginalSystemGestureBackup"
@@ -85,6 +91,8 @@ public enum TrackpadGesturePreferences {
         }
         UserDefaults.standard.set(backup, forKey: backupKey)
 
+        setMTTGestureMultiFingerPinch(0)
+
         guard needsUpdate else { return true }
 
         for target in targets {
@@ -106,8 +114,26 @@ public enum TrackpadGesturePreferences {
             _ = CFPreferencesSynchronize(target.appID, kCFPreferencesCurrentUser, target.host)
         }
         UserDefaults.standard.removeObject(forKey: backupKey)
+        setMTTGestureMultiFingerPinch(2)
         postTrackpadSettingsChangeNotifications()
         restartDock()
+    }
+
+    private static func setMTTGestureMultiFingerPinch(_ value: Int) {
+        guard let bundle = Bundle(path: "/System/Library/PrivateFrameworks/PreferencePanesSupport.framework"),
+              bundle.load() else { return }
+        guard let cls = objc_getClass("MTTGestureBackEnd") as? AnyClass else { return }
+        typealias SharedFn = @convention(c) (AnyClass, Selector) -> AnyObject?
+        let sharedSel = NSSelectorFromString("sharedInstance")
+        guard let sharedMethod = class_getClassMethod(cls, sharedSel) else { return }
+        let sharedImpl = unsafeBitCast(method_getImplementation(sharedMethod), to: SharedFn.self)
+        guard let instance = sharedImpl(cls, sharedSel) else { return }
+
+        typealias SetPinchFn = @convention(c) (AnyObject, Selector, Int) -> Void
+        let setPinchSel = NSSelectorFromString("setMultiFingerPinch:")
+        guard let setMethod = class_getInstanceMethod(object_getClass(instance), setPinchSel) else { return }
+        let setImpl = unsafeBitCast(method_getImplementation(setMethod), to: SetPinchFn.self)
+        setImpl(instance, setPinchSel, value)
     }
 
     private static func restartDock() {
