@@ -5579,7 +5579,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
             if standardPinchInteractiveDismissActive {
-                let completed = standardPinchCumulativeMagnification >= 0.06
+                let isCancelled = event.phase.contains(.cancelled)
+                let completed = !isCancelled && standardPinchCumulativeMagnification >= 0.06
                 onInteractiveDismissEnd?(completed)
             }
             standardPinchCumulativeMagnification = 0

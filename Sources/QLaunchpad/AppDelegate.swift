@@ -141,6 +141,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             name: NSWindow.didBecomeKeyNotification,
             object: nil
         )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(systemDidWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
         // 提前武装 Sparkle，自动检查不依赖是否打开关于页。
         _ = Updater.shared
 
@@ -164,6 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         LaunchpadHotCornerCenter.shared.uninstall()
         LaunchpadTrackpadGestureCenter.shared.uninstall()
         if let localHotKeyMonitor { NSEvent.removeMonitor(localHotKeyMonitor) }
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        NotificationCenter.default.removeObserver(self)
         DistributedNotificationCenter.default().removeObserver(
             self,
             name: .qlaunchpadLayoutDidChange,
@@ -402,6 +410,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func trackpadGestureChanged() {
         LaunchpadTrackpadGestureCenter.shared.reloadPreference()
+    }
+
+    @objc private func systemDidWake() {
+        LaunchpadTrackpadGestureCenter.shared.reloadPreference()
+        LaunchpadHotCornerCenter.shared.reloadWindows()
     }
 
     /// In-panel navigation only. The toggle shortcut is a Carbon system hotkey.

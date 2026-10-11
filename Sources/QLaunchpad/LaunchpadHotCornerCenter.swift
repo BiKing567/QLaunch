@@ -86,6 +86,19 @@ private final class HotCornerTrackingView: NSView {
         dwellTimer = nil
         hasTriggered = false
     }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            dwellTimer?.invalidate()
+            dwellTimer = nil
+            hasTriggered = false
+        }
+    }
+
+    deinit {
+        dwellTimer?.invalidate()
+    }
 }
 
 private final class HotCornerWindow: NSWindow {

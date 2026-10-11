@@ -224,13 +224,13 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
     }
 
     func reloadPreference() {
+        stop()
         if TrackpadGesturePreferences.isEnabled {
             let started = start()
             if started && TrackpadGesturePreferences.isTakeOverEnabled {
                 _ = TrackpadGesturePreferences.takeOverSystemPinchGesture()
             }
         } else {
-            stop()
             if TrackpadGesturePreferences.isTakeOverEnabled {
                 TrackpadGesturePreferences.restoreSystemPinchGesture()
             }
