@@ -218,7 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        panel.level = .popUpMenu
+        panel.level = .screenSaver + 1
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.hidesOnDeactivate = false
         panel.isOpaque = false
@@ -237,11 +237,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowDidResignKey(_ notification: Notification) {
         guard notification.object as? NSWindow === launchpadPanel else { return }
 
+        // While an interactive gesture is active, never dismiss the panel
+        guard !isInteractiveOpening, !isInteractiveDismissing else {
+            launchpadPanel.makeKey()
+            return
+        }
+
         // Opening Settings also makes the Launchpad resign key. Wait until
         // AppKit has finished ordering the new window or attached sheet before
         // deciding whether the Launchpad should be dismissed.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            guard !self.isInteractiveOpening, !self.isInteractiveDismissing else { return }
             let keyWindow = NSApp.keyWindow
             let isLaunchpadSheet = self.launchpadPanel.attachedSheet != nil
                 || keyWindow?.sheetParent === self.launchpadPanel
@@ -635,7 +642,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         containerView.prepareForInteractiveShow(on: screen)
 
         launchpadPanel.alphaValue = 1
+        NSApp.activate(ignoringOtherApps: true)
         launchpadPanel.orderFrontRegardless()
+        launchpadPanel.makeKey()
         containerView.setInteractivePresentationProgress(0.0)
     }
 
@@ -886,6 +895,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// hides Sparkle / browser windows once the overlay should go away.
     private func syncSettingsWindowLevel() {
         guard let settingsWindow else { return }
-        settingsWindow.level = store.isPresented ? .popUpMenu : .normal
+        settingsWindow.level = store.isPresented ? NSWindow.Level(Int(NSWindow.Level.screenSaver.rawValue) + 2) : .normal
     }
 }

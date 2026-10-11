@@ -59,7 +59,12 @@
 "settings.section.trackpad" = "トラックパッド";
 "settings.trackpadPinch" = "ピンチジェスチャ";
 "settings.trackpadPinch.detail" = "3本指または4本指のピンチでLaunchpadを無段階に開き、開くジェスチャで終了します。";
-"settings.trackpadPinch.conflictNotice" = "macOSの標準Launchpadジェスチャが有効です。3本指ピンチなら競合なく直接起動できます。4本指ピンチを完全にQLaunchに割り当てるには、システム設定で「Launchpad」をオフにしてください。";
+"settings.trackpadPinch.conflictNotice" = "macOSの標準ピンチジェスチャが有効です。「システムジェスチャを一括引き継ぎ」をクリックして自動で引き継ぐか、3本指ピンチで競合なく起動できます。";
+"settings.trackpadPinch.takeOver" = "システムピンチジェスチャを引き継ぐ";
+"settings.trackpadPinch.takeOver.detail" = "システム標準のジェスチャを自動で無効化し、QLaunchが排他的に4本指無段階ピンチを処理します。";
+"settings.trackpadPinch.takeOverAction" = "システムジェスチャを一括引き継ぎ";
+"settings.trackpadPinch.takenOverNotice" = "システムジェスチャを引き継ぎました。4本指および3本指ピンチはQLaunchが独占的に処理します。";
+"settings.trackpadPinch.restoreAction" = "システム手勢を復元";
 "settings.trackpadPinch.openSettings" = "トラックパッド設定を開く…";
 "settings.section.cache" = "キャッシュを消去";
 "settings.cache.clear" = "キャッシュを消去";

@@ -108,6 +108,8 @@ private struct GeneralSettingsView: View {
     private var hotCornerPosition = HotCornerPreferences.defaultPosition.rawValue
     @AppStorage(TrackpadGesturePreferences.enabledKey)
     private var trackpadPinchEnabled = TrackpadGesturePreferences.defaultEnabled
+    @AppStorage(TrackpadGesturePreferences.takeOverSystemGestureKey)
+    private var trackpadTakeOverEnabled = TrackpadGesturePreferences.defaultTakeOverSystemGesture
     @State private var launchAtLogin = false
     @State private var launchAtLoginNeedsApproval = false
     @State private var didClearCache = false
@@ -212,25 +214,78 @@ private struct GeneralSettingsView: View {
                 }
                 .toggleStyle(.switch)
 
-                if trackpadPinchEnabled && TrackpadGesturePreferences.isSystemLaunchpadGestureEnabled {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(alignment: .top, spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                            Text(L10n.tr("settings.trackpadPinch.conflictNotice"))
+                if trackpadPinchEnabled {
+                    Toggle(isOn: Binding(
+                        get: { trackpadTakeOverEnabled },
+                        set: { newValue in
+                            trackpadTakeOverEnabled = newValue
+                            if newValue {
+                                _ = TrackpadGesturePreferences.takeOverSystemPinchGesture()
+                            } else {
+                                TrackpadGesturePreferences.restoreSystemPinchGesture()
+                            }
+                            NotificationCenter.default.post(name: .qlaunchpadTrackpadGestureChanged, object: nil)
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.tr("settings.trackpadPinch.takeOver"))
+                            Text(L10n.tr("settings.trackpadPinch.takeOver.detail"))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-
-                        Button {
-                            TrackpadGesturePreferences.openSystemTrackpadSettings()
-                        } label: {
-                            Label(L10n.tr("settings.trackpadPinch.openSettings"), systemImage: "arrow.up.forward.app")
-                        }
-                        .controlSize(.small)
                     }
-                    .padding(.vertical, 2)
+                    .toggleStyle(.switch)
+
+                    if TrackpadGesturePreferences.isSystemLaunchpadGestureEnabled {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .top, spacing: 6) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                                Text(L10n.tr("settings.trackpadPinch.conflictNotice"))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            HStack(spacing: 8) {
+                                Button {
+                                    _ = TrackpadGesturePreferences.takeOverSystemPinchGesture()
+                                    trackpadTakeOverEnabled = true
+                                    NotificationCenter.default.post(name: .qlaunchpadTrackpadGestureChanged, object: nil)
+                                } label: {
+                                    Label(L10n.tr("settings.trackpadPinch.takeOverAction"), systemImage: "sparkles")
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+
+                                Button {
+                                    TrackpadGesturePreferences.openSystemTrackpadSettings()
+                                } label: {
+                                    Label(L10n.tr("settings.trackpadPinch.openSettings"), systemImage: "arrow.up.forward.app")
+                                }
+                                .controlSize(.small)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    } else {
+                        HStack(alignment: .center, spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            Text(L10n.tr("settings.trackpadPinch.takenOverNotice"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer()
+                            Button(L10n.tr("settings.trackpadPinch.restoreAction")) {
+                                TrackpadGesturePreferences.restoreSystemPinchGesture()
+                                trackpadTakeOverEnabled = false
+                                NotificationCenter.default.post(name: .qlaunchpadTrackpadGestureChanged, object: nil)
+                            }
+                            .controlSize(.small)
+                        }
+                        .padding(.vertical, 2)
+                    }
                 }
             }
 
@@ -1067,7 +1122,7 @@ private struct ApplicationSettingsView: View {
             }
             return
         }
-        panel.level = NSWindow.Level(rawValue: Int(NSWindow.Level.popUpMenu.rawValue) + 1)
+        panel.level = NSWindow.Level(rawValue: Int(NSWindow.Level.screenSaver.rawValue) + 3)
         completion(panel.runModal() == .OK ? panel.url : nil)
     }
 

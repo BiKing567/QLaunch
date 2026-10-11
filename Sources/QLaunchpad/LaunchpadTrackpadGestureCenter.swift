@@ -2,13 +2,28 @@ import AppKit
 import Foundation
 import QLaunchpadCore
 
+@_silgen_name("notify_post")
+private func bsd_notify_post(_ name: UnsafePointer<CChar>) -> UInt32
+
 public enum TrackpadGesturePreferences {
     public static let enabledKey = "launchpadTrackpadPinchEnabled"
     public static let defaultEnabled: Bool = true
 
+    public static let takeOverSystemGestureKey = "launchpadTakeOverSystemTrackpadGesture"
+    public static let defaultTakeOverSystemGesture: Bool = true
+
     public static var isEnabled: Bool {
         UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? defaultEnabled
     }
+
+    public static var isTakeOverEnabled: Bool {
+        UserDefaults.standard.object(forKey: takeOverSystemGestureKey) as? Bool ?? defaultTakeOverSystemGesture
+    }
+
+    private static let trackpadDomains = [
+        "com.apple.AppleMultitouchTrackpad",
+        "com.apple.driver.AppleBluetoothMultitouch.trackpad"
+    ]
 
     /// Check whether macOS system Launchpad gesture is active in System Settings.
     public static var isSystemLaunchpadGestureEnabled: Bool {
@@ -20,6 +35,43 @@ public enum TrackpadGesturePreferences {
             }
         }
         return false
+    }
+
+    /// Programmatically take over macOS system pinch gesture.
+    /// Sets TrackpadFourFingerPinchGesture and TrackpadFiveFingerPinchGesture to 0.
+    @discardableResult
+    public static func takeOverSystemPinchGesture() -> Bool {
+        for domain in trackpadDomains {
+            CFPreferencesSetAppValue("TrackpadFourFingerPinchGesture" as CFString, 0 as CFNumber, domain as CFString)
+            CFPreferencesSetAppValue("TrackpadFiveFingerPinchGesture" as CFString, 0 as CFNumber, domain as CFString)
+            CFPreferencesAppSynchronize(domain as CFString)
+        }
+        postTrackpadSettingsChangeNotifications()
+        return true
+    }
+
+    /// Restore macOS system pinch gesture back to default (2).
+    public static func restoreSystemPinchGesture() {
+        for domain in trackpadDomains {
+            CFPreferencesSetAppValue("TrackpadFourFingerPinchGesture" as CFString, 2 as CFNumber, domain as CFString)
+            CFPreferencesSetAppValue("TrackpadFiveFingerPinchGesture" as CFString, 2 as CFNumber, domain as CFString)
+            CFPreferencesAppSynchronize(domain as CFString)
+        }
+        postTrackpadSettingsChangeNotifications()
+    }
+
+    public static func postTrackpadSettingsChangeNotifications() {
+        let dnc = DistributedNotificationCenter.default()
+        let notifNames = [
+            "com.apple.AppleMultitouchTrackpadDomainDidChangeNotification",
+            "com.apple.AppleMenuGesturesDidChangeNotification",
+            "com.apple.preference.trackpad"
+        ]
+        for name in notifNames {
+            dnc.postNotificationName(NSNotification.Name(name), object: nil, userInfo: nil, deliverImmediately: true)
+        }
+        _ = bsd_notify_post("com.apple.AppleMultitouchTrackpadDomainDidChangeNotification")
+        _ = bsd_notify_post("com.apple.preference.trackpad")
     }
 
     /// Open macOS Trackpad Settings pane in System Settings.
@@ -140,6 +192,9 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
 
     func reloadPreference() {
         if TrackpadGesturePreferences.isEnabled {
+            if TrackpadGesturePreferences.isTakeOverEnabled {
+                TrackpadGesturePreferences.takeOverSystemPinchGesture()
+            }
             start()
         } else {
             stop()

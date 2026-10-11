@@ -59,7 +59,12 @@
 "settings.section.trackpad" = "Trackpad";
 "settings.trackpadPinch" = "Pinch Gesture";
 "settings.trackpadPinch.detail" = "Continuous 3 or 4-finger pinch to open Launchpad, and spread to exit.";
-"settings.trackpadPinch.conflictNotice" = "macOS has its built-in Launchpad gesture enabled for 4-finger pinch. You can use 3-finger pinch directly without conflicts, or turn off Launchpad in System Settings to let QLaunch handle 4-finger pinch.";
+"settings.trackpadPinch.conflictNotice" = "macOS has its built-in pinch gesture enabled. Click 'Take Over System Gesture' for automatic takeover, or use a 3-finger pinch directly without conflicts.";
+"settings.trackpadPinch.takeOver" = "Take Over System Pinch Gesture";
+"settings.trackpadPinch.takeOver.detail" = "Automatically disables the system's native pinch gesture so QLaunch can exclusively handle 4-finger pinches with continuous scaling.";
+"settings.trackpadPinch.takeOverAction" = "Take Over System Gesture";
+"settings.trackpadPinch.takenOverNotice" = "System gesture taken over. 4-finger and 3-finger pinches are handled exclusively by QLaunch.";
+"settings.trackpadPinch.restoreAction" = "Restore System Gesture";
 "settings.trackpadPinch.openSettings" = "Open Trackpad Settings…";
 "settings.section.cache" = "Clear Cache";
 "settings.cache.clear" = "Clear Cache";
