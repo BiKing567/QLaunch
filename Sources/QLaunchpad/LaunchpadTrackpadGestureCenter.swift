@@ -20,73 +20,101 @@ public enum TrackpadGesturePreferences {
         UserDefaults.standard.object(forKey: takeOverSystemGestureKey) as? Bool ?? defaultTakeOverSystemGesture
     }
 
-    private static let trackpadDomains = [
-        "com.apple.AppleMultitouchTrackpad",
-        "com.apple.driver.AppleBluetoothMultitouch.trackpad"
+    private struct Target {
+        let appID: CFString
+        let host: CFString
+        let key: String
+        let defaultValue: Int
+
+        var id: String {
+            let appStr = (appID == kCFPreferencesAnyApplication ? "kCFPreferencesAnyApplication" : (appID as String))
+            let hostStr = (host == kCFPreferencesCurrentHost ? "currentHost" : "anyHost")
+            return "\(appStr):\(hostStr):\(key)"
+        }
+    }
+
+    private static let targets: [Target] = [
+        // AppleMultitouchTrackpad
+        Target(appID: "com.apple.AppleMultitouchTrackpad" as CFString, host: kCFPreferencesCurrentHost, key: "TrackpadFourFingerPinchGesture", defaultValue: 2),
+        Target(appID: "com.apple.AppleMultitouchTrackpad" as CFString, host: kCFPreferencesCurrentHost, key: "TrackpadFiveFingerPinchGesture", defaultValue: 2),
+        Target(appID: "com.apple.AppleMultitouchTrackpad" as CFString, host: kCFPreferencesAnyHost, key: "TrackpadFourFingerPinchGesture", defaultValue: 2),
+        Target(appID: "com.apple.AppleMultitouchTrackpad" as CFString, host: kCFPreferencesAnyHost, key: "TrackpadFiveFingerPinchGesture", defaultValue: 2),
+
+        // AppleBluetoothMultitouch.trackpad
+        Target(appID: "com.apple.driver.AppleBluetoothMultitouch.trackpad" as CFString, host: kCFPreferencesCurrentHost, key: "TrackpadFourFingerPinchGesture", defaultValue: 2),
+        Target(appID: "com.apple.driver.AppleBluetoothMultitouch.trackpad" as CFString, host: kCFPreferencesCurrentHost, key: "TrackpadFiveFingerPinchGesture", defaultValue: 2),
+        Target(appID: "com.apple.driver.AppleBluetoothMultitouch.trackpad" as CFString, host: kCFPreferencesAnyHost, key: "TrackpadFourFingerPinchGesture", defaultValue: 2),
+        Target(appID: "com.apple.driver.AppleBluetoothMultitouch.trackpad" as CFString, host: kCFPreferencesAnyHost, key: "TrackpadFiveFingerPinchGesture", defaultValue: 2),
+
+        // Apple Global Domain (WindowServer / Dock Launchpad gesture)
+        Target(appID: kCFPreferencesAnyApplication, host: kCFPreferencesCurrentHost, key: "com.apple.trackpad.fourFingerPinchSwipeGesture", defaultValue: 2),
+        Target(appID: kCFPreferencesAnyApplication, host: kCFPreferencesCurrentHost, key: "com.apple.trackpad.fiveFingerPinchSwipeGesture", defaultValue: 2),
+        Target(appID: kCFPreferencesAnyApplication, host: kCFPreferencesAnyHost, key: "com.apple.trackpad.fourFingerPinchSwipeGesture", defaultValue: 2),
+        Target(appID: kCFPreferencesAnyApplication, host: kCFPreferencesAnyHost, key: "com.apple.trackpad.fiveFingerPinchSwipeGesture", defaultValue: 2),
     ]
-    private static let gestureKeys = [
-        "TrackpadFourFingerPinchGesture",
-        "TrackpadFiveFingerPinchGesture"
-    ]
+
     private static let backupKey = "launchpadOriginalSystemGestureBackup"
 
     /// Check whether macOS system Launchpad gesture is active in System Settings.
     public static var isSystemLaunchpadGestureEnabled: Bool {
-        let domain = "com.apple.AppleMultitouchTrackpad" as CFString
-        let key = "TrackpadFourFingerPinchGesture" as CFString
-        if let val = CFPreferencesCopyAppValue(key, domain) {
-            if let num = val as? NSNumber {
-                return num.intValue != 0
+        for target in targets {
+            if let val = CFPreferencesCopyValue(target.key as CFString, target.appID, kCFPreferencesCurrentUser, target.host) as? NSNumber {
+                if val.intValue > 0 {
+                    return true
+                }
             }
         }
         return false
     }
 
     /// Programmatically take over macOS system pinch gesture.
-    /// Saves current values before setting TrackpadFourFingerPinchGesture and TrackpadFiveFingerPinchGesture to 0.
+    /// Saves current values before setting all system Launchpad pinch keys to 0.
     @discardableResult
     public static func takeOverSystemPinchGesture() -> Bool {
-        if UserDefaults.standard.dictionary(forKey: backupKey) == nil {
-            var backup: [String: [String: Int]] = [:]
-            for domain in trackpadDomains {
-                var domainBackup: [String: Int] = [:]
-                for key in gestureKeys {
-                    if let val = CFPreferencesCopyAppValue(key as CFString, domain as CFString) as? NSNumber, val.intValue > 0 {
-                        domainBackup[key] = val.intValue
-                    } else {
-                        domainBackup[key] = 2 // standard macOS gesture value
-                    }
-                }
-                backup[domain] = domainBackup
+        var needsUpdate = false
+        var backup = (UserDefaults.standard.dictionary(forKey: backupKey) as? [String: Int]) ?? [:]
+
+        for target in targets {
+            let currentVal = (CFPreferencesCopyValue(target.key as CFString, target.appID, kCFPreferencesCurrentUser, target.host) as? NSNumber)?.intValue
+            if backup[target.id] == nil {
+                backup[target.id] = (currentVal != nil && currentVal! > 0) ? currentVal! : target.defaultValue
             }
-            UserDefaults.standard.set(backup, forKey: backupKey)
+            if currentVal != 0 {
+                needsUpdate = true
+            }
+        }
+        UserDefaults.standard.set(backup, forKey: backupKey)
+
+        guard needsUpdate else { return true }
+
+        for target in targets {
+            CFPreferencesSetValue(target.key as CFString, 0 as CFNumber, target.appID, kCFPreferencesCurrentUser, target.host)
+            _ = CFPreferencesSynchronize(target.appID, kCFPreferencesCurrentUser, target.host)
         }
 
-        for domain in trackpadDomains {
-            CFPreferencesSetAppValue("TrackpadFourFingerPinchGesture" as CFString, 0 as CFNumber, domain as CFString)
-            CFPreferencesSetAppValue("TrackpadFiveFingerPinchGesture" as CFString, 0 as CFNumber, domain as CFString)
-            _ = CFPreferencesAppSynchronize(domain as CFString)
-        }
         postTrackpadSettingsChangeNotifications()
+        restartDock()
         return true
     }
 
-    /// Restore macOS system pinch gesture back to saved original values (or 2 if no backup).
+    /// Restore macOS system pinch gesture back to saved original values.
     public static func restoreSystemPinchGesture() {
-        let backup = UserDefaults.standard.dictionary(forKey: backupKey) as? [String: [String: Int]]
-        for domain in trackpadDomains {
-            let domainBackup = backup?[domain]
-            for key in gestureKeys {
-                if let originalValue = domainBackup?[key], originalValue > 0 {
-                    CFPreferencesSetAppValue(key as CFString, originalValue as CFNumber, domain as CFString)
-                } else {
-                    CFPreferencesSetAppValue(key as CFString, 2 as CFNumber, domain as CFString)
-                }
-            }
-            _ = CFPreferencesAppSynchronize(domain as CFString)
+        let backup = UserDefaults.standard.dictionary(forKey: backupKey) as? [String: Int]
+        for target in targets {
+            let val = backup?[target.id] ?? target.defaultValue
+            CFPreferencesSetValue(target.key as CFString, val as CFNumber, target.appID, kCFPreferencesCurrentUser, target.host)
+            _ = CFPreferencesSynchronize(target.appID, kCFPreferencesCurrentUser, target.host)
         }
         UserDefaults.standard.removeObject(forKey: backupKey)
         postTrackpadSettingsChangeNotifications()
+        restartDock()
+    }
+
+    private static func restartDock() {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        task.arguments = ["Dock"]
+        try? task.run()
     }
 
     public static func postTrackpadSettingsChangeNotifications() {
