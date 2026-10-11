@@ -94,6 +94,8 @@
 "about.autoUpdates.detail" = "Check quietly at launch, then periodically in the background";
 "about.authorCommunity" = "Author & Community";
 "about.author" = "Author";
+"about.github.original" = "Original Author (qzrzz/QLaunch)";
+"about.github.my" = "My Repository (BiKing567/QLaunch)";
 "about.twitter" = "X (Twitter)";
 "about.xiaohongshu" = "Xiaohongshu";
 "about.bilibili" = "Bilibili";

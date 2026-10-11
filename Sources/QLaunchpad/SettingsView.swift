@@ -1294,6 +1294,7 @@ private struct AboutSettingsView: View {
     @ObservedObject private var updater = Updater.shared
 
     private static let githubURL = "https://github.com/qzrzz/QLaunch"
+    private static let myGithubURL = "https://github.com/BiKing567/QLaunch"
     private static let authorURL = "https://qzrzz.com/"
     private static let xURL = "https://x.com/qzrz256"
     private static let xiaohongshuURL = "https://www.xiaohongshu.com/"
@@ -1417,12 +1418,7 @@ private struct AboutSettingsView: View {
                     icon: authorLogo
                 )
                 aboutDivider()
-                linkRow(
-                    title: "Github",
-                    subtitle: Self.githubURL,
-                    url: Self.githubURL,
-                    icon: templateIcon("RemixGithub", systemFallback: "chevron.left.forwardslash.chevron.right", tint: .primary)
-                )
+                githubMenuRow
                 aboutDivider()
                 linkRow(
                     title: L10n.tr("about.twitter"),
@@ -1453,6 +1449,47 @@ private struct AboutSettingsView: View {
                 )
             }
         }
+    }
+
+    private var githubMenuRow: some View {
+        Menu {
+            Button {
+                openURL(Self.githubURL)
+            } label: {
+                Label(L10n.tr("about.github.original"), systemImage: "arrow.up.right")
+            }
+            Button {
+                openURL(Self.myGithubURL)
+            } label: {
+                Label(L10n.tr("about.github.my"), systemImage: "arrow.up.right")
+            }
+        } label: {
+            HStack(spacing: 12) {
+                templateIcon("RemixGithub", systemFallback: "chevron.left.forwardslash.chevron.right", tint: .primary)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Github")
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                    Text("qzrzz/QLaunch · BiKing567/QLaunch")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 12)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 28, height: 28)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
     }
 
     private var authorLogo: some View {

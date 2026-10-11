@@ -94,6 +94,8 @@
 "about.autoUpdates.detail" = "起動時に確認し、その後も定期的にバックグラウンドで確認します";
 "about.authorCommunity" = "作者とコミュニティ";
 "about.author" = "作者";
+"about.github.original" = "原作者リポジトリ (qzrzz/QLaunch)";
+"about.github.my" = "私のリポジトリ (BiKing567/QLaunch)";
 "about.twitter" = "X（Twitter）";
 "about.xiaohongshu" = "小紅書";
 "about.bilibili" = "Bilibili";
