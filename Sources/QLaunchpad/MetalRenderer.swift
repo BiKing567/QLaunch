@@ -391,7 +391,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     var onInteractiveDismissProgress: ((CGFloat) -> Void)?
     var onInteractiveDismissEnd: ((Bool) -> Void)?
     private var standardPinchInteractiveDismissActive = false
-    private var presentationStyle: LaunchpadAnimationStyle = .fly
+    private var presentationStyle: LaunchpadAnimationStyle = LaunchpadAnimationStyle.current
     private var stationaryDismissedAppID: String?
 
     private let pageSpringResponse: Double = 22
@@ -1496,7 +1496,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         store.presentationProgress = progress
     }
 
-    func prepareForInteractivePresentation() {
+    func prepareForInteractivePresentation(style: LaunchpadAnimationStyle = LaunchpadAnimationStyle.current) {
+        presentationStyle = style
         if displayedItems.isEmpty, !store.activeDisplayItems.isEmpty {
             displayedItems = store.activeDisplayItems
             displayedFolderID = store.isSearching ? nil : store.openedFolderID
@@ -1505,6 +1506,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             contentTransitionAlpha = 1
         }
         applyInteractivePresentationProgress(0.0)
+    }
+
+    func prepareForInteractiveDismiss(style: LaunchpadAnimationStyle = LaunchpadAnimationStyle.current) {
+        presentationStyle = style
     }
 
     func applyInteractivePresentationProgress(_ progress: CGFloat) {
@@ -1516,10 +1521,38 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         isPrimingPresentationFrame = false
         isShowingPresentation = true
         presentationPhase = p
-        contentAlpha = p
-        contentScale = 1.0 + 0.12 * (1.0 - p)
-        iconEntranceProgress = p
         store.presentationProgress = p
+
+        switch presentationStyle {
+        case .fly:
+            iconEntranceProgress = p >= 0.999 ? 1 : p * 0.87
+            contentAlpha = p
+            contentScale = 1.0
+            contentOffsetY = 0
+        case .classic:
+            iconEntranceProgress = 1
+            contentAlpha = p
+            contentScale = ClassicPresentationTransform.scale(
+                progress: p,
+                showing: true
+            )
+            contentOffsetY = 0
+        case .zoom:
+            iconEntranceProgress = 1
+            contentAlpha = p
+            contentScale = 1.0 + 0.12 * (1.0 - p)
+            contentOffsetY = 0
+        case .fade:
+            iconEntranceProgress = 1
+            contentAlpha = p
+            contentScale = 1.0
+            contentOffsetY = 0
+        case .none:
+            iconEntranceProgress = 1
+            contentAlpha = p >= 0.5 ? 1 : 0
+            contentScale = 1.0
+            contentOffsetY = 0
+        }
         needsDisplay = true
     }
 

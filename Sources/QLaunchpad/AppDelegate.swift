@@ -645,14 +645,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard store.presentation != .visible, launchpadPanel?.isVisible != true else { return }
         guard let screen = currentTargetScreen else { return }
 
+        let animationStyle = LaunchpadAnimationStyle.current
+        activeAnimationStyle = animationStyle
         isInteractiveOpening = true
         presentationGeneration &+= 1
-        activeAnimationStyle = LaunchpadAnimationStyle.current
         store.beginPresenting()
 
         launchpadPanel.setFrame(screen.frame, display: false)
         launchpadPanel.animationBehavior = .none
-        containerView.prepareForInteractiveShow(on: screen)
+        containerView.prepareForInteractiveShow(on: screen, style: animationStyle)
 
         launchpadPanel.alphaValue = 1
         NSApp.activate(ignoringOtherApps: true)
@@ -665,6 +666,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func beginInteractiveDismiss() {
         guard !isAnimating, !isInteractiveOpening, !isInteractiveDismissing else { return }
         guard store.presentation == .visible || launchpadPanel?.isVisible == true else { return }
+
+        let animationStyle = LaunchpadAnimationStyle.current
+        activeAnimationStyle = animationStyle
+        containerView.prepareForInteractiveDismiss(style: animationStyle)
 
         isInteractiveDismissing = true
         presentationGeneration &+= 1
@@ -697,6 +702,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 NSApp.activate(ignoringOtherApps: true)
                 self.launchpadPanel.makeKey()
                 self.syncSettingsWindowLevel()
+                NotificationCenter.default.post(
+                    name: .qlaunchpadPresentationChanged,
+                    object: nil,
+                    userInfo: [
+                        "showing": true,
+                        "animationStyle": self.activeAnimationStyle.rawValue
+                    ]
+                )
                 NotificationCenter.default.post(name: .qlaunchpadFocusSearch, object: nil)
                 self.updateStatusMenu()
             } else {
