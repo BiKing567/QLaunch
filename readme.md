@@ -1,5 +1,7 @@
 # 🚀 QLaunch (BiKing567 维护分支)
 
+[English](README_EN.md) | [简体中文](readme.md)
+
 <div align="center">
   <img src="web/icons/qlaunchpad-512.png" width="128" alt="QLaunch">
 </div>
