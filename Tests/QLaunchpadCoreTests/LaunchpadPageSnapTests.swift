@@ -137,4 +137,60 @@ final class LaunchpadPageSnapTests: XCTestCase {
         )
         XCTAssertEqual(page, 2)
     }
+
+    func testDiscreteTargetPageStepsForwardAndBackward() {
+        XCTAssertEqual(
+            LaunchpadPageSnap.discreteTargetPage(currentPage: 0, pageDelta: 1, pageCount: 3, loopPages: true),
+            1
+        )
+        XCTAssertEqual(
+            LaunchpadPageSnap.discreteTargetPage(currentPage: 1, pageDelta: 1, pageCount: 3, loopPages: true),
+            2
+        )
+        XCTAssertEqual(
+            LaunchpadPageSnap.discreteTargetPage(currentPage: 2, pageDelta: -1, pageCount: 3, loopPages: true),
+            1
+        )
+        XCTAssertEqual(
+            LaunchpadPageSnap.discreteTargetPage(currentPage: 1, pageDelta: -1, pageCount: 3, loopPages: true),
+            0
+        )
+    }
+
+    func testDiscreteTargetPageWithLoopPagesWrapsAtBoundaries() {
+        // Scrolling up at page 0 wraps to last page
+        XCTAssertEqual(
+            LaunchpadPageSnap.discreteTargetPage(currentPage: 0, pageDelta: -1, pageCount: 3, loopPages: true),
+            2
+        )
+        // Scrolling down at last page wraps to first page
+        XCTAssertEqual(
+            LaunchpadPageSnap.discreteTargetPage(currentPage: 2, pageDelta: 1, pageCount: 3, loopPages: true),
+            0
+        )
+    }
+
+    func testDiscreteTargetPageWithoutLoopPagesClampsAtBoundaries() {
+        // Scrolling up at page 0 stays at page 0
+        XCTAssertEqual(
+            LaunchpadPageSnap.discreteTargetPage(currentPage: 0, pageDelta: -1, pageCount: 3, loopPages: false),
+            0
+        )
+        // Scrolling down at last page stays at last page
+        XCTAssertEqual(
+            LaunchpadPageSnap.discreteTargetPage(currentPage: 2, pageDelta: 1, pageCount: 3, loopPages: false),
+            2
+        )
+    }
+
+    func testDiscreteTargetPageSinglePageAlwaysZero() {
+        XCTAssertEqual(
+            LaunchpadPageSnap.discreteTargetPage(currentPage: 0, pageDelta: 1, pageCount: 1, loopPages: true),
+            0
+        )
+        XCTAssertEqual(
+            LaunchpadPageSnap.discreteTargetPage(currentPage: 0, pageDelta: -1, pageCount: 1, loopPages: true),
+            0
+        )
+    }
 }

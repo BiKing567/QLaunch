@@ -16,6 +16,28 @@ public enum LaunchpadPageSnap {
         return primary < 0 ? 1 : -1
     }
 
+    public static func discreteTargetPage(
+        currentPage: Double,
+        pageDelta: Double,
+        pageCount: Int,
+        loopPages: Bool
+    ) -> Double {
+        guard pageCount > 1 else { return 0 }
+        let maxPage = Double(pageCount - 1)
+        let step = pageDelta > 0 ? 1.0 : -1.0
+        let next = currentPage.rounded() + step
+        if loopPages {
+            if next > maxPage {
+                return 0
+            } else if next < 0 {
+                return maxPage
+            }
+            return next
+        } else {
+            return min(max(next, 0), maxPage)
+        }
+    }
+
     public static func isDiscreteWheel(
         isPrecise: Bool,
         phaseIsEmpty: Bool,

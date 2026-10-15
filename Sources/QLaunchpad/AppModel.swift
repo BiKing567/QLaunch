@@ -1527,8 +1527,14 @@ final class AppStore: ObservableObject {
                 lastDiscreteWheelAcceptedAt = -.infinity
             }
 
+            let target = LaunchpadPageSnap.discreteTargetPage(
+                currentPage: pageOffset,
+                pageDelta: pageDelta,
+                pageCount: pageCount,
+                loopPages: loopPages
+            )
             resetPageScrollGesture()
-            settlePage(withVelocity: pageDelta > 0 ? 1.2 : -1.2)
+            applySettledPage(target)
             return
         }
 
@@ -1623,6 +1629,7 @@ final class AppStore: ObservableObject {
         scrollAxis = .undecided
         scrollAxisAccumX = 0
         scrollAxisAccumY = 0
+        pageScrollOrigin = pageOffset
     }
 
     /// Snap to nearest page, biased by flick velocity (Launchpad-style).
