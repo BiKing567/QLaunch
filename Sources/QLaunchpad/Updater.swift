@@ -94,7 +94,7 @@ final class Updater: ObservableObject {
                 let body = latest["body"] as? String ?? ""
                 let htmlURL = latest["html_url"] as? String ?? Self.releasesWebURL
 
-                let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
+                let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.1"
 
                 if Self.isVersion(tagName, greaterThan: currentVersion) || Self.isVersion(releaseName, greaterThan: currentVersion) {
                     showNewVersionAlert(name: releaseName, tag: tagName, body: body, urlString: htmlURL)
@@ -118,7 +118,7 @@ final class Updater: ObservableObject {
     private func showNewVersionAlert(name: String, tag: String, body: String, urlString: String) {
         let alert = NSAlert()
         alert.messageText = "发现新版本 \(name)"
-        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.1"
         let notes = body.trimmingCharacters(in: .whitespacesAndNewlines)
         let notePreview = notes.isEmpty ? "" : "\n\n更新说明：\n" + (notes.count > 500 ? String(notes.prefix(500)) + "…" : notes)
         alert.informativeText = "当前版本：v\(currentVersion)\n最新版本：\(tag)\(notePreview)"
@@ -140,7 +140,7 @@ final class Updater: ObservableObject {
     }
 
     private func showUpToDateAlert() {
-        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.1"
         let alert = NSAlert()
         alert.messageText = "已是最新版本"
         alert.informativeText = "QLaunch \(currentVersion) 当前已是最新版本，无需更新。"
