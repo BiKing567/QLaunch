@@ -367,8 +367,8 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
     }
 
     private func process(touches: UnsafeMutableRawPointer?, count: Int, timestamp: Double) {
-        // Three or more fingers required (supports 3-finger pinch and classic 4-finger pinch)
-        guard count >= 3, let touches else {
+        // Four or more fingers required (classic 4-finger and 5-finger pinch)
+        guard count >= 4, let touches else {
             var eventsToDeliver: [InteractivePinchEvent] = []
             let gen: UInt = lock.withLock {
                 if tracking.interactiveStarted {
@@ -415,7 +415,7 @@ final class LaunchpadTrackpadGestureCenter: @unchecked Sendable {
         }
 
         let fingers = xs.count
-        guard fingers >= 3 else {
+        guard fingers >= 4 else {
             var eventsToDeliver: [InteractivePinchEvent] = []
             let gen: UInt = lock.withLock {
                 if tracking.interactiveStarted {

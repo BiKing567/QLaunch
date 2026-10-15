@@ -58,13 +58,13 @@
 "settings.hotCorner.detail" = "将鼠标移动到屏幕角落并稍作停顿即可打开 QLaunch。";
 "settings.section.trackpad" = "触控板";
 "settings.trackpadPinch" = "捏合手势";
-"settings.trackpadPinch.detail" = "支持三指或四指捏合无级唤起启动台，四指或三指张开无级退出。";
-"settings.trackpadPinch.conflictNotice" = "系统当前开启了原生捏拢手势。你可以点击「一键接管系统手势」由 QLaunch 自动接管，或使用「三指捏拢」免冲突唤起。";
-"settings.trackpadPinch.desktopConflictNotice" = "💡 提示：若四指张开退出时遇到系统「显示桌面」冲突，可在 macOS 系统设置的触控板中关闭「显示桌面」，或使用「三指张开」退出。";
+"settings.trackpadPinch.detail" = "支持四指捏合无级唤起启动台，四指张开无级退出。";
+"settings.trackpadPinch.conflictNotice" = "系统当前开启了原生捏拢手势。你可以点击「一键接管系统手势」由 QLaunch 自动接管。";
+"settings.trackpadPinch.desktopConflictNotice" = "💡 提示：若四指张开退出时遇到系统「显示桌面」冲突，可在 macOS 系统设置的触控板中关闭「显示桌面」。";
 "settings.trackpadPinch.takeOver" = "接管系统捏拢手势";
 "settings.trackpadPinch.takeOver.detail" = "自动禁用系统原生 App/启动台手势，由 QLaunch 独占接管四指触控板捏合，享受无级平滑缩放。";
 "settings.trackpadPinch.takeOverAction" = "一键接管系统手势";
-"settings.trackpadPinch.takenOverNotice" = "已成功接管系统手势，四指与三指捏拢将完全由 QLaunch 独占响应。";
+"settings.trackpadPinch.takenOverNotice" = "已成功接管系统手势，四指捏拢将完全由 QLaunch 独占响应。";
 "settings.trackpadPinch.restoreAction" = "恢复系统手势";
 "settings.trackpadPinch.openSettings" = "打开系统触控板设置…";
 "settings.section.cache" = "清除缓存";
