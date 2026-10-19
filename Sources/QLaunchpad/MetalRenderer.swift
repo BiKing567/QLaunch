@@ -1496,7 +1496,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         store.presentationProgress = progress
     }
 
-    func prepareForInteractivePresentation(style: LaunchpadAnimationStyle = LaunchpadAnimationStyle.current) {
+    func prepareForInteractivePresentation(style: LaunchpadAnimationStyle = LaunchpadAnimationStyle.current, initialProgress: CGFloat = 0.0) {
         presentationStyle = style
         if displayedItems.isEmpty, !store.activeDisplayItems.isEmpty {
             displayedItems = store.activeDisplayItems
@@ -1505,7 +1505,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             contentTransitionPhase = .idle
             contentTransitionAlpha = 1
         }
-        applyInteractivePresentationProgress(0.0)
+        applyInteractivePresentationProgress(initialProgress)
     }
 
     func prepareForInteractiveDismiss(style: LaunchpadAnimationStyle = LaunchpadAnimationStyle.current) {

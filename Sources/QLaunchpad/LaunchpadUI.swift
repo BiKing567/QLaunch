@@ -425,13 +425,14 @@ final class LaunchpadContainerView: NSView {
         backgroundView.prepareForPresentation()
     }
 
-    func prepareForInteractiveShow(on screen: NSScreen, style: LaunchpadAnimationStyle = LaunchpadAnimationStyle.current) {
+    func prepareForInteractiveShow(on screen: NSScreen, style: LaunchpadAnimationStyle = LaunchpadAnimationStyle.current, initialProgress: CGFloat = 0.0) {
         setPresentationScale(1)
         metalView.alphaValue = 1
-        overlayView.alphaValue = 0
+        let overlayAlpha = max(0, min(1, (initialProgress - 0.35) / 0.65))
+        overlayView.alphaValue = overlayAlpha
         backgroundView.prepare(for: screen)
         backgroundView.prepareForPresentation()
-        metalView.prepareForInteractivePresentation(style: style)
+        metalView.prepareForInteractivePresentation(style: style, initialProgress: initialProgress)
     }
 
     func prepareForInteractiveDismiss(style: LaunchpadAnimationStyle = LaunchpadAnimationStyle.current) {

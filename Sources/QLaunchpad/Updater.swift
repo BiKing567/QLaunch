@@ -18,6 +18,7 @@ final class Updater: ObservableObject {
     @Published var automaticallyChecksForUpdates: Bool {
         didSet {
             UserDefaults.standard.set(automaticallyChecksForUpdates, forKey: "automaticallyChecksForUpdates")
+            updateBackgroundScheduling()
         }
     }
 
@@ -25,22 +26,44 @@ final class Updater: ObservableObject {
         canCheckForUpdates
     }
 
-    private var backgroundTimer: Timer?
+    private(set) var backgroundTimer: Timer?
+    private(set) var startupCheckWorkItem: DispatchWorkItem?
 
     private init() {
-        self.automaticallyChecksForUpdates = UserDefaults.standard.object(forKey: "automaticallyChecksForUpdates") as? Bool ?? true
+        let initialSetting = UserDefaults.standard.object(forKey: "automaticallyChecksForUpdates") as? Bool ?? true
+        self.automaticallyChecksForUpdates = initialSetting
+        updateBackgroundScheduling()
 
+        if initialSetting {
+            scheduleStartupCheck()
+        }
+    }
+
+    private func scheduleStartupCheck() {
+        startupCheckWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.automaticallyChecksForUpdates else { return }
+            self.performCheck(isBackground: true)
+        }
+        startupCheckWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0, execute: item)
+    }
+
+    private func updateBackgroundScheduling() {
         if automaticallyChecksForUpdates {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
-                self?.performCheck(isBackground: true)
-            }
-            backgroundTimer = Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    if self?.automaticallyChecksForUpdates == true {
-                        self?.performCheck(isBackground: true)
+            if backgroundTimer == nil {
+                backgroundTimer = Timer.scheduledTimer(withTimeInterval: 86400, repeats: true) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.automaticallyChecksForUpdates else { return }
+                        self.performCheck(isBackground: true)
                     }
                 }
             }
+        } else {
+            backgroundTimer?.invalidate()
+            backgroundTimer = nil
+            startupCheckWorkItem?.cancel()
+            startupCheckWorkItem = nil
         }
     }
 

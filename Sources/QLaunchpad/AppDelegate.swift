@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var isInteractiveOpening = false
     private var isInteractiveDismissing = false
     private var isInteractiveFinishing = false
+    private var interactiveTakeoverBaseProgress: CGFloat?
     private var presentationGeneration: UInt = 0
     private var activeAnimationStyle: LaunchpadAnimationStyle = .fly
     private var launchReason: LaunchpadLaunchReason = .user
@@ -361,7 +362,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         }
                     }
                     if self.isInteractiveOpening {
-                        self.containerView.setInteractivePresentationProgress(progress)
+                        let base = self.interactiveTakeoverBaseProgress ?? 0.0
+                        let p = max(0, min(1, base + progress * (1.0 - base)))
+                        self.containerView.setInteractivePresentationProgress(p)
                     }
                 } else {
                     if !self.isInteractiveOpening && !self.isInteractiveDismissing && (self.store.presentation == .visible || self.launchpadPanel?.isVisible == true) {
@@ -373,7 +376,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         }
                     }
                     if self.isInteractiveDismissing {
-                        let p = max(0, min(1, 1.0 - progress))
+                        let base = self.interactiveTakeoverBaseProgress ?? 1.0
+                        let p = max(0, min(1, base * (1.0 - progress)))
                         self.containerView.setInteractivePresentationProgress(p)
                     }
                 }
@@ -412,6 +416,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         center.onPinchOut = { [weak self] in
             guard let self else { return }
+            if self.store.presentation == .dismissing {
+                return
+            }
             if self.isInteractiveFinishing {
                 self.interruptInteractiveFinishing()
             } else if self.isAnimating {
@@ -660,6 +667,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func toggleLaunchpad() {
+        if store.presentation == .dismissing {
+            return
+        }
         if store.isPresented || launchpadPanel.isVisible {
             dismissLaunchpad()
         } else {
@@ -672,6 +682,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func interruptInteractiveFinishing() {
         guard isInteractiveFinishing else { return }
+        interactiveTakeoverBaseProgress = store.presentationProgress
         presentationGeneration &+= 1
         containerView.cancelInteractiveFinishing()
         isInteractiveFinishing = false
@@ -691,15 +702,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         presentationGeneration &+= 1
         store.beginPresenting()
 
+        let baseProgress = interactiveTakeoverBaseProgress ?? 0.0
+
         launchpadPanel.setFrame(screen.frame, display: false)
         launchpadPanel.animationBehavior = .none
-        containerView.prepareForInteractiveShow(on: screen, style: animationStyle)
+        containerView.prepareForInteractiveShow(on: screen, style: animationStyle, initialProgress: baseProgress)
 
         launchpadPanel.alphaValue = 1
         NSApp.activate(ignoringOtherApps: true)
         launchpadPanel.orderFrontRegardless()
         launchpadPanel.makeKey()
-        containerView.setInteractivePresentationProgress(0.0)
+        containerView.setInteractivePresentationProgress(baseProgress)
     }
 
     private func beginInteractiveDismiss() {
@@ -717,6 +730,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func finishInteractivePresentation(to target: CGFloat) {
         guard isInteractiveOpening || isInteractiveDismissing else { return }
+        interactiveTakeoverBaseProgress = nil
         isInteractiveOpening = false
         isInteractiveDismissing = false
         isInteractiveFinishing = true
@@ -724,6 +738,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let generation = presentationGeneration
         if target <= 0.001 {
             store.beginDismissing()
+        } else {
+            store.beginPresenting()
         }
 
         let currentProgress = store.presentationProgress
@@ -760,6 +776,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if isInteractiveFinishing {
             interruptInteractiveFinishing()
         }
+        interactiveTakeoverBaseProgress = nil
         guard !isAnimating else { return }
         guard let screen = currentTargetScreen else { return }
 
@@ -846,13 +863,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func beginDismissal(openingAppID: String?) {
+        // Ignore when already dismissed or mid-dismiss.
+        if store.presentation == .dismissing || store.presentation == .hidden {
+            if !isAnimating && !isInteractiveFinishing && launchpadPanel.isVisible {
+                completeDismissal(generation: presentationGeneration)
+            }
+            return
+        }
         if isInteractiveFinishing {
             interruptInteractiveFinishing()
         }
-        // Ignore when already dismissed or mid-dismiss.
-        if store.presentation == .dismissing || store.presentation == .hidden {
-            return
-        }
+        interactiveTakeoverBaseProgress = nil
         guard launchpadPanel.isVisible || store.presentation == .presenting else {
             return
         }
@@ -907,6 +928,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func completeDismissal(generation: UInt) {
         guard generation == presentationGeneration else { return }
+        interactiveTakeoverBaseProgress = nil
         containerView.hideImmediately()
         launchpadPanel.animationBehavior = .none
         launchpadPanel.alphaValue = 0
