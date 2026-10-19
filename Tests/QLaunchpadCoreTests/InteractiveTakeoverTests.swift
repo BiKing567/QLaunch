@@ -73,4 +73,24 @@ final class InteractiveTakeoverTests: XCTestCase {
         )
         XCTAssertEqual(clampedClose, 1.0, accuracy: 0.0001)
     }
+
+    func testFinishEntryPreservesStartingProgressWhenTargetingOne() {
+        // Committing open or cancelling close at 0.8:
+        let finish = InteractiveTakeover.finishParameters(currentProgress: 0.8, target: 1.0)
+        XCTAssertEqual(finish.from, 0.8, accuracy: 0.0001, "Finish start must retain current progress 0.8, not 0")
+        XCTAssertEqual(finish.to, 1.0, accuracy: 0.0001)
+        XCTAssertFalse(finish.isDismissing)
+        XCTAssertGreaterThanOrEqual(finish.duration, 0.12)
+        XCTAssertLessThanOrEqual(finish.duration, 0.30)
+    }
+
+    func testFinishEntryPreservesStartingProgressWhenTargetingZero() {
+        // Committing close or cancelling open at 0.2:
+        let finish = InteractiveTakeover.finishParameters(currentProgress: 0.2, target: 0.0)
+        XCTAssertEqual(finish.from, 0.2, accuracy: 0.0001, "Finish start must retain current progress 0.2, not 1")
+        XCTAssertEqual(finish.to, 0.0, accuracy: 0.0001)
+        XCTAssertTrue(finish.isDismissing)
+        XCTAssertGreaterThanOrEqual(finish.duration, 0.12)
+        XCTAssertLessThanOrEqual(finish.duration, 0.30)
+    }
 }

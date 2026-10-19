@@ -23,4 +23,19 @@ public enum InteractiveTakeover {
             return min(1.0, max(0.0, p))
         }
     }
+
+    /// Resolves the starting progress, target, and duration for finishing an interactive presentation.
+    /// Guarantees that finishing towards 1.0 (commit open or cancel close) never resets
+    /// the starting progress to 0.
+    public static func finishParameters(
+        currentProgress: CGFloat,
+        target: CGFloat
+    ) -> (from: CGFloat, to: CGFloat, duration: Double, isDismissing: Bool) {
+        let clampedCurrent = min(1.0, max(0.0, currentProgress))
+        let clampedTarget = min(1.0, max(0.0, target))
+        let distance = abs(clampedTarget - clampedCurrent)
+        let duration = max(0.12, min(0.30, Double(distance * 0.32)))
+        let isDismissing = clampedTarget <= 0.001
+        return (from: clampedCurrent, to: clampedTarget, duration: duration, isDismissing: isDismissing)
+    }
 }

@@ -700,9 +700,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         activeAnimationStyle = animationStyle
         isInteractiveOpening = true
         presentationGeneration &+= 1
-        store.beginPresenting()
-
         let baseProgress = interactiveTakeoverBaseProgress ?? 0.0
+        store.beginPresenting()
+        store.presentationProgress = baseProgress
 
         launchpadPanel.setFrame(screen.frame, display: false)
         launchpadPanel.animationBehavior = .none
@@ -736,13 +736,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         isInteractiveFinishing = true
         isAnimating = true
         let generation = presentationGeneration
+        let currentProgress = store.presentationProgress
         if target <= 0.001 {
             store.beginDismissing()
         } else {
             store.beginPresenting()
+            store.presentationProgress = currentProgress
         }
-
-        let currentProgress = store.presentationProgress
         let distance = abs(target - currentProgress)
         let duration = max(0.12, min(0.30, CFTimeInterval(distance * 0.32)))
 
