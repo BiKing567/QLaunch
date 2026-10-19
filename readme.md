@@ -16,7 +16,7 @@
   <b>本分支基于 <a href="https://github.com/qzrzz/QLaunch">qzrzz/QLaunch</a> 进行了多项手势、动画与稳定性的深度重构优化。</b>
 </p>
 
-- 📦 **本分支最新下载**：[BiKing567/QLaunch Releases (V1.1.1)](https://github.com/BiKing567/QLaunch/releases)
+- 📦 **本分支最新下载**：[BiKing567/QLaunch Releases (V1.1.2)](https://github.com/BiKing567/QLaunch/releases)
 - 🏠 **原项目主页**：[https://qzrzz.com/QLaunch/](https://qzrzz.com/QLaunch/)
 - 🔗 **原项目仓库**：[https://github.com/qzrzz/QLaunch](https://github.com/qzrzz/QLaunch)
 
