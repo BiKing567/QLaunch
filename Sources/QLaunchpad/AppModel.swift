@@ -11,11 +11,27 @@ enum QLaunchpadPreferences {
     static let showMenuBarIconKey = "showMenuBarIcon"
     static let showDockIconKey = "showDockIcon"
     static let loopPagesKey = "loopPages"
+    static let showDockInLaunchpadKey = "showDockInLaunchpad"
 
     // Default to a Dock-visible app. The menu bar icon is opt-in.
     static let defaultShowMenuBarIcon = false
     static let defaultShowDockIcon = true
     static let defaultLoopPages = true
+    static let defaultShowDockInLaunchpad = false
+}
+
+extension LaunchpadSafeInsets {
+    public static func current(for screen: NSScreen?) -> LaunchpadSafeInsets {
+        guard let screen else { return .zero }
+        let frame = screen.frame
+        let visible = screen.visibleFrame
+        return LaunchpadSafeInsets(
+            top: max(0, frame.maxY - visible.maxY),
+            left: max(0, visible.minX - frame.minX),
+            bottom: max(0, visible.minY - frame.minY),
+            right: max(0, frame.maxX - visible.maxX)
+        )
+    }
 }
 
 enum LaunchpadHotKeyPreferences {
@@ -528,6 +544,13 @@ final class AppStore: ObservableObject {
             NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
         }
     }
+    @Published var showSystemDock: Bool {
+        didSet {
+            UserDefaults.standard.set(showSystemDock, forKey: QLaunchpadPreferences.showDockInLaunchpadKey)
+            NotificationCenter.default.post(name: .qlaunchpadShowSystemDockChanged, object: nil)
+        }
+    }
+    @Published var safeInsets: LaunchpadSafeInsets = .zero
 
     /// Continuous page position (0 = first page). Driven by scroll + spring settle.
     ///
@@ -634,6 +657,7 @@ final class AppStore: ObservableObject {
         let defaults = UserDefaults.standard
         customApplicationSourcePaths = defaults.stringArray(forKey: LaunchpadPersistence.customSourcesKey) ?? []
         showHiddenAppsInSearch = defaults.bool(forKey: LaunchpadPersistence.showHiddenAppsKey)
+        showSystemDock = defaults.bool(forKey: QLaunchpadPreferences.showDockInLaunchpadKey)
         layoutMode = LaunchpadLayoutMode(
             storageValue: defaults.string(forKey: LaunchpadPersistence.layoutModeKey)
         )
@@ -1418,6 +1442,7 @@ final class AppStore: ObservableObject {
             in: bounds,
             pageCount: pageCount,
             currentPage: currentPage,
+            safeBottomInset: safeInsets.bottom,
             requireHitPad: !scrubbing,
             flipped: flipped
         ) else { return false }

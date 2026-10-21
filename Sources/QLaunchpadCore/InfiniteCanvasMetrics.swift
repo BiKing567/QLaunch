@@ -17,6 +17,7 @@ public struct InfiniteCanvasMetrics: Equatable, Sendable {
     public let viewportCenter: CGPoint
     public let availableSize: CGSize
     public let maximumScale: CGFloat
+    public let safeInsets: LaunchpadSafeInsets
 
     private let centersIncompleteLastRow: Bool
 
@@ -24,22 +25,25 @@ public struct InfiniteCanvasMetrics: Equatable, Sendable {
         size: CGSize,
         itemCount: Int,
         adaptsToItemCount: Bool = false,
-        maximumScale: CGFloat = 1
+        maximumScale: CGFloat = 1,
+        safeInsets: LaunchpadSafeInsets = .zero
     ) {
         self.size = size
         self.itemCount = max(itemCount, 0)
         self.maximumScale = max(maximumScale, 1)
+        self.safeInsets = safeInsets
         centersIncompleteLastRow = adaptsToItemCount
 
         let iconSize: CGFloat = 128
         let hInset: CGFloat = 80
-        let vInsetTop: CGFloat = 120
-        let vInsetBottom: CGFloat = 96
-        let availableWidth = max(size.width - hInset * 2, 1)
+        let vInsetTop: CGFloat = 120 + safeInsets.top
+        let vInsetBottom: CGFloat = 96 + safeInsets.bottom
+        let usableWidth = max(size.width - safeInsets.left - safeInsets.right, 1)
+        let availableWidth = max(usableWidth - hInset * 2, 1)
         let availableHeight = max(size.height - vInsetTop - vInsetBottom, 1)
         availableSize = CGSize(width: availableWidth, height: availableHeight)
         viewportCenter = CGPoint(
-            x: size.width * 0.5,
+            x: safeInsets.left + usableWidth * 0.5,
             y: vInsetTop + availableHeight * 0.5
         )
 

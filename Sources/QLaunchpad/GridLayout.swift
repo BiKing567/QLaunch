@@ -136,6 +136,7 @@ struct GridMetrics {
     static var iconPointSize: CGFloat { current.layoutIconPointSize }
 
     let size: CGSize
+    let safeInsets: LaunchpadSafeInsets
     let cellWidth: CGFloat
     let cellHeight: CGFloat
     let gridWidth: CGFloat
@@ -144,13 +145,15 @@ struct GridMetrics {
     let gridTop: CGFloat
     let iconSize: CGFloat
 
-    init(size: CGSize) {
+    init(size: CGSize, safeInsets: LaunchpadSafeInsets = .zero) {
         self.size = size
+        self.safeInsets = safeInsets
         iconSize = Self.iconPointSize
 
         // Horizontal: 128pt icon + breathing room for 6 columns on typical displays.
         let hInset: CGFloat = 80
-        let availableWidth = max(size.width - hInset * 2, 1)
+        let usableWidth = max(size.width - safeInsets.left - safeInsets.right, 1)
+        let availableWidth = max(usableWidth - hInset * 2, 1)
         let minGap: CGFloat = 28
         let idealCell = availableWidth / CGFloat(Self.columns)
         let maxCellWidth = max(220, iconSize + minGap)
@@ -158,8 +161,13 @@ struct GridMetrics {
         cellWidth = iconSize
             + (unscaledCellWidth - iconSize) * Self.current.spacingScale
 
-        let vertical = Self.verticalPlacement(screenHeight: size.height, iconSize: iconSize)
-        let availableHeight = max(size.height - vertical.insetTop - vertical.insetBottom, 1)
+        let vertical = Self.verticalPlacement(
+            screenHeight: size.height,
+            iconSize: iconSize,
+            safeInsets: safeInsets
+        )
+        let usableHeight = max(size.height - safeInsets.top - safeInsets.bottom, 1)
+        let availableHeight = max(usableHeight - vertical.insetTop - vertical.insetBottom, 1)
         let idealRow = availableHeight / CGFloat(Self.rows)
         let unscaledCellHeight = min(
             max(idealRow, iconSize + vertical.minCellExtra),
@@ -170,18 +178,20 @@ struct GridMetrics {
 
         gridWidth = cellWidth * CGFloat(Self.columns)
         gridHeight = cellHeight * CGFloat(Self.rows)
-        gridLeft = (size.width - gridWidth) / 2
+        gridLeft = safeInsets.left + (usableWidth - gridWidth) / 2
         if vertical.centerInChromeBand {
             gridTop = Self.centeredGridTop(
                 screenHeight: size.height,
                 gridHeight: gridHeight,
                 cellHeight: cellHeight,
                 iconSize: iconSize,
-                placement: vertical
+                placement: vertical,
+                safeInsets: safeInsets
             )
         } else {
-            // Prefer optical center slightly above geometric center (search field above).
-            gridTop = max(vertical.insetTop, (size.height - gridHeight) / 2 - vertical.opticalLift)
+            // Prefer optical center slightly above geometric center in usable space.
+            let opticalCenterY = safeInsets.top + (usableHeight - gridHeight) / 2 - vertical.opticalLift
+            gridTop = max(safeInsets.top + vertical.insetTop, opticalCenterY)
         }
     }
 
@@ -199,7 +209,8 @@ struct GridMetrics {
 
     private static func verticalPlacement(
         screenHeight: CGFloat,
-        iconSize: CGFloat
+        iconSize: CGFloat,
+        safeInsets: LaunchpadSafeInsets
     ) -> VerticalPlacement {
         let comfortable = VerticalPlacement(
             insetTop: 120,
@@ -211,10 +222,11 @@ struct GridMetrics {
         )
         guard current == .sevenByFive else { return comfortable }
 
+        let usableHeight = max(screenHeight - safeInsets.top - safeInsets.bottom, 1)
         let comfortableBlock = (iconSize + comfortable.minCellExtra) * CGFloat(rows)
             + comfortable.insetTop
             + comfortable.insetBottom
-        guard screenHeight + 0.5 < comfortableBlock else { return comfortable }
+        guard usableHeight + 0.5 < comfortableBlock else { return comfortable }
 
         // Search field occupies 36…74; page capsule sits ~36pt from the bottom.
         let chromeTop = LaunchpadFieldHitArea.topInset
@@ -241,11 +253,14 @@ struct GridMetrics {
         gridHeight: CGFloat,
         cellHeight: CGFloat,
         iconSize: CGFloat,
-        placement: VerticalPlacement
+        placement: VerticalPlacement,
+        safeInsets: LaunchpadSafeInsets
     ) -> CGFloat {
-        let opticalTop = (screenHeight - gridHeight) / 2 - placement.opticalLift
-        let minTop = placement.insetTop - cellHeight * 0.5 + iconSize * 0.5
-        let maxTop = screenHeight - placement.insetBottom - gridHeight
+        let usableHeight = max(screenHeight - safeInsets.top - safeInsets.bottom, 1)
+        let bandAvailable = usableHeight - placement.insetTop - placement.insetBottom
+        let opticalTop = safeInsets.top + placement.insetTop + (bandAvailable - gridHeight) / 2 - placement.opticalLift
+        let minTop = safeInsets.top + placement.insetTop - cellHeight * 0.5 + iconSize * 0.5
+        let maxTop = screenHeight - safeInsets.bottom - placement.insetBottom - gridHeight
         if maxTop + 0.5 < minTop {
             return minTop
         }

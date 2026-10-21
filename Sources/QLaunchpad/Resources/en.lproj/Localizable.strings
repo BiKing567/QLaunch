@@ -19,6 +19,8 @@
 "settings.showAppNames" = "Show App Names";
 "settings.loopPages" = "Loop Pages";
 "settings.loopPages.detail" = "Continue past the last page to wrap back to the first, and vice versa";
+"settings.showDockInLaunchpad" = "Show Dock in Launchpad";
+"settings.showDockInLaunchpad.detail" = "Keep the macOS Dock visible in Launchpad and adjust icon spacing to avoid overlap";
 "settings.layout" = "Layout";
 "settings.renderQuality" = "Rendering Quality";
 "settings.renderQuality.applying" = "Applying rendering quality…";

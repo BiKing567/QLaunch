@@ -19,6 +19,8 @@
 "settings.showAppNames" = "アプリ名を表示";
 "settings.loopPages" = "ページのループ切り替え";
 "settings.loopPages.detail" = "最後のページからさらに進むと最初のページに戻ります（逆も同様）";
+"settings.showDockInLaunchpad" = "LaunchpadでDockを表示";
+"settings.showDockInLaunchpad.detail" = "Launchpadを開いている間もmacOSのDockを表示し、アイコンと重ならないようレイアウトを調整します";
 "settings.layout" = "レイアウト";
 "settings.renderQuality" = "レンダリング品質";
 "settings.renderQuality.applying" = "レンダリング品質を適用中…";

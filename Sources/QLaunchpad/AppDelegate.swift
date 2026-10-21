@@ -139,6 +139,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(showSystemDockChanged),
+            name: .qlaunchpadShowSystemDockChanged,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(appWindowDidBecomeKey(_:)),
             name: NSWindow.didBecomeKeyNotification,
             object: nil
@@ -213,8 +219,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             ?? NSScreen.screens.first
     }
 
+    private func updateSafeInsets(for screen: NSScreen) {
+        if store.showSystemDock {
+            store.safeInsets = LaunchpadSafeInsets.current(for: screen)
+        } else {
+            store.safeInsets = .zero
+        }
+    }
+
+    @objc private func showSystemDockChanged() {
+        guard let screen = launchpadPanel?.screen ?? currentTargetScreen else { return }
+        updateSafeInsets(for: screen)
+        launchpadPanel?.level = store.showSystemDock ? NSWindow.Level(rawValue: 19) : .screenSaver + 1
+        containerView?.needsLayout = true
+        containerView?.metal.needsDisplay = true
+    }
+
     @objc private func screensChanged() {
         guard let screen = launchpadPanel?.screen ?? currentTargetScreen else { return }
+        updateSafeInsets(for: screen)
         if launchpadPanel.isVisible {
             launchpadPanel.setFrame(screen.frame, display: true)
         }
@@ -228,7 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        panel.level = .screenSaver + 1
+        panel.level = store.showSystemDock ? NSWindow.Level(rawValue: 19) : .screenSaver + 1
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.hidesOnDeactivate = false
         panel.isOpaque = false
@@ -290,8 +313,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// System Settings. Hide the fullscreen overlay so those windows are
     /// not covered.
     func applicationDidResignActive(_ notification: Notification) {
-        guard settingsWindow?.isVisible == true else { return }
-        dismissLaunchpad()
+        if settingsWindow?.isVisible == true || store.showSystemDock {
+            dismissLaunchpad()
+        }
     }
 
     /// Sparkle and other in-app windows stay at the normal level. If one
@@ -704,6 +728,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         store.beginPresenting()
         store.presentationProgress = baseProgress
 
+        updateSafeInsets(for: screen)
+        launchpadPanel.level = store.showSystemDock ? NSWindow.Level(rawValue: 19) : .screenSaver + 1
         launchpadPanel.setFrame(screen.frame, display: false)
         launchpadPanel.animationBehavior = .none
         containerView.prepareForInteractiveShow(on: screen, style: animationStyle, initialProgress: baseProgress)
@@ -790,6 +816,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         LaunchpadTrackpadGestureCenter.shared.isLaunchpadPresented = true
         containerView.metal.beginPresentationHold()
 
+        updateSafeInsets(for: screen)
+        launchpadPanel.level = store.showSystemDock ? NSWindow.Level(rawValue: 19) : .screenSaver + 1
         launchpadPanel.setFrame(screen.frame, display: false)
         launchpadPanel.animationBehavior = .none
         containerView.prepareForShow(on: screen, animationStyle: animationStyle)

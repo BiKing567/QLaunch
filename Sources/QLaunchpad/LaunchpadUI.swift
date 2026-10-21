@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import QLaunchpadCore
 import SwiftUI
 
 extension Notification.Name {
@@ -14,6 +15,7 @@ extension Notification.Name {
     static let qlaunchpadBackgroundChanged = Notification.Name("QLaunchpadBackgroundChanged")
     /// Posted when a background icon bake finishes (may batch multiple).
     static let qlaunchpadIconTexturesUpdated = Notification.Name("QLaunchpadIconTexturesUpdated")
+    static let qlaunchpadShowSystemDockChanged = Notification.Name("QLaunchpadShowSystemDockChanged")
 }
 
 /// Overlay hosting view that only intercepts hits in the search / chrome regions.
@@ -21,6 +23,7 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
     var pageCount = 0
     var currentPage = 0
     var isSearching = false
+    var safeInsets: LaunchpadSafeInsets = .zero
     var onSelectPageAt: ((NSPoint) -> Void)?
     private var isScrubbingPages = false
 
@@ -77,7 +80,7 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
     }
 
     private var searchPadRect: NSRect {
-        LaunchpadFieldHitArea.rect(in: bounds, flipped: isFlipped)
+        LaunchpadFieldHitArea.rect(in: bounds, safeTopInset: safeInsets.top, flipped: isFlipped)
     }
 
     private var pageIndicatorRect: NSRect {
@@ -85,6 +88,7 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
             in: bounds,
             pageCount: pageCount,
             currentPage: currentPage,
+            safeBottomInset: safeInsets.bottom,
             flipped: isFlipped
         )
     }
@@ -104,9 +108,9 @@ enum LaunchpadFieldHitArea {
         )
     }
 
-    static func rect(in bounds: NSRect, flipped: Bool = false) -> NSRect {
+    static func rect(in bounds: NSRect, safeTopInset: CGFloat = 0, flipped: Bool = false) -> NSRect {
         let pad = padSize
-        let fromTop = topInset + fieldSize.height / 2 - pad.height / 2
+        let fromTop = topInset + safeTopInset + fieldSize.height / 2 - pad.height / 2
         let y = flipped ? fromTop : bounds.height - fromTop - pad.height
         return NSRect(
             x: (bounds.width - pad.width) / 2,
@@ -150,12 +154,14 @@ enum LaunchpadPageIndicatorHitArea {
         in bounds: NSRect,
         pageCount: Int,
         currentPage: Int,
+        safeBottomInset: CGFloat = 0,
         flipped: Bool = false
     ) -> NSRect {
         let size = visualSize(pageCount: pageCount, currentPage: currentPage)
+        let totalBottomInset = bottomInset + safeBottomInset
         let y = flipped
-            ? bounds.height - bottomInset - size.height
-            : bottomInset
+            ? bounds.height - totalBottomInset - size.height
+            : totalBottomInset
         return NSRect(
             x: (bounds.width - size.width) / 2,
             y: y,
@@ -168,12 +174,14 @@ enum LaunchpadPageIndicatorHitArea {
         in bounds: NSRect,
         pageCount: Int,
         currentPage: Int,
+        safeBottomInset: CGFloat = 0,
         flipped: Bool = false
     ) -> NSRect {
         visualRect(
             in: bounds,
             pageCount: pageCount,
             currentPage: currentPage,
+            safeBottomInset: safeBottomInset,
             flipped: flipped
         ).insetBy(dx: -hitSlopX, dy: -hitSlopY)
     }
@@ -183,6 +191,7 @@ enum LaunchpadPageIndicatorHitArea {
         in bounds: NSRect,
         pageCount: Int,
         currentPage: Int,
+        safeBottomInset: CGFloat = 0,
         requireHitPad: Bool = true,
         flipped: Bool = false
     ) -> Int? {
@@ -192,6 +201,7 @@ enum LaunchpadPageIndicatorHitArea {
                 in: bounds,
                 pageCount: pageCount,
                 currentPage: currentPage,
+                safeBottomInset: safeBottomInset,
                 flipped: flipped
             )
             guard pad.contains(point) else { return nil }
@@ -200,6 +210,7 @@ enum LaunchpadPageIndicatorHitArea {
             in: bounds,
             pageCount: pageCount,
             currentPage: currentPage,
+            safeBottomInset: safeBottomInset,
             flipped: flipped
         )
         guard !centers.isEmpty else { return nil }
@@ -219,12 +230,14 @@ enum LaunchpadPageIndicatorHitArea {
         in bounds: NSRect,
         pageCount: Int,
         currentPage: Int,
+        safeBottomInset: CGFloat = 0,
         flipped: Bool = false
     ) -> [CGFloat] {
         let visual = visualRect(
             in: bounds,
             pageCount: pageCount,
             currentPage: currentPage,
+            safeBottomInset: safeBottomInset,
             flipped: flipped
         )
         var x = visual.minX + horizontalPadding
@@ -373,6 +386,7 @@ final class LaunchpadContainerView: NSView {
         overlayView.pageCount = store.pageCount
         overlayView.currentPage = store.currentPage
         overlayView.isSearching = store.isSearching
+        overlayView.safeInsets = store.safeInsets
     }
 
     override func layout() {
@@ -537,17 +551,17 @@ struct LaunchpadOverlayView: View {
                             }
                             .accessibilityHidden(true)
                     }
-                    .padding(.top, LaunchpadFieldHitArea.topInset)
+                    .padding(.top, LaunchpadFieldHitArea.topInset + store.safeInsets.top)
                     Spacer(minLength: 0)
                     PageIndicator(store: store)
-                        .padding(.bottom, LaunchpadPageIndicatorHitArea.bottomInset)
+                        .padding(.bottom, LaunchpadPageIndicatorHitArea.bottomInset + store.safeInsets.bottom)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 if store.isDraggingFolderApp {
                     FolderRemovalDropZone(isTargeted: store.isFolderRemovalTargeted)
                         .frame(maxHeight: .infinity, alignment: .bottom)
-                        .padding(.bottom, 76)
+                        .padding(.bottom, 76 + store.safeInsets.bottom)
                         .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
             }

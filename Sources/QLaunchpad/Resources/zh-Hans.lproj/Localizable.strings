@@ -19,6 +19,8 @@
 "settings.showAppNames" = "显示应用名称";
 "settings.loopPages" = "循环翻页";
 "settings.loopPages.detail" = "翻到最后一页时继续翻页可回到第一页，反之亦然";
+"settings.showDockInLaunchpad" = "在启动台中显示程序坞";
+"settings.showDockInLaunchpad.detail" = "在启动台界面保留系统程序坞并避让图标布局，方便随时切换应用";
 "settings.layout" = "布局";
 "settings.renderQuality" = "渲染质量";
 "settings.renderQuality.applying" = "正在应用渲染质量…";

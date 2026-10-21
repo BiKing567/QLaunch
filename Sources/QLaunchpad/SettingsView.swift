@@ -92,6 +92,8 @@ private struct GeneralSettingsView: View {
     @AppStorage("showLabels") private var showLabels = true
     @AppStorage(QLaunchpadPreferences.loopPagesKey)
     private var loopPages = QLaunchpadPreferences.defaultLoopPages
+    @AppStorage(QLaunchpadPreferences.showDockInLaunchpadKey)
+    private var showDockInLaunchpad = QLaunchpadPreferences.defaultShowDockInLaunchpad
     @AppStorage(GridLayoutPreset.defaultsKey)
     private var gridLayoutPreset = GridLayoutPreset.defaultPreset.rawValue
     @AppStorage(IconRenderQuality.defaultsKey)
@@ -314,6 +316,20 @@ private struct GeneralSettingsView: View {
                     }
                 }
                 .toggleStyle(.switch)
+                Toggle(isOn: $showDockInLaunchpad) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.showDockInLaunchpad"))
+                        Text(L10n.tr("settings.showDockInLaunchpad.detail"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+                .onChange(of: showDockInLaunchpad) { _, newValue in
+                    store.showSystemDock = newValue
+                    NotificationCenter.default.post(name: .qlaunchpadShowSystemDockChanged, object: nil)
+                }
                 Picker(L10n.tr("settings.layout"), selection: $gridLayoutPreset) {
                     ForEach(GridLayoutPreset.menuGroups.indices, id: \.self) { groupIndex in
                         if groupIndex > 0 {

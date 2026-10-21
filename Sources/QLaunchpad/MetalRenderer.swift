@@ -1119,7 +1119,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             return
         }
 
-        let metrics = GridMetrics(size: bounds.size)
+        let metrics = GridMetrics(size: bounds.size, safeInsets: store.safeInsets)
         let draggedCenter = CGPoint(
             x: dragPoint.x - dragGrabOffset.x,
             y: dragPoint.y - dragGrabOffset.y
@@ -2693,7 +2693,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             size: bounds.size,
             itemCount: itemCount,
             adaptsToItemCount: true,
-            maximumScale: GridLayoutPreset.current.infiniteCanvasMaximumScale
+            maximumScale: GridLayoutPreset.current.infiniteCanvasMaximumScale,
+            safeInsets: store.safeInsets
         )
         let scale = max(metrics.fittedScale, 0.12)
         canvasScale = scale
@@ -2759,7 +2760,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 size: bounds.size,
                 itemCount: items.count,
                 adaptsToItemCount: canvasAdaptive,
-                maximumScale: GridLayoutPreset.current.infiniteCanvasMaximumScale
+                maximumScale: GridLayoutPreset.current.infiniteCanvasMaximumScale,
+                safeInsets: store.safeInsets
             )
             let center = metrics.screenCenter(
                 globalIndex: visualIndex,
@@ -2768,7 +2770,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             )
             return (center, 128 * canvasScale)
         }
-        let metrics = GridMetrics(size: bounds.size)
+        let metrics = GridMetrics(size: bounds.size, safeInsets: store.safeInsets)
         return (
             metrics.iconCenter(globalIndex: visualIndex, pageOffset: pageOffset),
             metrics.iconSize
@@ -2838,7 +2840,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 size: bounds.size,
                 itemCount: itemCount,
                 adaptsToItemCount: true,
-                maximumScale: GridLayoutPreset.current.infiniteCanvasMaximumScale
+                maximumScale: GridLayoutPreset.current.infiniteCanvasMaximumScale,
+                safeInsets: store.safeInsets
             )
             let scale = max(metrics.fittedScale, 0.12)
             let centers = (0..<itemCount).map {
@@ -2846,7 +2849,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             }
             return (centers, 128 * scale)
         }
-        let metrics = GridMetrics(size: bounds.size)
+        let metrics = GridMetrics(size: bounds.size, safeInsets: store.safeInsets)
         let centers = (0..<itemCount).map {
             metrics.iconCenter(globalIndex: Double($0), pageOffset: 0)
         }
@@ -2882,7 +2885,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     size: bounds.size,
                     itemCount: transition.rootItems.count,
                     adaptsToItemCount: transition.rootCanvasAdaptive,
-                    maximumScale: GridLayoutPreset.current.infiniteCanvasMaximumScale
+                    maximumScale: GridLayoutPreset.current.infiniteCanvasMaximumScale,
+                    safeInsets: store.safeInsets
                 ),
                 transition.rootCanvasScale,
                 transition.rootCanvasPan
@@ -3205,7 +3209,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         // backpressure when the GPU falls more than two frames behind.
         frameSlot.availability.wait()
 
-        let metrics = GridMetrics(size: bounds.size)
+        let metrics = GridMetrics(size: bounds.size, safeInsets: store.safeInsets)
         let midX = bounds.midX
         let midY = bounds.height * 0.5
         let pageOffset = contentTransitionPhase == .fadingOut || isFolderTransitionActive
@@ -3984,7 +3988,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             size: bounds.size,
             itemCount: itemCount,
             adaptsToItemCount: canvasStateUsesAdaptiveLayout,
-            maximumScale: canvasMaximumScale
+            maximumScale: canvasMaximumScale,
+            safeInsets: store.safeInsets
         )
     }
 
@@ -4032,7 +4037,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             size: bounds.size,
             itemCount: itemCount,
             adaptsToItemCount: usesAdaptiveLayout,
-            maximumScale: preset.infiniteCanvasMaximumScale
+            maximumScale: preset.infiniteCanvasMaximumScale,
+            safeInsets: store.safeInsets
         )
         store.setInfiniteCanvasNavigationColumns(metrics.columnCount)
         // Reorder, grouping, and drawable-size callbacks must keep the user's
@@ -4068,7 +4074,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 itemCount: canvasStateItemCount,
                 adaptsToItemCount: canvasStateUsesAdaptiveLayout,
                 maximumScale: canvasStatePreset?.infiniteCanvasMaximumScale
-                    ?? preset.infiniteCanvasMaximumScale
+                    ?? preset.infiniteCanvasMaximumScale,
+                safeInsets: store.safeInsets
             )
             let preserved = metrics.cameraPreservingGridPoint(
                 from: oldMetrics,
@@ -4443,7 +4450,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
     private func layoutItemIndex(at point: CGPoint, hitRadiusScale: CGFloat = 0.62) -> Int? {
         guard GridLayoutPreset.current.isInfiniteCanvas else {
-            let metrics = GridMetrics(size: bounds.size)
+            let metrics = GridMetrics(size: bounds.size, safeInsets: store.safeInsets)
             guard let hit = metrics.hitTest(
                 point: point,
                 pageOffset: interactionPageOffset,
@@ -4620,7 +4627,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         guard let start = marqueeStart else { return }
         marqueePoint = point
         let rect = selectionRect(from: start, to: point)
-        let metrics = GridMetrics(size: bounds.size)
+        let metrics = GridMetrics(size: bounds.size, safeInsets: store.safeInsets)
         let size = interactionIconPointSize(metrics: metrics)
         let hitIDs = Set(displayedItems.enumerated().compactMap { index, item -> String? in
             let visualIndex = reorderVisualSlots[item.id] ?? Double(index)
@@ -4640,7 +4647,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private func refreshSelectionOverlay() {
         let validIDs = Set(displayedItems.map(\.id))
         selectedItemIDs.formIntersection(validIDs)
-        let metrics = GridMetrics(size: bounds.size)
+        let metrics = GridMetrics(size: bounds.size, safeInsets: store.safeInsets)
         let size = interactionIconPointSize(metrics: metrics)
         if didDrag, selectedItemIDs.count > 1, let started = multiDragStartedAt {
             let progress = smoothstep(min(1, CGFloat((CACurrentMediaTime() - started) / 0.18)))
@@ -4733,7 +4740,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             return
         }
 
-        let metrics = GridMetrics(size: bounds.size)
+        let metrics = GridMetrics(size: bounds.size, safeInsets: store.safeInsets)
         if let index = layoutItemIndex(at: dragStart) {
             if displayedItems.indices.contains(index) {
                 let item = displayedItems[index]

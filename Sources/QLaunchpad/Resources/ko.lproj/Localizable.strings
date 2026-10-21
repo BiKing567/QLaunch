@@ -19,6 +19,8 @@
 "settings.showAppNames" = "앱 이름 표시";
 "settings.loopPages" = "페이지 순환";
 "settings.loopPages.detail" = "마지막 페이지에서 계속 넘기면 첫 페이지로 돌아갑니다(반대도 마찬가지)";
+"settings.showDockInLaunchpad" = "Launchpad에서 Dock 표시";
+"settings.showDockInLaunchpad.detail" = "Launchpad가 열려 있을 때도 macOS Dock을 표시하고 아이콘이 겹치지 않도록 간격을 조정합니다";
 "settings.layout" = "레이아웃";
 "settings.renderQuality" = "렌더링 품질";
 "settings.renderQuality.applying" = "렌더링 품질 적용 중…";
