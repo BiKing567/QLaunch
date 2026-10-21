@@ -1216,9 +1216,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     private var folderRemovalDropRect: CGRect {
-        CGRect(
-            x: bounds.midX - 140,
-            y: max(0, bounds.height - 145),
+        let usableWidth = max(bounds.width - store.safeInsets.left - store.safeInsets.right, 1)
+        let centerX = store.safeInsets.left + usableWidth * 0.5
+        return CGRect(
+            x: centerX - 140,
+            y: max(0, bounds.height - 145 - store.safeInsets.bottom),
             width: 280,
             height: 85
         )
@@ -4701,7 +4703,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         multiReorderTargetID = nil
         panStartPoint = dragStart
 
-        if LaunchpadFieldHitArea.rect(in: bounds).contains(dragStart) {
+        if LaunchpadFieldHitArea.rect(in: bounds, safeInsets: store.safeInsets).contains(dragStart) {
             return
         }
         if LaunchpadPageIndicatorHitArea.isEnabled(
@@ -4710,7 +4712,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         ), LaunchpadPageIndicatorHitArea.rect(
             in: bounds,
             pageCount: store.pageCount,
-            currentPage: store.currentPage
+            currentPage: store.currentPage,
+            safeInsets: store.safeInsets
         ).contains(dragStart) {
             pageIndicatorClick = true
             return
@@ -4826,7 +4829,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     override func menu(for event: NSEvent) -> NSMenu? {
         guard contentTransitionPhase == .idle, !isFolderTransitionActive, !isSpacePanActive else { return nil }
         let point = convert(event.locationInWindow, from: nil)
-        if LaunchpadFieldHitArea.rect(in: bounds).contains(point) {
+        if LaunchpadFieldHitArea.rect(in: bounds, safeInsets: store.safeInsets).contains(point) {
             return nil
         }
         if LaunchpadPageIndicatorHitArea.isEnabled(
@@ -4835,7 +4838,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         ), LaunchpadPageIndicatorHitArea.rect(
             in: bounds,
             pageCount: store.pageCount,
-            currentPage: store.currentPage
+            currentPage: store.currentPage,
+            safeInsets: store.safeInsets
         ).contains(point) {
             return nil
         }

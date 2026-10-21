@@ -32,6 +32,10 @@ extension Notification.Name {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    /// Window level just underneath the macOS Dock so the Dock remains visible
+    /// and interactive above the Launchpad window.
+    private static let dockSubLevel = NSWindow.Level(Int(CGWindowLevelForKey(.dockWindow)) - 1)
+
     private let store = AppStore()
     private var launchpadPanel: LaunchpadPanel!
     private var containerView: LaunchpadContainerView!
@@ -230,7 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func showSystemDockChanged() {
         guard let screen = launchpadPanel?.screen ?? currentTargetScreen else { return }
         updateSafeInsets(for: screen)
-        launchpadPanel?.level = store.showSystemDock ? NSWindow.Level(rawValue: 19) : .screenSaver + 1
+        launchpadPanel?.level = store.showSystemDock ? Self.dockSubLevel : .screenSaver + 1
         containerView?.needsLayout = true
         containerView?.metal.needsDisplay = true
     }
@@ -251,7 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        panel.level = store.showSystemDock ? NSWindow.Level(rawValue: 19) : .screenSaver + 1
+        panel.level = store.showSystemDock ? Self.dockSubLevel : .screenSaver + 1
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.hidesOnDeactivate = false
         panel.isOpaque = false
@@ -729,7 +733,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         store.presentationProgress = baseProgress
 
         updateSafeInsets(for: screen)
-        launchpadPanel.level = store.showSystemDock ? NSWindow.Level(rawValue: 19) : .screenSaver + 1
+        launchpadPanel.level = store.showSystemDock ? Self.dockSubLevel : .screenSaver + 1
         launchpadPanel.setFrame(screen.frame, display: false)
         launchpadPanel.animationBehavior = .none
         containerView.prepareForInteractiveShow(on: screen, style: animationStyle, initialProgress: baseProgress)
@@ -817,7 +821,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         containerView.metal.beginPresentationHold()
 
         updateSafeInsets(for: screen)
-        launchpadPanel.level = store.showSystemDock ? NSWindow.Level(rawValue: 19) : .screenSaver + 1
+        launchpadPanel.level = store.showSystemDock ? Self.dockSubLevel : .screenSaver + 1
         launchpadPanel.setFrame(screen.frame, display: false)
         launchpadPanel.animationBehavior = .none
         containerView.prepareForShow(on: screen, animationStyle: animationStyle)

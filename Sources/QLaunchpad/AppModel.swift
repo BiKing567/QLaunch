@@ -1442,7 +1442,7 @@ final class AppStore: ObservableObject {
             in: bounds,
             pageCount: pageCount,
             currentPage: currentPage,
-            safeBottomInset: safeInsets.bottom,
+            safeInsets: safeInsets,
             requireHitPad: !scrubbing,
             flipped: flipped
         ) else { return false }

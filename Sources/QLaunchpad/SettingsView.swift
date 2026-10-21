@@ -328,7 +328,6 @@ private struct GeneralSettingsView: View {
                 .toggleStyle(.switch)
                 .onChange(of: showDockInLaunchpad) { _, newValue in
                     store.showSystemDock = newValue
-                    NotificationCenter.default.post(name: .qlaunchpadShowSystemDockChanged, object: nil)
                 }
                 Picker(L10n.tr("settings.layout"), selection: $gridLayoutPreset) {
                     ForEach(GridLayoutPreset.menuGroups.indices, id: \.self) { groupIndex in

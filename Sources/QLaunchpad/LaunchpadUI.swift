@@ -80,7 +80,7 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
     }
 
     private var searchPadRect: NSRect {
-        LaunchpadFieldHitArea.rect(in: bounds, safeTopInset: safeInsets.top, flipped: isFlipped)
+        LaunchpadFieldHitArea.rect(in: bounds, safeInsets: safeInsets, flipped: isFlipped)
     }
 
     private var pageIndicatorRect: NSRect {
@@ -88,7 +88,7 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
             in: bounds,
             pageCount: pageCount,
             currentPage: currentPage,
-            safeBottomInset: safeInsets.bottom,
+            safeInsets: safeInsets,
             flipped: isFlipped
         )
     }
@@ -108,16 +108,30 @@ enum LaunchpadFieldHitArea {
         )
     }
 
-    static func rect(in bounds: NSRect, safeTopInset: CGFloat = 0, flipped: Bool = false) -> NSRect {
+    static func rect(
+        in bounds: NSRect,
+        safeInsets: LaunchpadSafeInsets = .zero,
+        flipped: Bool = false
+    ) -> NSRect {
         let pad = padSize
-        let fromTop = topInset + safeTopInset + fieldSize.height / 2 - pad.height / 2
+        let usableWidth = max(bounds.width - safeInsets.left - safeInsets.right, 1)
+        let x = safeInsets.left + (usableWidth - pad.width) / 2
+        let fromTop = topInset + safeInsets.top + fieldSize.height / 2 - pad.height / 2
         let y = flipped ? fromTop : bounds.height - fromTop - pad.height
         return NSRect(
-            x: (bounds.width - pad.width) / 2,
+            x: x,
             y: y,
             width: pad.width,
             height: pad.height
         )
+    }
+
+    static func rect(
+        in bounds: NSRect,
+        safeTopInset: CGFloat,
+        flipped: Bool = false
+    ) -> NSRect {
+        rect(in: bounds, safeInsets: LaunchpadSafeInsets(top: safeTopInset), flipped: flipped)
     }
 }
 
@@ -154,19 +168,37 @@ enum LaunchpadPageIndicatorHitArea {
         in bounds: NSRect,
         pageCount: Int,
         currentPage: Int,
-        safeBottomInset: CGFloat = 0,
+        safeInsets: LaunchpadSafeInsets = .zero,
         flipped: Bool = false
     ) -> NSRect {
         let size = visualSize(pageCount: pageCount, currentPage: currentPage)
-        let totalBottomInset = bottomInset + safeBottomInset
+        let usableWidth = max(bounds.width - safeInsets.left - safeInsets.right, 1)
+        let x = safeInsets.left + (usableWidth - size.width) / 2
+        let totalBottomInset = bottomInset + safeInsets.bottom
         let y = flipped
             ? bounds.height - totalBottomInset - size.height
             : totalBottomInset
         return NSRect(
-            x: (bounds.width - size.width) / 2,
+            x: x,
             y: y,
             width: size.width,
             height: size.height
+        )
+    }
+
+    static func visualRect(
+        in bounds: NSRect,
+        pageCount: Int,
+        currentPage: Int,
+        safeBottomInset: CGFloat,
+        flipped: Bool = false
+    ) -> NSRect {
+        visualRect(
+            in: bounds,
+            pageCount: pageCount,
+            currentPage: currentPage,
+            safeInsets: LaunchpadSafeInsets(bottom: safeBottomInset),
+            flipped: flipped
         )
     }
 
@@ -174,16 +206,32 @@ enum LaunchpadPageIndicatorHitArea {
         in bounds: NSRect,
         pageCount: Int,
         currentPage: Int,
-        safeBottomInset: CGFloat = 0,
+        safeInsets: LaunchpadSafeInsets = .zero,
         flipped: Bool = false
     ) -> NSRect {
         visualRect(
             in: bounds,
             pageCount: pageCount,
             currentPage: currentPage,
-            safeBottomInset: safeBottomInset,
+            safeInsets: safeInsets,
             flipped: flipped
         ).insetBy(dx: -hitSlopX, dy: -hitSlopY)
+    }
+
+    static func rect(
+        in bounds: NSRect,
+        pageCount: Int,
+        currentPage: Int,
+        safeBottomInset: CGFloat,
+        flipped: Bool = false
+    ) -> NSRect {
+        rect(
+            in: bounds,
+            pageCount: pageCount,
+            currentPage: currentPage,
+            safeInsets: LaunchpadSafeInsets(bottom: safeBottomInset),
+            flipped: flipped
+        )
     }
 
     static func pageIndex(
@@ -191,7 +239,7 @@ enum LaunchpadPageIndicatorHitArea {
         in bounds: NSRect,
         pageCount: Int,
         currentPage: Int,
-        safeBottomInset: CGFloat = 0,
+        safeInsets: LaunchpadSafeInsets = .zero,
         requireHitPad: Bool = true,
         flipped: Bool = false
     ) -> Int? {
@@ -201,7 +249,7 @@ enum LaunchpadPageIndicatorHitArea {
                 in: bounds,
                 pageCount: pageCount,
                 currentPage: currentPage,
-                safeBottomInset: safeBottomInset,
+                safeInsets: safeInsets,
                 flipped: flipped
             )
             guard pad.contains(point) else { return nil }
@@ -210,7 +258,7 @@ enum LaunchpadPageIndicatorHitArea {
             in: bounds,
             pageCount: pageCount,
             currentPage: currentPage,
-            safeBottomInset: safeBottomInset,
+            safeInsets: safeInsets,
             flipped: flipped
         )
         guard !centers.isEmpty else { return nil }
@@ -226,18 +274,38 @@ enum LaunchpadPageIndicatorHitArea {
         return best
     }
 
+    static func pageIndex(
+        at point: NSPoint,
+        in bounds: NSRect,
+        pageCount: Int,
+        currentPage: Int,
+        safeBottomInset: CGFloat,
+        requireHitPad: Bool = true,
+        flipped: Bool = false
+    ) -> Int? {
+        pageIndex(
+            at: point,
+            in: bounds,
+            pageCount: pageCount,
+            currentPage: currentPage,
+            safeInsets: LaunchpadSafeInsets(bottom: safeBottomInset),
+            requireHitPad: requireHitPad,
+            flipped: flipped
+        )
+    }
+
     private static func dotCenters(
         in bounds: NSRect,
         pageCount: Int,
         currentPage: Int,
-        safeBottomInset: CGFloat = 0,
+        safeInsets: LaunchpadSafeInsets = .zero,
         flipped: Bool = false
     ) -> [CGFloat] {
         let visual = visualRect(
             in: bounds,
             pageCount: pageCount,
             currentPage: currentPage,
-            safeBottomInset: safeBottomInset,
+            safeInsets: safeInsets,
             flipped: flipped
         )
         var x = visual.minX + horizontalPadding
@@ -566,6 +634,8 @@ struct LaunchpadOverlayView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.leading, store.safeInsets.left)
+            .padding(.trailing, store.safeInsets.right)
             .animation(.easeOut(duration: 0.18), value: store.isDraggingFolderApp)
             .animation(.easeOut(duration: 0.14), value: store.isFolderRemovalTargeted)
         }
