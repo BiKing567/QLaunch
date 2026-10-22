@@ -342,14 +342,41 @@ private struct GeneralSettingsView: View {
                     NotificationCenter.default.post(name: .qlaunchpadGridLayoutChanged, object: nil)
                 }
 
-                Picker(L10n.tr("settings.iconSize"), selection: $iconSizeTier) {
-                    ForEach(IconSizeTier.allCases) { tier in
-                        Text(tier.localizedTitle).tag(tier.rawValue)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(L10n.tr("settings.iconSize"))
+                        Spacer()
+                        Text(IconSizeTier(rawValue: iconSizeTier)?.localizedTitle ?? "")
+                            .foregroundStyle(.secondary)
                     }
-                }
-                .pickerStyle(.menu)
-                .onChange(of: iconSizeTier) { _, _ in
-                    NotificationCenter.default.post(name: .qlaunchpadGridLayoutChanged, object: nil)
+                    Slider(
+                        value: Binding(
+                            get: { Double(iconSizeTier) },
+                            set: { newValue in
+                                let target = Int(newValue.rounded())
+                                if iconSizeTier != target {
+                                    iconSizeTier = target
+                                    NotificationCenter.default.post(name: .qlaunchpadGridLayoutChanged, object: nil)
+                                }
+                            }
+                        ),
+                        in: 1...5,
+                        step: 1
+                    ) {
+                        Text(L10n.tr("settings.iconSize"))
+                    } minimumValueLabel: {
+                        Text("64 pt")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    } maximumValueLabel: {
+                        Text("192 pt")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(L10n.tr("settings.iconSize.detail"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Picker(selection: $iconRenderQuality) {

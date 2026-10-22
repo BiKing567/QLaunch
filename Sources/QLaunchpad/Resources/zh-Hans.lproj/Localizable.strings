@@ -22,6 +22,7 @@
 "settings.showDockInLaunchpad.detail" = "在启动台界面保留系统程序坞并避让图标布局，方便随时切换应用";
 "settings.layout" = "布局";
 "settings.iconSize" = "图标大小";
+"settings.iconSize.detail" = "在 64 pt 到 192 pt 之间调节应用图标大小（共五档）";
 "settings.renderQuality" = "渲染质量";
 "settings.renderQuality.applying" = "正在应用渲染质量…";
 "settings.section.background" = "背景";

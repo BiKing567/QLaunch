@@ -22,6 +22,7 @@
 "settings.showDockInLaunchpad.detail" = "Launchpad가 열려 있을 때도 macOS Dock을 표시하고 아이콘이 겹치지 않도록 간격을 조정합니다";
 "settings.layout" = "레이아웃";
 "settings.iconSize" = "아이콘 크기";
+"settings.iconSize.detail" = "앱 아이콘 크기를 64 pt에서 192 pt까지 5단계로 조절합니다";
 "settings.renderQuality" = "렌더링 품질";
 "settings.renderQuality.applying" = "렌더링 품질 적용 중…";
 "settings.section.background" = "배경";

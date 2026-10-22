@@ -22,6 +22,7 @@
 "settings.showDockInLaunchpad.detail" = "Keep the macOS Dock visible in Launchpad and adjust icon spacing to avoid overlap";
 "settings.layout" = "Layout";
 "settings.iconSize" = "Icon Size";
+"settings.iconSize.detail" = "Adjust app icon size from 64 pt to 192 pt across 5 tiers";
 "settings.renderQuality" = "Rendering Quality";
 "settings.renderQuality.applying" = "Applying rendering quality…";
 "settings.section.background" = "Background";

@@ -22,6 +22,7 @@
 "settings.showDockInLaunchpad.detail" = "Launchpadを開いている間もmacOSのDockを表示し、アイコンと重ならないようレイアウトを調整します";
 "settings.layout" = "レイアウト";
 "settings.iconSize" = "アイコンサイズ";
+"settings.iconSize.detail" = "アプリアイコンのサイズを 64 pt から 192 pt の 5 段階で調整します";
 "settings.renderQuality" = "レンダリング品質";
 "settings.renderQuality.applying" = "レンダリング品質を適用中…";
 "settings.section.background" = "背景";
