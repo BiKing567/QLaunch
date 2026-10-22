@@ -271,14 +271,14 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private var lastGroupingMotionPoint: CGPoint?
     private var lastGroupingMotionTime: CFTimeInterval = 0
     private var groupingMotionSpeed: CGFloat = 0
-    /// Passing over a tile continues to reorder. Holding briefly over its wider
     /// Passing over a tile continues to reorder. Holding briefly over its center
     /// region locks grouping, matching the familiar Launchpad gesture.
-    private let groupingAcquireRadiusScale: CGFloat = 0.55
-    private let groupingReleaseRadiusScale: CGFloat = 0.78
+    private let groupingAcquireRadiusScale: CGFloat = 0.65
+    private let groupingReleaseRadiusScale: CGFloat = 0.85
     private let groupingDwellDuration: CFTimeInterval = 0.25
     private let groupingAcquireSpeedThreshold: CGFloat = 380
     private let groupingBreakoutSpeedThreshold: CGFloat = 850
+    private let groupingSettledSpeedThreshold: CGFloat = 110
     private var didDrag = false
     private var isPanningPage = false
     private var canvasScale: CGFloat = 1
@@ -900,8 +900,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     private func tickDragVisualAnimations(now: CFTimeInterval, dt: CFTimeInterval) {
-        let hoverTarget: CGFloat = didDrag
-            && (groupingCandidateID != nil || dragHoverTargetID != nil) ? 1 : 0
+        let hoverTarget: CGFloat = didDrag && dragHoverTargetID != nil ? 1 : 0
         let hoverStep = CGFloat(1 - exp(-dt * 18))
         dragHoverProgress += (hoverTarget - dragHoverProgress) * hoverStep
         if hoverTarget == 0, dragHoverProgress < 0.001 {
@@ -1158,8 +1157,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             groupingReleaseRadius = iconPointSize * groupingReleaseRadiusScale
         } else {
             let minCellDimension = min(metrics.cellWidth, metrics.cellHeight)
-            groupingAcquireRadius = min(iconPointSize * groupingAcquireRadiusScale, minCellDimension * 0.42)
-            groupingReleaseRadius = min(iconPointSize * groupingReleaseRadiusScale, minCellDimension * 0.58)
+            groupingAcquireRadius = min(iconPointSize * groupingAcquireRadiusScale, minCellDimension * 0.50)
+            groupingReleaseRadius = min(iconPointSize * groupingReleaseRadiusScale, minCellDimension * 0.68)
         }
 
         // Folders only reorder on the root grid. Dwelling on another folder
@@ -1184,8 +1183,14 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 let distance = hypot(draggedCenter.x - center.x, draggedCenter.y - center.y)
 
                 if distance <= groupingReleaseRadius && groupingMotionSpeed <= groupingBreakoutSpeedThreshold {
-                    if dragHoverTargetID == nil, now - groupingCandidateSince >= groupingDwellDuration {
-                        setDragHoverTarget(activeTargetID)
+                    if groupingMotionSpeed <= groupingSettledSpeedThreshold {
+                        if dragHoverTargetID == nil, now - groupingCandidateSince >= groupingDwellDuration {
+                            setDragHoverTarget(activeTargetID)
+                        }
+                    } else {
+                        // Moving within the candidate zone: reset dwell timer so continuous
+                        // motion never falsely accumulates into a folder merge.
+                        groupingCandidateSince = now
                     }
                     edgePageDirection = 0
                     startDisplayLink()
@@ -1197,35 +1202,38 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 groupingCandidateID = nil
             }
 
-            // 2. Scan for a new grouping candidate ONLY when moving at deliberate speed (pausing over icon).
-            // Fast passing movement is a reorder gesture, NOT a grouping intent.
-            if groupingMotionSpeed <= groupingAcquireSpeedThreshold {
-                var nearestCandidate: (id: String, distance: CGFloat)?
-                for (index, item) in displayedItems.enumerated() where item.id != draggedAppID {
-                    let visualIndex = reorderVisualSlots[item.id] ?? Double(index)
-                    let center = interactionIconCenter(globalIndex: visualIndex, metrics: metrics)
-                    let distance = hypot(draggedCenter.x - center.x, draggedCenter.y - center.y)
-                    guard distance <= groupingAcquireRadius else { continue }
-                    if nearestCandidate == nil || distance < nearestCandidate!.distance {
-                        nearestCandidate = (item.id, distance)
-                    }
+            // 2. Scan for a new grouping candidate in the center grouping zone.
+            // When directly centered over an icon, retain the candidate in place so it does not
+            // dodge away before the user has a chance to settle and dwell.
+            var nearestCandidate: (id: String, distance: CGFloat)?
+            for (index, item) in displayedItems.enumerated() where item.id != draggedAppID {
+                let visualIndex = reorderVisualSlots[item.id] ?? Double(index)
+                let center = interactionIconCenter(globalIndex: visualIndex, metrics: metrics)
+                let distance = hypot(draggedCenter.x - center.x, draggedCenter.y - center.y)
+                guard distance <= groupingAcquireRadius else { continue }
+                if nearestCandidate == nil || distance < nearestCandidate!.distance {
+                    nearestCandidate = (item.id, distance)
                 }
+            }
 
-                if let nearestCandidate {
-                    if groupingCandidateID != nearestCandidate.id {
-                        groupingCandidateID = nearestCandidate.id
-                        groupingCandidateSince = now
-                        if dragHoverVisualTargetID != nearestCandidate.id {
-                            dragHoverVisualTargetID = nearestCandidate.id
-                            dragHoverProgress = 0
-                        }
-                    } else if now - groupingCandidateSince >= groupingDwellDuration {
+            if let nearestCandidate {
+                if groupingCandidateID != nearestCandidate.id {
+                    groupingCandidateID = nearestCandidate.id
+                    groupingCandidateSince = now
+                    if dragHoverVisualTargetID != nearestCandidate.id {
+                        dragHoverVisualTargetID = nearestCandidate.id
+                        dragHoverProgress = 0
+                    }
+                } else if groupingMotionSpeed <= groupingSettledSpeedThreshold {
+                    if now - groupingCandidateSince >= groupingDwellDuration {
                         setDragHoverTarget(nearestCandidate.id)
                     }
-                    edgePageDirection = 0
-                    startDisplayLink()
-                    return
+                } else {
+                    groupingCandidateSince = now
                 }
+                edgePageDirection = 0
+                startDisplayLink()
+                return
             }
         }
 
@@ -1236,7 +1244,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         // sorting even while the path crosses another icon.
         guard let source = dragSource, displayedItems.indices.contains(source) else { return }
 
-        guard let destination = layoutItemIndex(at: point, hitRadiusScale: 0.85) else {
+        let draggedCenterAppKit = CGPoint(
+            x: draggedCenter.x,
+            y: bounds.height - draggedCenter.y
+        )
+        guard let destination = layoutItemIndex(at: draggedCenterAppKit, hitRadiusScale: 0.85) else {
             return
         }
         guard displayedItems.indices.contains(destination) else {
@@ -5499,12 +5511,15 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 // If dropping quickly onto an icon (where reorder was paused to await dwell intent),
                 // commit the destination slot move now so the item settles in the new spot.
                 if let source = dragSource, displayedItems.indices.contains(source) {
-                    let releasePoint = convert(event.locationInWindow, from: nil)
+                    let releaseCenterAppKit = CGPoint(
+                        x: dragPoint.x - dragGrabOffset.x,
+                        y: bounds.height - (dragPoint.y - dragGrabOffset.y)
+                    )
                     var destination: Int?
                     if let candidateID = groupingCandidateID,
                        let destIndex = displayedItems.firstIndex(where: { $0.id == candidateID }) {
                         destination = destIndex
-                    } else if let hitDest = layoutItemIndex(at: releasePoint, hitRadiusScale: 0.85),
+                    } else if let hitDest = layoutItemIndex(at: releaseCenterAppKit, hitRadiusScale: 0.85),
                               displayedItems.indices.contains(hitDest) {
                         destination = hitDest
                     }
