@@ -2926,7 +2926,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             )
             folderPlates.append(
                 FolderPlateModel(
-                    id: "transition_\(transition.folderID)",
+                    id: transition.folderID,
                     rect: padRect,
                     alpha: plateAlpha,
                     members: [],

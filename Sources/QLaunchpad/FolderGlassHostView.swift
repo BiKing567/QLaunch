@@ -18,11 +18,16 @@ final class FolderPreviewImageCache {
     private var cache: [String: NSImage] = [:]
     private let iconCache = AppIconCache()
 
-    func previewImage(folderID: String, members: [AppInfo], padSize: CGFloat) -> NSImage? {
+    func previewImage(
+        folderID: String,
+        members: [AppInfo],
+        padSize: CGFloat,
+        iconSize: CGFloat
+    ) -> NSImage? {
         guard !members.isEmpty, padSize >= 8 else { return nil }
         let pixelSize = Int(padSize.rounded())
         let memberIDs = members.prefix(FolderPreviewLayout.capacity).map(\.id).joined(separator: ",")
-        let cacheKey = "\(folderID)|\(memberIDs)|\(pixelSize)"
+        let cacheKey = "\(folderID)|\(memberIDs)|\(pixelSize)|\(Int(iconSize.rounded()))"
         if let existing = cache[cacheKey] {
             return existing
         }
@@ -30,14 +35,14 @@ final class FolderPreviewImageCache {
         let image = NSImage(size: NSSize(width: padSize, height: padSize), flipped: true) { [iconCache] rect in
             guard let context = NSGraphicsContext.current?.cgContext else { return false }
             context.interpolationQuality = .high
-            let folderSize = padSize / 0.8125
+            let folderSize = iconSize
             let miniSize = FolderPreviewLayout.miniSize(in: folderSize)
             let folderCenter = CGPoint(x: padSize * 0.5, y: padSize * 0.5)
 
             // Soft contact shadow for each mini app icon against the dynamic glass
             let shadow = NSShadow()
             shadow.shadowColor = NSColor.black.withAlphaComponent(0.24)
-            shadow.shadowOffset = NSSize(width: 0, height: -1.0 * (folderSize / 128.0))
+            shadow.shadowOffset = NSSize(width: 0, height: 1.0 * (folderSize / 128.0))
             shadow.shadowBlurRadius = 2.0 * (folderSize / 128.0)
             shadow.set()
 
@@ -121,6 +126,12 @@ final class FolderGlassPlateItemView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func layout() {
+        super.layout()
+        glassEffectView?.frame = bounds
+        previewImageView.frame = bounds
+    }
+
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         updateFallbackAppearance()
@@ -142,7 +153,9 @@ final class FolderGlassPlateItemView: NSView {
         frame = rect
         glassEffectView?.frame = bounds
         previewImageView.frame = bounds
-        previewImageView.image = previewImage
+        if previewImageView.image !== previewImage {
+            previewImageView.image = previewImage
+        }
         previewImageView.isHidden = !previewVisible
         alphaValue = CGFloat(alpha)
 
@@ -154,6 +167,17 @@ final class FolderGlassPlateItemView: NSView {
     }
 }
 
+@available(macOS 26.0, *)
+private final class FlippedGlassContainerView: NSGlassEffectContainerView {
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+private final class FlippedContainerView: NSView {
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// Host view placed directly behind `LaunchpadMetalView`.
 ///
 /// On macOS 26+: uses `NSGlassEffectContainerView` with `spacing = 0` for batch-rendering
@@ -162,7 +186,7 @@ final class FolderGlassPlateItemView: NSView {
 @MainActor
 final class FolderGlassHostView: NSView {
     private var containerView: NSView?
-    private let hostView = NSView()
+    private let hostView = FlippedContainerView()
     private var itemsByID: [String: FolderGlassPlateItemView] = [:]
     private let previewCache = FolderPreviewImageCache()
 
@@ -173,10 +197,12 @@ final class FolderGlassHostView: NSView {
         super.init(frame: frame)
         wantsLayer = true
         hostView.wantsLayer = true
+        hostView.autoresizingMask = [.width, .height]
 
         if #available(macOS 26.0, *) {
-            let container = NSGlassEffectContainerView(frame: bounds)
+            let container = FlippedGlassContainerView(frame: bounds)
             container.spacing = 0
+            container.autoresizingMask = [.width, .height]
             container.contentView = hostView
             addSubview(container)
             containerView = container
@@ -219,7 +245,8 @@ final class FolderGlassHostView: NSView {
                 ? previewCache.previewImage(
                     folderID: plate.id,
                     members: plate.members,
-                    padSize: plate.rect.width
+                    padSize: plate.rect.width,
+                    iconSize: plate.iconSize
                 )
                 : nil
 
