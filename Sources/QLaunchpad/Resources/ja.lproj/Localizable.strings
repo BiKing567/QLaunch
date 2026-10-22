@@ -21,6 +21,7 @@
 "settings.showDockInLaunchpad" = "LaunchpadでDockを表示";
 "settings.showDockInLaunchpad.detail" = "Launchpadを開いている間もmacOSのDockを表示し、アイコンと重ならないようレイアウトを調整します";
 "settings.layout" = "レイアウト";
+"settings.iconSize" = "アイコンサイズ";
 "settings.renderQuality" = "レンダリング品質";
 "settings.renderQuality.applying" = "レンダリング品質を適用中…";
 "settings.section.background" = "背景";
@@ -176,8 +177,14 @@
 "animation.zoom" = "ズーム";
 "animation.fade" = "フェード";
 "animation.none" = "なし";
+"grid.infiniteCanvas" = "無限キャンバス";
 "grid.infiniteCanvas.128" = "無限キャンバス (128pt)";
 "grid.infiniteCanvas.256" = "無限キャンバス (256pt)";
+"iconSize.tier1" = "最小 (64 pt)";
+"iconSize.tier2" = "小 (96 pt)";
+"iconSize.tier3" = "標準 (128 pt)";
+"iconSize.tier4" = "大 (160 pt)";
+"iconSize.tier5" = "最大 (192 pt)";
 "context.showInfo" = "情報を見る";
 "context.iconImage" = "アイコン画像";
 "context.downloadCurrentIcon" = "現在のアイコンサイズでダウンロード";

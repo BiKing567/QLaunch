@@ -404,6 +404,12 @@ final class LaunchpadContainerView: NSView {
             name: .qlaunchpadCacheClearRequested,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(gridLayoutChangedNote),
+            name: .qlaunchpadGridLayoutChanged,
+            object: nil
+        )
     }
 
     required init?(coder: NSCoder) {
@@ -452,6 +458,13 @@ final class LaunchpadContainerView: NSView {
         backgroundView.clearCacheAndReload()
         folderHostView.removeAllPlates()
         folderHostView.clearCache()
+    }
+
+    @objc private func gridLayoutChangedNote() {
+        folderHostView.removeAllPlates()
+        folderHostView.clearCache()
+        metalView.needsDisplay = true
+        syncPageIndicatorHitState()
     }
 
     private func syncOverlayAlpha() {

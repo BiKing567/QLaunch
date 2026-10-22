@@ -18,9 +18,8 @@ enum GridLayoutPreset: String, CaseIterable, Identifiable {
     static let defaultsKey = LaunchpadPersistence.gridLayoutPresetKey
     static let defaultPreset: Self = .sixByFour
     static let menuGroups: [[Self]] = [
-        [.fourByTwo, .infiniteCanvas256],
-        [.fiveByFour, .sixByFour, .sevenByFive, .infiniteCanvas],
-        [.sevenByFiveCompact, .eightBySevenCompact],
+        [.fourByTwo, .fiveByFour, .sixByFour, .sevenByFive, .eightBySevenCompact],
+        [.infiniteCanvas]
     ]
 
     var id: Self { self }
@@ -48,14 +47,12 @@ enum GridLayoutPreset: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .fourByTwo: "4 × 2 (256pt)"
-        case .fiveByFour: "5 × 4 (128pt)"
-        case .sixByFour: "6 × 4 (128pt)"
-        case .sevenByFive: "7 × 5 (128pt)"
-        case .infiniteCanvas: L10n.tr("grid.infiniteCanvas.128")
-        case .infiniteCanvas256: L10n.tr("grid.infiniteCanvas.256")
-        case .sevenByFiveCompact: "7 × 5 (64pt)"
-        case .eightBySevenCompact: "8 × 7 (64pt)"
+        case .fourByTwo: "4 × 2"
+        case .fiveByFour: "5 × 4"
+        case .sixByFour: "6 × 4"
+        case .sevenByFive, .sevenByFiveCompact: "7 × 5"
+        case .eightBySevenCompact: "8 × 7"
+        case .infiniteCanvas, .infiniteCanvas256: L10n.tr("grid.infiniteCanvas")
         }
     }
 
@@ -68,32 +65,17 @@ enum GridLayoutPreset: String, CaseIterable, Identifiable {
     }
 
     var iconPointSize: CGFloat {
-        switch self {
-        case .fourByTwo, .infiniteCanvas256: 256
-        case .fiveByFour, .sixByFour, .sevenByFive, .infiniteCanvas: 128
-        case .sevenByFiveCompact, .eightBySevenCompact: 64
-        }
+        IconSizeTier.current.pointSize
     }
 
     /// Compact layouts tighten the clear space between neighboring icons.
     var spacingScale: CGFloat {
-        switch self {
-        case .sevenByFiveCompact: 0.6
-        case .eightBySevenCompact: 0.7
-        case .fourByTwo, .fiveByFour, .sixByFour, .sevenByFive,
-             .infiniteCanvas, .infiniteCanvas256: 1
-        }
+        IconSizeTier.current.spacingScale
     }
 
     /// Texture edge length used to rasterize icons for this layout.
     func iconPixelSize(for quality: IconRenderQuality) -> Int {
-        switch self {
-        case .sevenByFiveCompact, .eightBySevenCompact:
-            128
-        case .fourByTwo, .fiveByFour, .sixByFour, .sevenByFive,
-             .infiniteCanvas, .infiniteCanvas256:
-            Int(iconPointSize * quality.rasterScale)
-        }
+        Int(iconPointSize * quality.rasterScale)
     }
 
     var isInfiniteCanvas: Bool {
@@ -148,26 +130,32 @@ struct GridMetrics {
     init(size: CGSize, safeInsets: LaunchpadSafeInsets = .zero) {
         self.size = size
         self.safeInsets = safeInsets
-        iconSize = Self.iconPointSize
 
-        // Horizontal: 128pt icon + breathing room for 6 columns on typical displays.
+        let requestedIconSize = Self.iconPointSize
         let hInset: CGFloat = 80
         let usableWidth = max(size.width - safeInsets.left - safeInsets.right, 1)
         let availableWidth = max(usableWidth - hInset * 2, 1)
         let minGap: CGFloat = 28
-        let idealCell = availableWidth / CGFloat(Self.columns)
-        let maxCellWidth = max(220, iconSize + minGap)
-        let unscaledCellWidth = min(max(idealCell, iconSize + minGap), maxCellWidth)
-        cellWidth = iconSize
-            + (unscaledCellWidth - iconSize) * Self.current.spacingScale
 
         let vertical = Self.verticalPlacement(
             screenHeight: size.height,
-            iconSize: iconSize,
+            iconSize: requestedIconSize,
             safeInsets: safeInsets
         )
         let usableHeight = max(size.height - safeInsets.top - safeInsets.bottom, 1)
         let availableHeight = max(usableHeight - vertical.insetTop - vertical.insetBottom, 1)
+
+        // Safety clamp: Ensure icon size fits within usable screen bounds for the selected columns and rows.
+        let maxFittingWidth = max(48, (availableWidth - minGap * CGFloat(Self.columns)) / CGFloat(Self.columns))
+        let maxFittingHeight = max(48, (availableHeight - vertical.minCellExtra * CGFloat(Self.rows)) / CGFloat(Self.rows))
+        iconSize = min(requestedIconSize, min(maxFittingWidth, maxFittingHeight))
+
+        let idealCell = availableWidth / CGFloat(Self.columns)
+        let maxCellWidth = max(240, iconSize + minGap)
+        let unscaledCellWidth = min(max(idealCell, iconSize + minGap), maxCellWidth)
+        cellWidth = iconSize
+            + (unscaledCellWidth - iconSize) * Self.current.spacingScale
+
         let idealRow = availableHeight / CGFloat(Self.rows)
         let unscaledCellHeight = min(
             max(idealRow, iconSize + vertical.minCellExtra),
@@ -220,7 +208,6 @@ struct GridMetrics {
             opticalLift: 12,
             centerInChromeBand: false
         )
-        guard current == .sevenByFive else { return comfortable }
 
         let usableHeight = max(screenHeight - safeInsets.top - safeInsets.bottom, 1)
         let comfortableBlock = (iconSize + comfortable.minCellExtra) * CGFloat(rows)

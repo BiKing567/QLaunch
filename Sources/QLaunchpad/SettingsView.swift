@@ -92,6 +92,8 @@ private struct GeneralSettingsView: View {
     private var showDockInLaunchpad = QLaunchpadPreferences.defaultShowDockInLaunchpad
     @AppStorage(GridLayoutPreset.defaultsKey)
     private var gridLayoutPreset = GridLayoutPreset.defaultPreset.rawValue
+    @AppStorage(IconSizeTier.defaultsKey)
+    private var iconSizeTier = IconSizeTier.current.rawValue
     @AppStorage(IconRenderQuality.defaultsKey)
     private var iconRenderQuality = IconRenderQuality.defaultQuality.rawValue
     @AppStorage(LaunchpadBackgroundPreferences.modeKey)
@@ -337,6 +339,16 @@ private struct GeneralSettingsView: View {
                 }
                 .pickerStyle(.menu)
                 .onChange(of: gridLayoutPreset) { _, _ in
+                    NotificationCenter.default.post(name: .qlaunchpadGridLayoutChanged, object: nil)
+                }
+
+                Picker(L10n.tr("settings.iconSize"), selection: $iconSizeTier) {
+                    ForEach(IconSizeTier.allCases) { tier in
+                        Text(tier.localizedTitle).tag(tier.rawValue)
+                    }
+                }
+                .pickerStyle(.menu)
+                .onChange(of: iconSizeTier) { _, _ in
                     NotificationCenter.default.post(name: .qlaunchpadGridLayoutChanged, object: nil)
                 }
 

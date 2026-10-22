@@ -21,6 +21,7 @@
 "settings.showDockInLaunchpad" = "Launchpad에서 Dock 표시";
 "settings.showDockInLaunchpad.detail" = "Launchpad가 열려 있을 때도 macOS Dock을 표시하고 아이콘이 겹치지 않도록 간격을 조정합니다";
 "settings.layout" = "레이아웃";
+"settings.iconSize" = "아이콘 크기";
 "settings.renderQuality" = "렌더링 품질";
 "settings.renderQuality.applying" = "렌더링 품질 적용 중…";
 "settings.section.background" = "배경";
@@ -176,8 +177,14 @@
 "animation.zoom" = "확대";
 "animation.fade" = "페이드";
 "animation.none" = "없음";
+"grid.infiniteCanvas" = "무한 캔버스";
 "grid.infiniteCanvas.128" = "무한 캔버스 (128pt)";
 "grid.infiniteCanvas.256" = "무한 캔버스 (256pt)";
+"iconSize.tier1" = "매우 작게 (64 pt)";
+"iconSize.tier2" = "작게 (96 pt)";
+"iconSize.tier3" = "보통 (128 pt)";
+"iconSize.tier4" = "크게 (160 pt)";
+"iconSize.tier5" = "매우 크게 (192 pt)";
 "context.showInfo" = "정보 보기";
 "context.iconImage" = "아이콘 이미지";
 "context.downloadCurrentIcon" = "현재 아이콘 크기로 다운로드";

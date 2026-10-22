@@ -21,6 +21,7 @@
 "settings.showDockInLaunchpad" = "Show Dock in Launchpad";
 "settings.showDockInLaunchpad.detail" = "Keep the macOS Dock visible in Launchpad and adjust icon spacing to avoid overlap";
 "settings.layout" = "Layout";
+"settings.iconSize" = "Icon Size";
 "settings.renderQuality" = "Rendering Quality";
 "settings.renderQuality.applying" = "Applying rendering quality…";
 "settings.section.background" = "Background";
@@ -176,8 +177,14 @@
 "animation.zoom" = "Zoom";
 "animation.fade" = "Fade";
 "animation.none" = "None";
+"grid.infiniteCanvas" = "Infinite Canvas";
 "grid.infiniteCanvas.128" = "Infinite Canvas (128pt)";
 "grid.infiniteCanvas.256" = "Infinite Canvas (256pt)";
+"iconSize.tier1" = "Extra Small (64 pt)";
+"iconSize.tier2" = "Small (96 pt)";
+"iconSize.tier3" = "Medium (128 pt)";
+"iconSize.tier4" = "Large (160 pt)";
+"iconSize.tier5" = "Extra Large (192 pt)";
 "context.showInfo" = "Get Info";
 "context.iconImage" = "Icon Image";
 "context.downloadCurrentIcon" = "Download at Current Icon Size";

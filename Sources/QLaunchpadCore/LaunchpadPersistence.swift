@@ -9,6 +9,7 @@ public enum LaunchpadPersistence {
     public static let gridLayoutPresetKey = "gridLayoutPreset"
     public static let layoutModeKey = "launchpadLayoutMode"
     public static let recentLaunchDatesKey = "recentAppLaunchDates"
+    public static let iconSizeTierKey = "launchpadIconSizeTier"
 
     /// Compact `[{id,name,appIDs}]`. Key order is fixed so persist-if-changed
     /// can compare encoded `Data` without false dirty writes.

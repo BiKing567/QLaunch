@@ -21,6 +21,7 @@
 "settings.showDockInLaunchpad" = "在启动台中显示程序坞";
 "settings.showDockInLaunchpad.detail" = "在启动台界面保留系统程序坞并避让图标布局，方便随时切换应用";
 "settings.layout" = "布局";
+"settings.iconSize" = "图标大小";
 "settings.renderQuality" = "渲染质量";
 "settings.renderQuality.applying" = "正在应用渲染质量…";
 "settings.section.background" = "背景";
@@ -176,8 +177,14 @@
 "animation.zoom" = "放大";
 "animation.fade" = "渐入";
 "animation.none" = "无";
+"grid.infiniteCanvas" = "无限画布";
 "grid.infiniteCanvas.128" = "无限画布 (128pt)";
 "grid.infiniteCanvas.256" = "无限画布 (256pt)";
+"iconSize.tier1" = "极小 (64 pt)";
+"iconSize.tier2" = "较小 (96 pt)";
+"iconSize.tier3" = "标准 (128 pt)";
+"iconSize.tier4" = "较大 (160 pt)";
+"iconSize.tier5" = "极大 (192 pt)";
 "context.showInfo" = "显示简介";
 "context.iconImage" = "图标图片";
 "context.downloadCurrentIcon" = "下载当前图标尺寸";
