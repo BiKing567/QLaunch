@@ -6,7 +6,6 @@ import UniformTypeIdentifiers
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case applications
-    case ai
     case about
 
     var id: Self { self }
@@ -17,7 +16,6 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: "gearshape"
         case .applications: "square.grid.2x2"
-        case .ai: "sparkles"
         case .about: "info.circle"
         }
     }
@@ -65,8 +63,6 @@ struct SettingsView: View {
                         GeneralSettingsView(store: store)
                     case .applications:
                         ApplicationSettingsView(store: store)
-                    case .ai:
-                        AISettingsView()
                     case .about:
                         AboutSettingsView()
                     }
@@ -1241,65 +1237,6 @@ private struct LayoutProfilePopUp: NSViewRepresentable {
                }) {
                 sender.selectItem(at: index)
             }
-        }
-    }
-}
-
-private struct AISettingsView: View {
-    @ObservedObject private var language = LocalizationManager.shared
-    @State private var promptText = ""
-    @State private var didCopy = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(L10n.tr("settings.ai.detail"))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Spacer(minLength: 12)
-
-                Button(didCopy ? L10n.tr("settings.ai.copied") : L10n.tr("settings.ai.copy")) {
-                    copyPrompt()
-                }
-                .buttonStyle(.borderedProminent)
-            }
-
-            TextEditor(text: $promptText)
-                .font(.system(size: 12, design: .monospaced))
-                .scrollContentBackground(.hidden)
-                .padding(8)
-                .background(Color(nsColor: .textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
-                )
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear {
-            regeneratePrompt()
-            didCopy = false
-        }
-        .onChange(of: language.selection) { _, _ in
-            regeneratePrompt()
-        }
-    }
-
-    private func regeneratePrompt() {
-        promptText = LayoutOrganizePrompt.make(language: language.effectiveLanguage)
-        didCopy = false
-    }
-
-    private func copyPrompt() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(promptText, forType: .string)
-        didCopy = true
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            didCopy = false
         }
     }
 }

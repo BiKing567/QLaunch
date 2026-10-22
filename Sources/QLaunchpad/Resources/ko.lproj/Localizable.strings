@@ -4,7 +4,6 @@
 "settings.section.language" = "언어";
 "settings.tab.general" = "일반";
 "settings.tab.applications" = "응용 프로그램";
-"settings.tab.ai" = "AI 인터페이스";
 "settings.tab.about" = "정보";
 "settings.window.title" = "QLaunch 설정";
 "settings.window.title.short" = "설정";
@@ -86,9 +85,6 @@
 "settings.macosSystemLayout" = "macOS 시스템 레이아웃";
 "settings.macosSystemLayout.detail" = "기본 Launchpad에서 이전 아이콘 정렬 및 폴더 가져오기";
 "settings.appSupportPath" = "Application Support/%@";
-"settings.ai.detail" = "아래 프롬프트를 Codex, Grok Build, Claude Code, Antigravity, Kimi Work 등의 로컬 AI 에이전트에 복사하세요";
-"settings.ai.copy" = "프롬프트 복사";
-"settings.ai.copied" = "복사됨";
 "about.tagline" = "네이티브 Metal로 렌더링되는 고성능 macOS 앱 런처입니다.";
 "about.updates" = "소프트웨어 업데이트";
 "about.checkUpdates" = "업데이트 확인";

@@ -4,7 +4,6 @@
 "settings.section.language" = "Language";
 "settings.tab.general" = "General";
 "settings.tab.applications" = "Applications";
-"settings.tab.ai" = "AI Interface";
 "settings.tab.about" = "About";
 "settings.window.title" = "QLaunch Settings";
 "settings.window.title.short" = "Settings";
@@ -86,9 +85,6 @@
 "settings.macosSystemLayout" = "macOS System Layout";
 "settings.macosSystemLayout.detail" = "Import historical icon order and folders from native Launchpad";
 "settings.appSupportPath" = "Application Support/%@";
-"settings.ai.detail" = "Copy the prompt below to a local AI agent, such as Codex, Grok Build, Claude Code, Antigravity, or Kimi Work";
-"settings.ai.copy" = "Copy Prompt";
-"settings.ai.copied" = "Copied";
 "about.tagline" = "A high-performance, native Metal macOS application launcher.";
 "about.updates" = "Software Updates";
 "about.checkUpdates" = "Check for Updates";

@@ -4,7 +4,6 @@
 "settings.section.language" = "言語";
 "settings.tab.general" = "一般";
 "settings.tab.applications" = "アプリケーション";
-"settings.tab.ai" = "AI インターフェース";
 "settings.tab.about" = "情報";
 "settings.window.title" = "QLaunch 設定";
 "settings.window.title.short" = "設定";
@@ -86,9 +85,6 @@
 "settings.macosSystemLayout" = "macOS システム配列";
 "settings.macosSystemLayout.detail" = "macOS の元の Launchpad からアイコンの並び順とグループをインポート";
 "settings.appSupportPath" = "Application Support/%@";
-"settings.ai.detail" = "以下のプロンプトを Codex、Grok Build、Claude Code、Antigravity、Kimi Work などのローカル AI エージェントにコピーしてください";
-"settings.ai.copy" = "プロンプトをコピー";
-"settings.ai.copied" = "コピー済み";
 "about.tagline" = "ネイティブ Metal で描画する高性能な macOS アプリランチャー。";
 "about.updates" = "ソフトウェアアップデート";
 "about.checkUpdates" = "アップデートを確認";

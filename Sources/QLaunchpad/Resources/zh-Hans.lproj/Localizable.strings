@@ -4,7 +4,6 @@
 "settings.section.language" = "语言";
 "settings.tab.general" = "通用";
 "settings.tab.applications" = "应用程序";
-"settings.tab.ai" = "AI 接口";
 "settings.tab.about" = "关于";
 "settings.window.title" = "QLaunch 设置";
 "settings.window.title.short" = "设置";
@@ -86,9 +85,6 @@
 "settings.macosSystemLayout" = "macOS 原系统排列";
 "settings.macosSystemLayout.detail" = "从系统原生启动台（Launchpad）导入历史图标排序与分组";
 "settings.appSupportPath" = "应用程序支持/%@";
-"settings.ai.detail" = "把下面的提示词复制给本地的 AI Agent，比如 Codex、Grok Build、Claude Code、Antigravity、Kimi Work 等";
-"settings.ai.copy" = "复制提示词";
-"settings.ai.copied" = "已复制";
 "about.tagline" = "高性能、原生 Metal 渲染的 macOS 应用启动器。";
 "about.updates" = "软件更新";
 "about.checkUpdates" = "检查更新";
