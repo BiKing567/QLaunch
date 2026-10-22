@@ -1690,34 +1690,24 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         needsDisplay = true
     }
 
-    private struct FirstPageIconWork {
-        var apps: [AppInfo]
-        var folders: [(folder: AppFolder, members: [AppInfo])]
-    }
-
-    /// Apps and folder previews on the page that will actually appear first.
-    private func firstPageIconWork() -> FirstPageIconWork {
+    /// Apps on the page that will actually appear first.
+    private func firstPageApps() -> [AppInfo] {
         let items = displayedItems.isEmpty ? store.activeDisplayItems : displayedItems
         let capacity = max(store.pageCapacity, 1)
         let page = max(0, Int((displayedItems.isEmpty ? store.pageOffset : currentPageOffset).rounded()))
         let start = min(items.count, page * capacity)
         let end = min(items.count, start + capacity)
         guard start < end else {
-            return FirstPageIconWork(apps: [], folders: [])
+            return []
         }
 
         var apps: [AppInfo] = []
-        var folders: [(AppFolder, [AppInfo])] = []
         for item in items[start..<end] {
-            switch item {
-            case .app(let app):
+            if case .app(let app) = item {
                 apps.append(app)
-            case .folder(let folder):
-                let current = store.folder(withID: folder.id) ?? folder
-                folders.append((current, current.appIDs.compactMap { store.app(withID: $0) }))
             }
         }
-        return FirstPageIconWork(apps: apps, folders: folders)
+        return apps
     }
 
     private func isFirstPageReady() -> Bool {
@@ -1725,11 +1715,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         if items.isEmpty {
             return !store.isLoading
         }
-        let work = firstPageIconWork()
-        if work.apps.isEmpty {
+        let apps = firstPageApps()
+        if apps.isEmpty {
             return true
         }
-        return work.apps.allSatisfy { iconTextures.cachedTexture(for: $0) != nil }
+        return apps.allSatisfy { iconTextures.cachedTexture(for: $0) != nil }
     }
 
     /// Bake the visible first page at user-initiated priority so presentation
@@ -1743,20 +1733,19 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             contentTransitionAlpha = 1
         }
 
-        let work = firstPageIconWork()
-        guard !work.apps.isEmpty else { return }
+        let apps = firstPageApps()
+        guard !apps.isEmpty else { return }
 
-        let alreadyReady = work.apps.allSatisfy { iconTextures.cachedTexture(for: $0) != nil }
+        let alreadyReady = apps.allSatisfy { iconTextures.cachedTexture(for: $0) != nil }
         if alreadyReady { return }
 
         if IconRenderQuality.current.usesLazyTextureLoading {
-            iconTextures.expandAllowedAppIDs(Set(work.apps.map(\.id)))
+            iconTextures.expandAllowedAppIDs(Set(apps.map(\.id)))
         } else {
             iconTextures.setAllowedAppIDs(nil)
         }
 
         let textureStore = iconTextures
-        let apps = work.apps
         await Task.detached(priority: .userInitiated) {
             for app in apps {
                 guard !Task.isCancelled else { return }
@@ -1821,12 +1810,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             contentTransitionAlpha = 1
         }
 
-        let pageWork = firstPageIconWork()
-        let firstPageAppIDs = Set(pageWork.apps.map(\.id))
+        let firstPageApps = self.firstPageApps()
+        let firstPageAppIDs = Set(firstPageApps.map(\.id))
         let remainingApps = catalog.filter { !firstPageAppIDs.contains($0.id) }
 
         let textureStore = iconTextures
-        let firstPageApps = pageWork.apps
 
         resourcePrewarmTask = Task.detached(priority: .utility) { [self] in
             for app in firstPageApps {

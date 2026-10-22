@@ -276,7 +276,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // While an interactive gesture is active, never dismiss the panel
         guard !isInteractiveOpening, !isInteractiveDismissing else {
-            launchpadPanel.makeKey()
             return
         }
 
@@ -317,7 +316,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// System Settings. Hide the fullscreen overlay so those windows are
     /// not covered.
     func applicationDidResignActive(_ notification: Notification) {
-        guard !isInteractiveOpening, !isInteractiveDismissing else { return }
         if settingsWindow?.isVisible == true || store.showSystemDock {
             dismissLaunchpad()
         }
@@ -786,6 +784,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.isInteractiveFinishing = false
             self.isAnimating = false
             if target >= 0.999 {
+                guard NSApp.isActive else {
+                    self.completeDismissal(generation: generation)
+                    return
+                }
                 self.store.markVisible()
                 LaunchpadTrackpadGestureCenter.shared.isLaunchpadPresented = true
                 self.containerView.showWallpaperImmediately()

@@ -17,8 +17,15 @@ struct FolderPlateModel: Equatable, Sendable {
 final class FolderPreviewImageCache {
     private var cache: [String: NSImage] = [:]
     private var lruKeys: [String] = []
-    private let maxCacheCount: Int = 64
+    private var currentPassKeys: Set<String> = []
+    private var activeWorkingSet: Set<String> = []
+    private let maxCacheCount: Int = 256
     private let iconCache = AppIconCache()
+
+    func beginUpdatePass() {
+        activeWorkingSet = currentPassKeys
+        currentPassKeys.removeAll(keepingCapacity: true)
+    }
 
     func previewImage(
         folderID: String,
@@ -36,6 +43,14 @@ final class FolderPreviewImageCache {
 
         let memberIDs = members.prefix(FolderPreviewLayout.capacity).map(\.id).joined(separator: ",")
         let cacheKey = "\(folderID)|\(memberIDs)|\(Int(quantizedPadSize))|\(Int(quantizedIconSize))"
+
+        if currentPassKeys.contains(cacheKey) {
+            activeWorkingSet = currentPassKeys
+            currentPassKeys.removeAll(keepingCapacity: true)
+        }
+        currentPassKeys.insert(cacheKey)
+        activeWorkingSet.insert(cacheKey)
+
         if let existing = cache[cacheKey] {
             if let index = lruKeys.firstIndex(of: cacheKey) {
                 lruKeys.remove(at: index)
@@ -83,10 +98,14 @@ final class FolderPreviewImageCache {
             return true
         }
 
-        if lruKeys.count >= maxCacheCount, !lruKeys.isEmpty {
-            let oldest = lruKeys.removeFirst()
-            cache.removeValue(forKey: oldest)
+        // When exceeding maxCacheCount, evict the oldest key NOT in the active working set.
+        if lruKeys.count >= maxCacheCount {
+            if let evictIndex = lruKeys.firstIndex(where: { !self.activeWorkingSet.contains($0) }) {
+                let evictKey = lruKeys.remove(at: evictIndex)
+                cache.removeValue(forKey: evictKey)
+            }
         }
+
         cache[cacheKey] = image
         lruKeys.append(cacheKey)
         return image
@@ -95,6 +114,8 @@ final class FolderPreviewImageCache {
     func clear() {
         cache.removeAll(keepingCapacity: true)
         lruKeys.removeAll(keepingCapacity: true)
+        currentPassKeys.removeAll(keepingCapacity: true)
+        activeWorkingSet.removeAll(keepingCapacity: true)
     }
 }
 
@@ -242,6 +263,7 @@ final class FolderGlassHostView: NSView {
     func update(plates: [FolderPlateModel]) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        previewCache.beginUpdatePass()
 
         var activeIDs = Set<String>()
         for plate in plates {
