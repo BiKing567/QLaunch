@@ -589,17 +589,12 @@ final class FolderIconTextureStore: @unchecked Sendable {
         cacheLock.unlock()
 
         bakeLock.lock()
-        let texture: MTLTexture?
-        if let padImage = padImage(for: preset) {
-            texture = makeTexture(
-                padImage: padImage,
-                members: previewMembers,
-                pixelSize: pixelSize,
-                quality: quality
-            )
-        } else {
-            texture = nil
-        }
+        let texture = makeTexture(
+            padImage: nil,
+            members: previewMembers,
+            pixelSize: pixelSize,
+            quality: quality
+        )
         bakeLock.unlock()
         cacheLock.lock()
         defer {
@@ -632,7 +627,7 @@ final class FolderIconTextureStore: @unchecked Sendable {
     }
 
     private func makeTexture(
-        padImage: CGImage,
+        padImage: CGImage?,
         members: [AppInfo],
         pixelSize px: Int,
         quality: IconRenderQuality
@@ -674,7 +669,7 @@ final class FolderIconTextureStore: @unchecked Sendable {
     }
 
     private func makeLinearFloat16Texture(
-        padImage: CGImage,
+        padImage: CGImage?,
         members: [AppInfo],
         pixelSize px: Int
     ) -> MTLTexture? {
@@ -708,7 +703,7 @@ final class FolderIconTextureStore: @unchecked Sendable {
     }
 
     private func makeLinearUNorm8Texture(
-        padImage: CGImage,
+        padImage: CGImage?,
         members: [AppInfo],
         pixelSize px: Int
     ) -> MTLTexture? {
@@ -728,14 +723,16 @@ final class FolderIconTextureStore: @unchecked Sendable {
     }
 
     private func composeFolder(
-        padImage: CGImage,
+        padImage: CGImage?,
         members: [AppInfo],
         into context: CGContext,
         pixelSize px: Int
     ) {
         context.clear(CGRect(x: 0, y: 0, width: px, height: px))
         context.interpolationQuality = .high
-        context.draw(padImage, in: CGRect(x: 0, y: 0, width: px, height: px))
+        if let padImage {
+            context.draw(padImage, in: CGRect(x: 0, y: 0, width: px, height: px))
+        }
 
         let folderSize = CGFloat(px)
         let miniSize = FolderPreviewLayout.miniSize(in: folderSize)

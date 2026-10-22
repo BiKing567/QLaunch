@@ -324,6 +324,7 @@ enum LaunchpadPageIndicatorHitArea {
 final class LaunchpadContainerView: NSView {
     private let store: AppStore
     private let backgroundView: DesktopBackgroundView
+    private let folderHostView: FolderGlassHostView
     private let metalView: LaunchpadMetalView
     private let overlayView: PassthroughHostingView<LaunchpadOverlayView>
     private var cancellables = Set<AnyCancellable>()
@@ -336,14 +337,19 @@ final class LaunchpadContainerView: NSView {
     init(store: AppStore) {
         self.store = store
         backgroundView = DesktopBackgroundView(screen: NSScreen.main)
+        folderHostView = FolderGlassHostView()
         metalView = LaunchpadMetalView(store: store)
         overlayView = PassthroughHostingView(rootView: LaunchpadOverlayView(store: store))
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
         addSubview(backgroundView)
+        addSubview(folderHostView)
         addSubview(metalView)
         addSubview(overlayView)
+        metalView.onUpdateFolderPlates = { [weak self] plates in
+            self?.folderHostView.update(plates: plates)
+        }
         metalView.onInteractiveDismissProgress = { [weak self] progress in
             self?.onInteractiveDismissProgress?(progress)
         }
@@ -416,7 +422,10 @@ final class LaunchpadContainerView: NSView {
         setPresentationScale(1)
         guard style != .none else {
             overlayView.alphaValue = showing ? 1 : 0
-            if !showing { backgroundView.alphaValue = 0 }
+            if !showing {
+                backgroundView.alphaValue = 0
+                folderHostView.removeAllPlates()
+            }
             return
         }
         // Fade dismissal is performed on the containing NSPanel. Keeping these
@@ -435,11 +444,14 @@ final class LaunchpadContainerView: NSView {
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 backgroundView.animator().alphaValue = 0
             }
+            folderHostView.removeAllPlates()
         }
     }
 
     @objc private func cacheClearRequested() {
         backgroundView.clearCacheAndReload()
+        folderHostView.removeAllPlates()
+        folderHostView.clearCache()
     }
 
     private func syncOverlayAlpha() {
@@ -460,6 +472,7 @@ final class LaunchpadContainerView: NSView {
     override func layout() {
         super.layout()
         backgroundView.frame = bounds
+        folderHostView.frame = bounds
         metalView.frame = bounds
         overlayView.frame = bounds
     }
@@ -562,6 +575,7 @@ final class LaunchpadContainerView: NSView {
             view.layer?.removeAllAnimations()
             view.alphaValue = 0
         }
+        folderHostView.removeAllPlates()
         setPresentationScale(1)
     }
 

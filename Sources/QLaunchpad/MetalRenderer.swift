@@ -390,6 +390,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private var interactivePresentationCompletion: (() -> Void)?
     var onInteractiveDismissProgress: ((CGFloat) -> Void)?
     var onInteractiveDismissEnd: ((Bool) -> Void)?
+    var onUpdateFolderPlates: (([FolderPlateModel]) -> Void)?
     private var standardPinchInteractiveDismissActive = false
     private var presentationStyle: LaunchpadAnimationStyle = LaunchpadAnimationStyle.current
     private var stationaryDismissedAppID: String?
@@ -1357,6 +1358,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         lastTextSignature = nil
         cachedResidentTextAtlasItems = nil
         folderAppInfoCache.removeAll()
+        onUpdateFolderPlates?([])
         resourcePrewarmSignature = nil
         lastTextureWindowPage = -1
         isResourcePrewarmingPaused = false
@@ -2866,7 +2868,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         midY: CGFloat,
         iconDrawTextures: inout [MTLTexture],
         iconSprites: inout [SpriteInstance],
-        labelsBySheet: inout [[SpriteInstance]]
+        labelsBySheet: inout [[SpriteInstance]],
+        folderPlates: inout [FolderPlateModel]
     ) {
         guard let transition = folderTransition else { return }
         let progress = min(max(transition.progress, 0), 1)
@@ -2905,6 +2908,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             iconDrawTextures: &iconDrawTextures,
             iconSprites: &iconSprites,
             labelsBySheet: &labelsBySheet,
+            folderPlates: &folderPlates,
             style: rootStyle
         )
 
@@ -2912,16 +2916,22 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         // Empty glass only — the composited tile already contains the same
         // minis that fly out, and drawing both produced a trailing double image.
         let plateAlpha = alphaScale * Float(max(0, 1 - progress / 0.22))
-        if plateAlpha > 0.01,
-           let pad = folderIconTextures.backgroundTexture(for: GridLayoutPreset.current) {
-            iconDrawTextures.append(pad)
-            iconSprites.append(
-                .icon(
-                    center: transition.sourceCenter,
-                    size: transition.sourceSize,
-                    uv: SIMD4(0, 0, 1, 1),
+        if plateAlpha > 0.01 {
+            let padSize = transition.sourceSize * 0.8125
+            let padRect = CGRect(
+                x: transition.sourceCenter.x - padSize * 0.5,
+                y: transition.sourceCenter.y - padSize * 0.5,
+                width: padSize,
+                height: padSize
+            )
+            folderPlates.append(
+                FolderPlateModel(
+                    id: "transition_\(transition.folderID)",
+                    rect: padRect,
                     alpha: plateAlpha,
-                    pressed: false
+                    members: [],
+                    previewVisible: false,
+                    iconSize: transition.sourceSize
                 )
             )
         }
@@ -3010,6 +3020,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         // Wallpaper is already up. Do not encode a rest-pose grid until the
         // phase-0 start frame is the one first-frame waiters will reveal.
         if isHoldingPresentationPrime {
+            onUpdateFolderPlates?([])
             clearDrawableIfAvailable()
             return
         }
@@ -3158,6 +3169,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 } else {
                     // Panel closed — free GPU icon textures so RSS does not stay elevated.
                     releaseIconGPUResources()
+                    onUpdateFolderPlates?([])
                     isInteractivePresentationActive = false
                 }
             }
@@ -3180,6 +3192,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let presentAlpha = Float(max(contentAlpha, 0))
         let gridAlpha = presentAlpha * max(contentTransitionAlpha, 0)
         guard gridAlpha > 0.001 else {
+            onUpdateFolderPlates?([])
             // A folder/search swap ends fade-out at alpha 0 in the same
             // draw. Clearing here blanks the layer until the next atlas
             // rebuild finishes — quality text bake made that a long hitch.
@@ -3239,6 +3252,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             labelsBySheet[sheet].removeAll(keepingCapacity: true)
         }
 
+        var folderPlates: [FolderPlateModel] = []
         if isFolderTransitionActive {
             buildFolderTransition(
                 alphaScale: gridAlpha,
@@ -3248,7 +3262,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 midY: midY,
                 iconDrawTextures: &iconDrawTextures,
                 iconSprites: &iconSprites,
-                labelsBySheet: &labelsBySheet
+                labelsBySheet: &labelsBySheet,
+                folderPlates: &folderPlates
             )
         } else {
             buildGrid(
@@ -3261,9 +3276,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 midY: midY,
                 iconDrawTextures: &iconDrawTextures,
                 iconSprites: &iconSprites,
-                labelsBySheet: &labelsBySheet
+                labelsBySheet: &labelsBySheet,
+                folderPlates: &folderPlates
             )
         }
+        onUpdateFolderPlates?(folderPlates)
         refreshSelectionOverlay()
         prepareFrameResources(frameSlot)
 
@@ -3631,6 +3648,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         iconDrawTextures: inout [MTLTexture],
         iconSprites: inout [SpriteInstance],
         labelsBySheet: inout [[SpriteInstance]],
+        folderPlates: inout [FolderPlateModel],
         style: GridDrawStyle = GridDrawStyle()
     ) {
         guard !items.isEmpty, alphaScale > 0.001 else { return }
@@ -3862,40 +3880,71 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 let targetScale = isFolderDropTarget ? 1 + 0.08 * hoverProgress : 1
                 let iconSize = metrics.iconSize * itemScale * targetScale
 
-                if let texture {
-                    if isHoverVisualTarget,
-                       app != nil,
-                       let backgroundTexture = folderIconTextures.backgroundTexture(
-                        for: GridLayoutPreset.current
-                       ) {
-                        let previewScale = 0.82 + 0.26 * hoverProgress
-                        iconDrawTextures.append(backgroundTexture)
-                        iconSprites.append(
-                            .icon(
-                                center: c,
-                                size: metrics.iconSize * itemScale * previewScale,
-                                uv: fullUV,
-                                alpha: drawnAlpha * Float(hoverProgress),
-                                pressed: false
-                            )
+                if let folder, drawnAlpha > 0.005 {
+                    let padSize = iconSize * 0.8125
+                    let padRect = CGRect(
+                        x: c.x - padSize * 0.5,
+                        y: c.y - padSize * 0.5,
+                        width: padSize,
+                        height: padSize
+                    )
+                    let currentFolder = store.folder(withID: folder.id) ?? folder
+                    let members = currentFolder.appIDs.compactMap { store.app(withID: $0) }
+                    folderPlates.append(
+                        FolderPlateModel(
+                            id: itemID,
+                            rect: padRect,
+                            alpha: drawnAlpha,
+                            members: members,
+                            previewVisible: true,
+                            iconSize: iconSize
                         )
-                    }
-                    let isSelectedAtRest = selectedItemIDs.contains(itemID)
-                        && !isDragged && !isCollapsedSibling
-                    let isKeyboardFocused = store.isKeyboardNavigationActive
-                        && store.keyboardFocusID == itemID
-                    if contentTransitionPhase == .idle,
-                       !style.suppressPerIconMotion,
-                       !isDragged,
-                       (isSelectedAtRest || isKeyboardFocused) {
-                        // Insert at the front so the focus plate is encoded before
-                        // every icon and can never cover a neighbouring sprite.
-                        iconDrawTextures.insert(texture, at: 0)
-                        iconSprites.insert(
-                            .focus(center: c, size: iconSize * 1.06, alpha: drawnAlpha),
-                            at: 0
+                    )
+                }
+
+                if isHoverVisualTarget,
+                   app != nil,
+                   hoverProgress > 0.01,
+                   drawnAlpha > 0.005 {
+                    let previewScale = 0.82 + 0.26 * hoverProgress
+                    let padSize = metrics.iconSize * itemScale * previewScale * 0.8125
+                    let padRect = CGRect(
+                        x: c.x - padSize * 0.5,
+                        y: c.y - padSize * 0.5,
+                        width: padSize,
+                        height: padSize
+                    )
+                    folderPlates.append(
+                        FolderPlateModel(
+                            id: "hover_preview_\(itemID)",
+                            rect: padRect,
+                            alpha: drawnAlpha * Float(hoverProgress),
+                            members: [],
+                            previewVisible: false,
+                            iconSize: iconSize
                         )
-                    }
+                    )
+                }
+
+                let isSelectedAtRest = selectedItemIDs.contains(itemID)
+                    && !isDragged && !isCollapsedSibling
+                let isKeyboardFocused = store.isKeyboardNavigationActive
+                    && store.keyboardFocusID == itemID
+                if contentTransitionPhase == .idle,
+                   !style.suppressPerIconMotion,
+                   !isDragged,
+                   (isSelectedAtRest || isKeyboardFocused),
+                   let texture {
+                    // Insert at the front so the focus plate is encoded before
+                    // every icon and can never cover a neighbouring sprite.
+                    iconDrawTextures.insert(texture, at: 0)
+                    iconSprites.insert(
+                        .focus(center: c, size: iconSize * 1.06, alpha: drawnAlpha),
+                        at: 0
+                    )
+                }
+
+                if folder == nil, let texture {
                     if let layer = pileLayerIDs.firstIndex(of: itemID),
                        isCollapsedSibling || isExpandingSibling {
                         let offsets: [CGPoint] = [
