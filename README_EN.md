@@ -16,7 +16,7 @@
   <b>This branch is based on <a href="https://github.com/qzrzz/QLaunch">qzrzz/QLaunch</a>, featuring deep refactorings and optimizations for trackpad gestures, animation continuity, and stability.</b>
 </p>
 
-- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.1.2)](https://github.com/BiKing567/QLaunch/releases)
+- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.2.0)](https://github.com/BiKing567/QLaunch/releases)
 - 🏠 **Original Project Homepage**: [https://qzrzz.com/QLaunch/](https://qzrzz.com/QLaunch/)
 - 🔗 **Original Project Repository**: [https://github.com/qzrzz/QLaunch](https://github.com/qzrzz/QLaunch)
 
@@ -30,6 +30,12 @@
 ## 🌟 Key Improvements & Features in this Fork
 
 Built upon the excellent foundation of the original QLaunch, this fork deeply addresses multi-finger trackpad gestures, micro-interaction animation details, and system compatibility:
+
+### 🪟 Native Liquid Glass Folders & Icon Sizing (V1.2.0)
+- **Native macOS Liquid Glass Folders**: Rebuilt using system `NSGlassEffectView` & `NSGlassEffectContainerView` hybrid architecture, delivering authentic optical refraction and continuous curvature frosted glass aesthetics.
+- **5-Tier Icon Size Slider**: Fully decoupled icon dimensions from grid layouts, offering a 5-step discrete slider from 64pt to 192pt with safety bounds clamping for small screens.
+- **Show Dock in Launchpad**: Window level accurately positioned under system Dock with automatic multi-screen safe insets adaptation and seamless drag collision handling.
+- **Zero-Churn Rendering Performance**: Eliminated redundant Metal offscreen folder baking; introduced 32pt quantized preview caching and active working set protection to eradicate cache thrashing across massive canvas setups.
 
 ### 🖐️ Native Multi-Finger Gestures & System Conflict Prevention
 - **System Launchpad & Spotlight Preemption Blocked**: Intercepts and overrides macOS system-level Spotlight FluidGesture and global Launchpad gestures, completely fixing issues where native Spotlight or the system Launchpad would pop up alongside QLaunch during four-finger pinches.

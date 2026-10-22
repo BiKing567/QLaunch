@@ -16,7 +16,7 @@
   <b>本分支基于 <a href="https://github.com/qzrzz/QLaunch">qzrzz/QLaunch</a> 进行了多项手势、动画与稳定性的深度重构优化。</b>
 </p>
 
-- 📦 **本分支最新下载**：[BiKing567/QLaunch Releases (V1.1.2)](https://github.com/BiKing567/QLaunch/releases)
+- 📦 **本分支最新下载**：[BiKing567/QLaunch Releases (V1.2.0)](https://github.com/BiKing567/QLaunch/releases)
 - 🏠 **原项目主页**：[https://qzrzz.com/QLaunch/](https://qzrzz.com/QLaunch/)
 - 🔗 **原项目仓库**：[https://github.com/qzrzz/QLaunch](https://github.com/qzrzz/QLaunch)
 
@@ -30,6 +30,12 @@
 ## 🌟 本分支重点改进与优化
 
 本项目在原版 QLaunch 的优秀基础上，针对触控板多指手势、动画交互细节、系统原生兼容性进行了全面深度优化与修复：
+
+### 🪟 原生毛玻璃文件夹与图标自由调节 (V1.2.0)
+- **原生 Liquid Glass 毛玻璃文件夹**：采用 macOS 系统级 `NSGlassEffectView` 与 `NSGlassEffectContainerView` 混合架构，呈现真实的光感折射与圆角连续磨砂玻璃质感。
+- **5 档图标大小独立滑块**：图标尺寸与网格行列完全解耦，支持 64pt 至 192pt 带刻度滑动调节；内置几何安全钳制，小屏幕大密度下绝不溢出或遮挡。
+- **启动台透出系统程序坞 (Show Dock in Launchpad)**：窗口层级对齐 Dock 之下，外围安全边距与分页指示点自适应 Dock 位置，拖拽移入/移出碰撞区无缝衔接。
+- **极致渲染性能与零抖动**：消除文件夹 Metal 纹理后台冗余离屏烘焙，首屏即时呈现；预览图层尺寸阶梯量化配合活跃工作集感知，彻底杜绝复杂画布下的重绘抖动。
 
 ### 🖐️ 触控板手势全面升级与防系统冲突
 - **彻底接管系统启动台与 Spotlight 手势**：阻断系统全局启动台及 Spotlight FluidGesture 的抢占，彻底解决四指进入时系统启动台或聚焦搜索同时弹出的问题。
