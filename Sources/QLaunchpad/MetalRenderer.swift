@@ -209,6 +209,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private let textPipelineUnorm8: MTLRenderPipelineState
     private let iconTextures: IconTextureStore
     private let folderIconTextures: FolderIconTextureStore
+    private let fallbackTexture: MTLTexture
     private let textAtlas: TextAtlas
 
     private var iconSampler: MTLSamplerState!
@@ -480,6 +481,21 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         self.commandQueue = commandQueue
         iconTextures = IconTextureStore(device: device)
         folderIconTextures = FolderIconTextureStore(device: device)
+
+        let fallbackDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm,
+            width: 1,
+            height: 1,
+            mipmapped: false
+        )
+        fallbackDesc.usage = [.shaderRead]
+        guard let fallback = device.makeTexture(descriptor: fallbackDesc) else {
+            fatalError("Unable to create fallback texture")
+        }
+        var blank: UInt32 = 0
+        fallback.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &blank, bytesPerRow: 4)
+        fallbackTexture = fallback
+
         textAtlas = TextAtlas(device: device)
         inFlightFrames = (0..<3).map { _ in FrameResources() }
 
@@ -1710,19 +1726,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             return !store.isLoading
         }
         let work = firstPageIconWork()
-        if work.apps.isEmpty && work.folders.isEmpty {
+        if work.apps.isEmpty {
             return true
         }
-        let preset = GridLayoutPreset.current
         return work.apps.allSatisfy { iconTextures.cachedTexture(for: $0) != nil }
-            && work.folders.allSatisfy { entry in
-                folderIconTextures.texture(
-                    for: entry.folder,
-                    members: entry.members,
-                    preset: preset,
-                    allowCreate: false
-                ) != nil
-            }
     }
 
     /// Bake the visible first page at user-initiated priority so presentation
@@ -1737,46 +1744,23 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
 
         let work = firstPageIconWork()
-        guard !work.apps.isEmpty || !work.folders.isEmpty else { return }
+        guard !work.apps.isEmpty else { return }
 
-        let preset = GridLayoutPreset.current
         let alreadyReady = work.apps.allSatisfy { iconTextures.cachedTexture(for: $0) != nil }
-            && work.folders.allSatisfy { entry in
-                folderIconTextures.texture(
-                    for: entry.folder,
-                    members: entry.members,
-                    preset: preset,
-                    allowCreate: false
-                ) != nil
-            }
         if alreadyReady { return }
 
         if IconRenderQuality.current.usesLazyTextureLoading {
             iconTextures.expandAllowedAppIDs(Set(work.apps.map(\.id)))
-            folderIconTextures.expandAllowedFolderIDs(Set(work.folders.map(\.folder.id)))
         } else {
             iconTextures.setAllowedAppIDs(nil)
-            folderIconTextures.setAllowedFolderIDs(nil)
         }
 
         let textureStore = iconTextures
-        let folderStore = folderIconTextures
         let apps = work.apps
-        let folders = work.folders
         await Task.detached(priority: .userInitiated) {
             for app in apps {
                 guard !Task.isCancelled else { return }
                 autoreleasepool { _ = textureStore.ensureTexture(for: app) }
-            }
-            for entry in folders {
-                guard !Task.isCancelled else { return }
-                autoreleasepool {
-                    _ = folderStore.ensureTexture(
-                        for: entry.folder,
-                        members: entry.members,
-                        preset: preset
-                    )
-                }
             }
         }.value
     }
@@ -1839,60 +1823,21 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         let pageWork = firstPageIconWork()
         let firstPageAppIDs = Set(pageWork.apps.map(\.id))
-        let firstPageFolderIDs = Set(pageWork.folders.map(\.folder.id))
         let remainingApps = catalog.filter { !firstPageAppIDs.contains($0.id) }
 
-        // Remaining folder composites after the visible first page. Use the
-        // authoritative folder collection rather than `displayedItems`: store
-        // notifications can arrive before an animated grid replacement has
-        // installed its new visible list. Depending on that stale list leaves
-        // a newly-created or edited folder without a texture indefinitely,
-        // because the resident catalog signature otherwise looks complete.
-        var remainingFolders: [(AppFolder, [AppInfo])] = []
-        var seenFolders = firstPageFolderIDs
-        for folder in store.folders {
-            guard seenFolders.insert(folder.id).inserted else { continue }
-            let members = folder.appIDs.compactMap { store.app(withID: $0) }
-            remainingFolders.append((folder, members))
-        }
-
         let textureStore = iconTextures
-        let folderStore = folderIconTextures
         let firstPageApps = pageWork.apps
-        let firstPageFolders = pageWork.folders
 
         resourcePrewarmTask = Task.detached(priority: .utility) { [self] in
             for app in firstPageApps {
                 guard !Task.isCancelled else { return }
                 autoreleasepool { _ = textureStore.ensureTexture(for: app) }
             }
-            for entry in firstPageFolders {
-                guard !Task.isCancelled else { return }
-                autoreleasepool {
-                    _ = folderStore.ensureTexture(
-                        for: entry.folder,
-                        members: entry.members,
-                        preset: preset
-                    )
-                }
-            }
 
             // Reveal the visible batch once. Remaining off-page resident bakes
             // must not wake the main thread once per completed texture.
             guard !Task.isCancelled else { return }
             await refreshAfterPriorityPrewarming(expectedSignature: signature)
-
-            for entry in remainingFolders {
-                guard !Task.isCancelled else { return }
-                autoreleasepool {
-                    _ = folderStore.texture(
-                        for: entry.0,
-                        members: entry.1,
-                        preset: preset,
-                        allowCreate: true
-                    )
-                }
-            }
 
             for app in remainingApps {
                 guard !Task.isCancelled else { return }
@@ -1991,25 +1936,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let priorityApps =
             window.apps.filter { pageAppIDs.contains($0.id) }
             + window.apps.filter { !pageAppIDs.contains($0.id) }
-        let priorityFolders = window.folders
         let textureStore = iconTextures
-        let folderStore = folderIconTextures
 
         resourcePrewarmTask = Task.detached(priority: .utility) { [self] in
             for app in priorityApps {
                 guard !Task.isCancelled else { return }
                 autoreleasepool { _ = textureStore.texture(for: app, allowCreate: true) }
-            }
-            for entry in priorityFolders {
-                guard !Task.isCancelled else { return }
-                autoreleasepool {
-                    _ = folderStore.texture(
-                        for: entry.folder,
-                        members: entry.members,
-                        preset: preset,
-                        allowCreate: true
-                    )
-                }
             }
 
             guard !Task.isCancelled else { return }
@@ -3622,18 +3554,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             return allowCreate
                 ? iconTextures.texture(for: app, allowCreate: true)
                 : iconTextures.cachedTexture(for: app)
-        case .folder(let folder):
-            // `displayedItems` can intentionally stay frozen during a content
-            // transition. Always resolve the latest folder value so a membership
-            // edit invalidates its flattened texture even when the ID is stable.
-            let currentFolder = store.folder(withID: folder.id) ?? folder
-            let members = currentFolder.appIDs.compactMap { store.app(withID: $0) }
-            return folderIconTextures.texture(
-                for: currentFolder,
-                members: members,
-                preset: GridLayoutPreset.current,
-                allowCreate: allowCreate
-            )
+        case .folder:
+            return nil
         }
     }
 
@@ -3845,11 +3767,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 // resident/page-window prewarmer fills the same cache off-main.
                 let texture = iconTexture(for: item, allowCreate: false)
                 guard alpha > 0.002 else { continue }
-                // Folder previews are already flattened into a single texture,
-                // so every item below follows the exact same sprite path.
+                // Folder previews are rendered by FolderGlassHostView,
+                // so folders always count as ready for lazy reveal.
+                let hasTexture = (folder != nil) || (texture != nil)
                 let reveal = lazyIconRevealAlpha(
                     id: itemID,
-                    hasTexture: texture != nil,
+                    hasTexture: hasTexture,
                     now: now
                 )
                 let collapseProgress: CGFloat = multiDragStartedAt.map {
@@ -3933,11 +3856,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 if contentTransitionPhase == .idle,
                    !style.suppressPerIconMotion,
                    !isDragged,
-                   (isSelectedAtRest || isKeyboardFocused),
-                   let texture {
+                   (isSelectedAtRest || isKeyboardFocused) {
+                    let focusTexture = texture ?? fallbackTexture
                     // Insert at the front so the focus plate is encoded before
                     // every icon and can never cover a neighbouring sprite.
-                    iconDrawTextures.insert(texture, at: 0)
+                    iconDrawTextures.insert(focusTexture, at: 0)
                     iconSprites.insert(
                         .focus(center: c, size: iconSize * 1.06, alpha: drawnAlpha),
                         at: 0

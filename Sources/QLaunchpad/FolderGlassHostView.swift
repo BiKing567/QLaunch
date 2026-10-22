@@ -16,6 +16,8 @@ struct FolderPlateModel: Equatable, Sendable {
 @MainActor
 final class FolderPreviewImageCache {
     private var cache: [String: NSImage] = [:]
+    private var lruKeys: [String] = []
+    private let maxCacheCount: Int = 64
     private let iconCache = AppIconCache()
 
     func previewImage(
@@ -25,19 +27,29 @@ final class FolderPreviewImageCache {
         iconSize: CGFloat
     ) -> NSImage? {
         guard !members.isEmpty, padSize >= 8 else { return nil }
-        let pixelSize = Int(padSize.rounded())
+
+        // Quantize iconSize and padSize into 32pt buckets to prevent continuous CoreGraphics
+        // redraw churn during hover bounce (1.0 -> 1.08) or canvas zooming animations.
+        // AppKit / CoreAnimation scales the resulting layer smoothly on the GPU.
+        let quantizedIconSize = max(64, (iconSize / 32.0).rounded() * 32)
+        let quantizedPadSize = max(52, (quantizedIconSize * 0.8125).rounded())
+
         let memberIDs = members.prefix(FolderPreviewLayout.capacity).map(\.id).joined(separator: ",")
-        let cacheKey = "\(folderID)|\(memberIDs)|\(pixelSize)|\(Int(iconSize.rounded()))"
+        let cacheKey = "\(folderID)|\(memberIDs)|\(Int(quantizedPadSize))|\(Int(quantizedIconSize))"
         if let existing = cache[cacheKey] {
+            if let index = lruKeys.firstIndex(of: cacheKey) {
+                lruKeys.remove(at: index)
+                lruKeys.append(cacheKey)
+            }
             return existing
         }
 
-        let image = NSImage(size: NSSize(width: padSize, height: padSize), flipped: true) { [iconCache] rect in
+        let image = NSImage(size: NSSize(width: quantizedPadSize, height: quantizedPadSize), flipped: true) { [iconCache] rect in
             guard let context = NSGraphicsContext.current?.cgContext else { return false }
             context.interpolationQuality = .high
-            let folderSize = iconSize
+            let folderSize = quantizedIconSize
             let miniSize = FolderPreviewLayout.miniSize(in: folderSize)
-            let folderCenter = CGPoint(x: padSize * 0.5, y: padSize * 0.5)
+            let folderCenter = CGPoint(x: quantizedPadSize * 0.5, y: quantizedPadSize * 0.5)
 
             // Soft contact shadow for each mini app icon against the dynamic glass
             let shadow = NSShadow()
@@ -71,12 +83,18 @@ final class FolderPreviewImageCache {
             return true
         }
 
+        if lruKeys.count >= maxCacheCount, !lruKeys.isEmpty {
+            let oldest = lruKeys.removeFirst()
+            cache.removeValue(forKey: oldest)
+        }
         cache[cacheKey] = image
+        lruKeys.append(cacheKey)
         return image
     }
 
     func clear() {
         cache.removeAll(keepingCapacity: true)
+        lruKeys.removeAll(keepingCapacity: true)
     }
 }
 

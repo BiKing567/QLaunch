@@ -317,6 +317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// System Settings. Hide the fullscreen overlay so those windows are
     /// not covered.
     func applicationDidResignActive(_ notification: Notification) {
+        guard !isInteractiveOpening, !isInteractiveDismissing else { return }
         if settingsWindow?.isVisible == true || store.showSystemDock {
             dismissLaunchpad()
         }
