@@ -1131,7 +1131,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             return false
         }
         switch (source, target) {
-        case (.app, .app), (.app, .folder), (.folder, .folder):
+        case (.app, .app), (.app, .folder):
             return true
         default:
             return false
@@ -5540,11 +5540,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                let source = displayedItems.first(where: { $0.id == draggedAppID }),
                let target = displayedItems.first(where: { $0.id == dragHoverTargetID }) {
                 switch (source, target) {
-                case (.folder(let sourceFolder), .folder(let targetFolder)):
-                    completedGrouping = store.mergeFolder(
-                        sourceID: sourceFolder.id,
-                        into: targetFolder.id
-                    )
                 case (.app, .folder):
                     store.moveAppIntoFolder(appID: draggedAppID, folderID: target.id)
                     completedGrouping = true
@@ -5555,7 +5550,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                             targetAppID: targetApp.id
                         ) != nil
                     }
-                case (.folder, .app):
+                case (.folder, _):
                     break
                 }
                 if completedGrouping {

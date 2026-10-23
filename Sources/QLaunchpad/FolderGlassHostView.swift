@@ -31,20 +31,26 @@ struct FolderPlateModel: Equatable, Sendable {
     }
 }
 
-/// In-memory image provider that leverages AppKit's system icon cache.
+/// High-resolution image provider that extracts crisp 512x512 retina CGImages directly.
 @MainActor
 final class AppIconImageProvider {
     static let shared = AppIconImageProvider()
-    private var cache = NSCache<NSString, NSImage>()
+    private var cache = NSCache<NSString, CGImage>()
 
-    func icon(for app: AppInfo) -> NSImage {
+    func cgImage(for app: AppInfo) -> CGImage? {
         let key = app.url.path as NSString
         if let cached = cache.object(forKey: key) {
             return cached
         }
         let image = NSWorkspace.shared.icon(forFile: app.url.path)
-        cache.setObject(image, forKey: key)
-        return image
+        // Request 256pt (512px on Retina) to ensure razor-sharp rendering in preview layers
+        image.size = NSSize(width: 256, height: 256)
+        var proposedRect = CGRect(origin: .zero, size: image.size)
+        guard let cg = image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil) else {
+            return nil
+        }
+        cache.setObject(cg, forKey: key)
+        return cg
     }
 
     func clear() {
@@ -54,7 +60,8 @@ final class AppIconImageProvider {
 
 /// An individual folder glass plate item, aligned with LaunchOS architecture.
 ///
-/// On macOS 26+: uses genuine system `NSGlassEffectView` for real-time backdrop refraction.
+/// On macOS 26+: uses genuine system `NSGlassEffectView` with `.regular` style
+/// and embeds the 3×3 mini-icon preview in `contentView` on top of the glass plate.
 /// Preview mini-icons are rendered as independent GPU `CALayer`s inside `contentView`,
 /// completely eliminating CPU CoreGraphics bitmap drawing, cache churn, and scale blur.
 private final class FolderGlassPlateItemView: NSView {
@@ -68,12 +75,20 @@ private final class FolderGlassPlateItemView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.masksToBounds = false
+
+        contentView.frame = bounds
+        contentView.wantsLayer = true
+        contentView.layer?.masksToBounds = false
+        contentView.autoresizingMask = [.width, .height]
 
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView(frame: bounds)
-            glass.wantsLayer = true
+            glass.style = .regular
+            if #available(macOS 27.0, *) {
+                glass.effectIsInteractive = false
+            }
             glass.autoresizingMask = [.width, .height]
+            glass.contentView = contentView
             addSubview(glass)
             glassEffectView = glass
         } else {
@@ -81,17 +96,15 @@ private final class FolderGlassPlateItemView: NSView {
             visual.wantsLayer = true
             visual.autoresizingMask = [.width, .height]
             visual.blendingMode = .withinWindow
+            visual.material = .hudWindow
             visual.state = .active
+            visual.layer?.cornerCurve = .continuous
+            visual.layer?.masksToBounds = true
+            visual.addSubview(contentView)
             addSubview(visual)
             glassEffectView = visual
             updateFallbackAppearance()
         }
-
-        contentView.frame = bounds
-        contentView.wantsLayer = true
-        contentView.layer?.masksToBounds = false
-        contentView.autoresizingMask = [.width, .height]
-        addSubview(contentView)
 
         // Pre-create 9 reusable CALayers for the 3×3 grid
         for _ in 0..<FolderPreviewLayout.capacity {
@@ -110,6 +123,12 @@ private final class FolderGlassPlateItemView: NSView {
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        glassEffectView?.frame = bounds
+        contentView.frame = bounds
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -149,7 +168,6 @@ private final class FolderGlassPlateItemView: NSView {
         }
 
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
-        contentView.layer?.rasterizationScale = scale
 
         let side = min(bounds.width, bounds.height)
         let folderCenter = CGPoint(x: side * 0.5, y: side * 0.5)
@@ -182,11 +200,14 @@ private final class FolderGlassPlateItemView: NSView {
                 layer.frame = CGRect(x: originX, y: originY, width: snappedSize, height: snappedSize)
                 layer.contentsScale = scale
                 layer.shadowOffset = CGSize(width: 0, height: 1.0 * (side / 128.0))
-                layer.shadowRadius = 2.0 * (side / 128.0)
+                layer.shadowRadius = 1.5 * (side / 128.0)
 
-                let icon = AppIconImageProvider.shared.icon(for: app)
-                layer.contents = icon.layerContents(forContentsScale: scale)
-                layer.isHidden = false
+                if let cgImage = AppIconImageProvider.shared.cgImage(for: app) {
+                    layer.contents = cgImage
+                    layer.isHidden = false
+                } else {
+                    layer.isHidden = true
+                }
             } else {
                 layer.isHidden = true
             }
