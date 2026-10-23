@@ -2882,7 +2882,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             extraIconScale: 1 - 0.05 * progress,
             suppressPerIconMotion: true,
             hiddenIDs: [transition.folderID],
-            hideLabels: true
+            hideLabels: false
         )
         if GridLayoutPreset.current.isInfiniteCanvas {
             rootStyle.restCanvas = (
@@ -2916,6 +2916,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         // Empty glass only — the composited tile already contains the same
         // minis that fly out, and drawing both produced a trailing double image.
         let plateAlpha = alphaScale * Float(max(0, 1 - progress / 0.22))
+        let showLabels = UserDefaults.standard.object(forKey: "showLabels") as? Bool ?? true
         if plateAlpha > 0.01 {
             let padSize = transition.sourceSize * 0.8125
             let padRect = CGRect(
@@ -2934,9 +2935,37 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     iconSize: transition.sourceSize
                 )
             )
+            if showLabels,
+               let label = textAtlas.layouts[transition.folderID],
+               labelsBySheet.indices.contains(label.sheet) {
+                let itemScale = transition.sourceSize / max(metrics.iconSize, 1)
+                let labelScale = GridLayoutPreset.current.isInfiniteCanvas
+                    ? min(itemScale, 1)
+                    : itemScale
+                let snapToPixels = abs(labelScale - 1) < 0.001 && progress == 0
+                let lc = CGPoint(
+                    x: transition.sourceCenter.x,
+                    y: transition.sourceCenter.y + transition.sourceSize * 0.5
+                        + 6 + label.heightPoints * 0.5 * labelScale
+                )
+                let size = snapToPixels
+                    ? pixelAlignedLabelSize(label)
+                    : CGSize(
+                        width: label.widthPoints * labelScale,
+                        height: label.heightPoints * labelScale
+                    )
+                labelsBySheet[label.sheet].append(
+                    .label(
+                        center: lc,
+                        size: size,
+                        uv: label.uv,
+                        alpha: plateAlpha * 0.95,
+                        snapToPixels: snapToPixels
+                    )
+                )
+            }
         }
 
-        let showLabels = UserDefaults.standard.object(forKey: "showLabels") as? Bool ?? true
         let fullUV = SIMD4<Float>(0, 0, 1, 1)
         let miniSize = FolderPreviewLayout.miniSize(in: transition.sourceSize)
         let local = folderOpenEase(progress)
