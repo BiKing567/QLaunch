@@ -188,7 +188,8 @@ private final class FolderGlassPlateItemView: NSView {
 
         let side = min(bounds.width, bounds.height)
         let folderCenter = CGPoint(x: side * 0.5, y: side * 0.5)
-        let miniSize = FolderPreviewLayout.miniSize(in: side)
+        let effectiveIconSize = iconSize > 0 ? iconSize : (side / 0.8125)
+        let miniSize = FolderPreviewLayout.miniSize(in: effectiveIconSize)
 
         let displayMembers = Array(members.prefix(FolderPreviewLayout.capacity))
 
@@ -205,7 +206,7 @@ private final class FolderGlassPlateItemView: NSView {
                 let center = FolderPreviewLayout.miniCenter(
                     index: index,
                     folderCenter: folderCenter,
-                    folderSize: side,
+                    folderSize: effectiveIconSize,
                     yIncreasesDown: true
                 )
 

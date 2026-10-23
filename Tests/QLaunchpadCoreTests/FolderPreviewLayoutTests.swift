@@ -46,8 +46,8 @@ final class FolderPreviewLayoutTests: XCTestCase {
     }
 
     func testMiniSizeScalesWithTheFolder() {
-        XCTAssertEqual(FolderPreviewLayout.miniSize(in: 128), 22, accuracy: 0.001)
-        XCTAssertEqual(FolderPreviewLayout.miniSize(in: 256), 44, accuracy: 0.001)
+        XCTAssertEqual(FolderPreviewLayout.miniSize(in: 128), 24, accuracy: 0.001)
+        XCTAssertEqual(FolderPreviewLayout.miniSize(in: 256), 48, accuracy: 0.001)
         XCTAssertEqual(FolderPreviewLayout.gap(in: 128), 4, accuracy: 0.001)
     }
 }

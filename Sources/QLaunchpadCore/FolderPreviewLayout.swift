@@ -7,7 +7,7 @@ import Foundation
 public enum FolderPreviewLayout {
     public static let columns = 3
     public static let capacity = 9
-    public static let miniSizeRatio: CGFloat = 22.0 / 128.0
+    public static let miniSizeRatio: CGFloat = 24.0 / 128.0
     public static let gapRatio: CGFloat = 4.0 / 128.0
 
     public static func miniSize(in folderSize: CGFloat) -> CGFloat {
