@@ -10,124 +10,57 @@ struct FolderPlateModel: Equatable, Sendable {
     let members: [AppInfo]
     let previewVisible: Bool
     let iconSize: CGFloat
+    let incomingDropAppID: String?
+
+    init(
+        id: String,
+        rect: CGRect,
+        alpha: Float,
+        members: [AppInfo],
+        previewVisible: Bool,
+        iconSize: CGFloat,
+        incomingDropAppID: String? = nil
+    ) {
+        self.id = id
+        self.rect = rect
+        self.alpha = alpha
+        self.members = members
+        self.previewVisible = previewVisible
+        self.iconSize = iconSize
+        self.incomingDropAppID = incomingDropAppID
+    }
 }
 
-/// Cache for CPU-rendered 3×3 mini-icon preview images.
+/// In-memory image provider that leverages AppKit's system icon cache.
 @MainActor
-final class FolderPreviewImageCache {
-    private var cache: [String: NSImage] = [:]
-    private var lruKeys: [String] = []
-    private var currentPassKeys: Set<String> = []
-    private var activeWorkingSet: Set<String> = []
-    private let maxCacheCount: Int = 256
-    private let iconCache = AppIconCache()
+final class AppIconImageProvider {
+    static let shared = AppIconImageProvider()
+    private var cache = NSCache<NSString, NSImage>()
 
-    func beginUpdatePass() {
-        activeWorkingSet = currentPassKeys
-        currentPassKeys.removeAll(keepingCapacity: true)
-    }
-
-    func previewImage(
-        folderID: String,
-        members: [AppInfo],
-        padSize: CGFloat,
-        iconSize: CGFloat
-    ) -> NSImage? {
-        guard !members.isEmpty, padSize >= 8 else { return nil }
-
-        // Quantize iconSize and padSize into 32pt buckets to prevent continuous CoreGraphics
-        // redraw churn during hover bounce (1.0 -> 1.08) or canvas zooming animations.
-        // AppKit / CoreAnimation scales the resulting layer smoothly on the GPU.
-        let quantizedIconSize = max(64, (iconSize / 32.0).rounded() * 32)
-        let quantizedPadSize = max(52, (quantizedIconSize * 0.8125).rounded())
-
-        let memberIDs = members.prefix(FolderPreviewLayout.capacity).map(\.id).joined(separator: ",")
-        let cacheKey = "\(folderID)|\(memberIDs)|\(Int(quantizedPadSize))|\(Int(quantizedIconSize))"
-
-        if currentPassKeys.contains(cacheKey) {
-            activeWorkingSet = currentPassKeys
-            currentPassKeys.removeAll(keepingCapacity: true)
+    func icon(for app: AppInfo) -> NSImage {
+        let key = app.url.path as NSString
+        if let cached = cache.object(forKey: key) {
+            return cached
         }
-        currentPassKeys.insert(cacheKey)
-        activeWorkingSet.insert(cacheKey)
-
-        if let existing = cache[cacheKey] {
-            if let index = lruKeys.firstIndex(of: cacheKey) {
-                lruKeys.remove(at: index)
-                lruKeys.append(cacheKey)
-            }
-            return existing
-        }
-
-        let image = NSImage(size: NSSize(width: quantizedPadSize, height: quantizedPadSize), flipped: true) { [iconCache] rect in
-            guard let context = NSGraphicsContext.current?.cgContext else { return false }
-            context.interpolationQuality = .high
-            let folderSize = quantizedIconSize
-            let miniSize = FolderPreviewLayout.miniSize(in: folderSize)
-            let folderCenter = CGPoint(x: quantizedPadSize * 0.5, y: quantizedPadSize * 0.5)
-
-            // Soft contact shadow for each mini app icon against the dynamic glass
-            let shadow = NSShadow()
-            shadow.shadowColor = NSColor.black.withAlphaComponent(0.24)
-            shadow.shadowOffset = NSSize(width: 0, height: 1.0 * (folderSize / 128.0))
-            shadow.shadowBlurRadius = 2.0 * (folderSize / 128.0)
-            shadow.set()
-
-            for (index, app) in members.prefix(FolderPreviewLayout.capacity).enumerated() {
-                let center = FolderPreviewLayout.miniCenter(
-                    index: index,
-                    folderCenter: folderCenter,
-                    folderSize: folderSize,
-                    yIncreasesDown: true
-                )
-                let iconRect = NSRect(
-                    x: center.x - miniSize * 0.5,
-                    y: center.y - miniSize * 0.5,
-                    width: miniSize,
-                    height: miniSize
-                )
-                iconCache.image(for: app, size: miniSize).draw(
-                    in: iconRect,
-                    from: .zero,
-                    operation: .sourceOver,
-                    fraction: 1,
-                    respectFlipped: true,
-                    hints: [.interpolation: NSImageInterpolation.high]
-                )
-            }
-            return true
-        }
-
-        // When exceeding maxCacheCount, evict the oldest key NOT in the active working set.
-        if lruKeys.count >= maxCacheCount {
-            if let evictIndex = lruKeys.firstIndex(where: { !self.activeWorkingSet.contains($0) }) {
-                let evictKey = lruKeys.remove(at: evictIndex)
-                cache.removeValue(forKey: evictKey)
-            }
-        }
-
-        cache[cacheKey] = image
-        lruKeys.append(cacheKey)
+        let image = NSWorkspace.shared.icon(forFile: app.url.path)
+        cache.setObject(image, forKey: key)
         return image
     }
 
     func clear() {
-        cache.removeAll(keepingCapacity: true)
-        lruKeys.removeAll(keepingCapacity: true)
-        currentPassKeys.removeAll(keepingCapacity: true)
-        activeWorkingSet.removeAll(keepingCapacity: true)
+        cache.removeAllObjects()
     }
 }
 
-/// An individual folder glass plate item.
+/// An individual folder glass plate item, aligned with LaunchOS architecture.
 ///
-/// On macOS 26+: uses genuine system `NSGlassEffectView` with `.regular` style
-/// and embeds the 3×3 mini-icon preview in `contentView`.
-/// On macOS 14/15: uses `NSVisualEffectView` fallback.
-@MainActor
-final class FolderGlassPlateItemView: NSView {
+/// On macOS 26+: uses genuine system `NSGlassEffectView` for real-time backdrop refraction.
+/// Preview mini-icons are rendered as independent GPU `CALayer`s inside `contentView`,
+/// completely eliminating CPU CoreGraphics bitmap drawing, cache churn, and scale blur.
+private final class FolderGlassPlateItemView: NSView {
     private var glassEffectView: NSView?
-    private let previewImageView = NSImageView()
+    private let contentView = NSView()
+    private var previewLayers: [CALayer] = []
 
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -135,40 +68,48 @@ final class FolderGlassPlateItemView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        previewImageView.imageScaling = .scaleAxesIndependently
+        layer?.masksToBounds = false
 
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView(frame: bounds)
-            glass.style = .regular
-            if #available(macOS 27.0, *) {
-                glass.effectIsInteractive = false
-            }
-            glass.contentView = previewImageView
+            glass.wantsLayer = true
+            glass.autoresizingMask = [.width, .height]
             addSubview(glass)
             glassEffectView = glass
         } else {
             let visual = NSVisualEffectView(frame: bounds)
-            visual.blendingMode = .withinWindow
-            visual.material = .hudWindow
-            visual.state = .active
             visual.wantsLayer = true
-            visual.layer?.cornerCurve = .continuous
-            visual.layer?.masksToBounds = true
-            visual.addSubview(previewImageView)
+            visual.autoresizingMask = [.width, .height]
+            visual.blendingMode = .withinWindow
+            visual.state = .active
             addSubview(visual)
             glassEffectView = visual
             updateFallbackAppearance()
+        }
+
+        contentView.frame = bounds
+        contentView.wantsLayer = true
+        contentView.layer?.masksToBounds = false
+        contentView.autoresizingMask = [.width, .height]
+        addSubview(contentView)
+
+        // Pre-create 9 reusable CALayers for the 3×3 grid
+        for _ in 0..<FolderPreviewLayout.capacity {
+            let layer = CALayer()
+            layer.contentsGravity = .resizeAspect
+            layer.masksToBounds = false
+            layer.shadowColor = NSColor.black.withAlphaComponent(0.24).cgColor
+            layer.shadowOpacity = 1.0
+            layer.shadowOffset = CGSize(width: 0, height: 1)
+            layer.shadowRadius = 1.5
+            layer.isHidden = true
+            contentView.layer?.addSublayer(layer)
+            previewLayers.append(layer)
         }
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    override func layout() {
-        super.layout()
-        glassEffectView?.frame = bounds
-        previewImageView.frame = bounds
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -186,22 +127,69 @@ final class FolderGlassPlateItemView: NSView {
         rect: CGRect,
         cornerRadius: CGFloat,
         alpha: Float,
-        previewImage: NSImage?,
-        previewVisible: Bool
+        members: [AppInfo],
+        previewVisible: Bool,
+        iconSize: CGFloat,
+        incomingDropAppID: String?
     ) {
         frame = rect
         glassEffectView?.frame = bounds
-        previewImageView.frame = bounds
-        if previewImageView.image !== previewImage {
-            previewImageView.image = previewImage
-        }
-        previewImageView.isHidden = !previewVisible
+        contentView.frame = bounds
         alphaValue = CGFloat(alpha)
 
         if #available(macOS 26.0, *), let glass = glassEffectView as? NSGlassEffectView {
             glass.cornerRadius = cornerRadius
         } else if let visual = glassEffectView as? NSVisualEffectView {
             visual.layer?.cornerRadius = cornerRadius
+        }
+
+        guard previewVisible, !members.isEmpty else {
+            for layer in previewLayers { layer.isHidden = true }
+            return
+        }
+
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        contentView.layer?.rasterizationScale = scale
+
+        let side = min(bounds.width, bounds.height)
+        let folderCenter = CGPoint(x: side * 0.5, y: side * 0.5)
+        let miniSize = FolderPreviewLayout.miniSize(in: side)
+
+        let displayMembers = Array(members.prefix(FolderPreviewLayout.capacity))
+
+        for (index, layer) in previewLayers.enumerated() {
+            if index < displayMembers.count {
+                let app = displayMembers[index]
+
+                // Ghost icon elimination: hide mini icon if this app is actively being dragged over the folder
+                if let incomingDropAppID, app.id == incomingDropAppID {
+                    layer.isHidden = true
+                    continue
+                }
+
+                let center = FolderPreviewLayout.miniCenter(
+                    index: index,
+                    folderCenter: folderCenter,
+                    folderSize: side,
+                    yIncreasesDown: true
+                )
+
+                // Pixel snap to avoid retina subpixel blur
+                let originX = ((center.x - miniSize * 0.5) * scale).rounded() / scale
+                let originY = ((center.y - miniSize * 0.5) * scale).rounded() / scale
+                let snappedSize = (miniSize * scale).rounded() / scale
+
+                layer.frame = CGRect(x: originX, y: originY, width: snappedSize, height: snappedSize)
+                layer.contentsScale = scale
+                layer.shadowOffset = CGSize(width: 0, height: 1.0 * (side / 128.0))
+                layer.shadowRadius = 2.0 * (side / 128.0)
+
+                let icon = AppIconImageProvider.shared.icon(for: app)
+                layer.contents = icon.layerContents(forContentsScale: scale)
+                layer.isHidden = false
+            } else {
+                layer.isHidden = true
+            }
         }
     }
 }
@@ -227,7 +215,6 @@ final class FolderGlassHostView: NSView {
     private var containerView: NSView?
     private let hostView = FlippedContainerView()
     private var itemsByID: [String: FolderGlassPlateItemView] = [:]
-    private let previewCache = FolderPreviewImageCache()
 
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -263,7 +250,6 @@ final class FolderGlassHostView: NSView {
     func update(plates: [FolderPlateModel]) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        previewCache.beginUpdatePass()
 
         var activeIDs = Set<String>()
         for plate in plates {
@@ -281,21 +267,14 @@ final class FolderGlassHostView: NSView {
             }
 
             let cornerRadius = plate.rect.width * 0.225
-            let previewImage = plate.previewVisible
-                ? previewCache.previewImage(
-                    folderID: plate.id,
-                    members: plate.members,
-                    padSize: plate.rect.width,
-                    iconSize: plate.iconSize
-                )
-                : nil
-
             item.update(
                 rect: plate.rect,
                 cornerRadius: cornerRadius,
                 alpha: plate.alpha,
-                previewImage: previewImage,
-                previewVisible: plate.previewVisible
+                members: plate.members,
+                previewVisible: plate.previewVisible,
+                iconSize: plate.iconSize,
+                incomingDropAppID: plate.incomingDropAppID
             )
             item.isHidden = false
         }
@@ -308,7 +287,7 @@ final class FolderGlassHostView: NSView {
     }
 
     func clearCache() {
-        previewCache.clear()
+        AppIconImageProvider.shared.clear()
     }
 
     func removeAllPlates() {
@@ -318,7 +297,7 @@ final class FolderGlassHostView: NSView {
             item.removeFromSuperview()
         }
         itemsByID.removeAll()
-        previewCache.clear()
+        AppIconImageProvider.shared.clear()
         CATransaction.commit()
     }
 }
