@@ -67,7 +67,7 @@ private final class FlippedContainerView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// An individual folder glass plate item, aligned with LaunchOS architecture.
+/// An individual folder glass plate item using native CALayer architecture.
 ///
 /// On macOS 26+: uses genuine system `NSGlassEffectView` with `.regular` style
 /// and embeds the 3×3 mini-icon preview in `contentView` on top of the glass plate.
