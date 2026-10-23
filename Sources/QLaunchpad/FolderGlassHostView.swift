@@ -11,6 +11,7 @@ struct FolderPlateModel: Equatable, Sendable {
     let previewVisible: Bool
     let iconSize: CGFloat
     let incomingDropAppID: String?
+    let isIsolated: Bool
 
     init(
         id: String,
@@ -19,7 +20,8 @@ struct FolderPlateModel: Equatable, Sendable {
         members: [AppInfo],
         previewVisible: Bool,
         iconSize: CGFloat,
-        incomingDropAppID: String? = nil
+        incomingDropAppID: String? = nil,
+        isIsolated: Bool = false
     ) {
         self.id = id
         self.rect = rect
@@ -28,6 +30,7 @@ struct FolderPlateModel: Equatable, Sendable {
         self.previewVisible = previewVisible
         self.iconSize = iconSize
         self.incomingDropAppID = incomingDropAppID
+        self.isIsolated = isIsolated
     }
 }
 
@@ -58,6 +61,12 @@ final class AppIconImageProvider {
     }
 }
 
+/// Simple container view with flipped geometry (y = 0 at the top).
+private final class FlippedContainerView: NSView {
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// An individual folder glass plate item, aligned with LaunchOS architecture.
 ///
 /// On macOS 26+: uses genuine system `NSGlassEffectView` with `.regular` style
@@ -66,7 +75,7 @@ final class AppIconImageProvider {
 /// completely eliminating CPU CoreGraphics bitmap drawing, cache churn, and scale blur.
 private final class FolderGlassPlateItemView: NSView {
     private var glassEffectView: NSView?
-    private let contentView = NSView()
+    private let contentView = FlippedContainerView()
     private var previewLayers: [CALayer] = []
 
     override var isFlipped: Bool { true }
@@ -139,7 +148,15 @@ private final class FolderGlassPlateItemView: NSView {
     private func updateFallbackAppearance() {
         guard let visual = glassEffectView as? NSVisualEffectView else { return }
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        visual.material = isDark ? .hudWindow : .popover
+        if isDark {
+            visual.layer?.backgroundColor = NSColor(white: 0.22, alpha: 0.65).cgColor
+            visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.14).cgColor
+            visual.layer?.borderWidth = 0.5
+        } else {
+            visual.layer?.backgroundColor = NSColor(white: 0.95, alpha: 0.60).cgColor
+            visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.35).cgColor
+            visual.layer?.borderWidth = 0.5
+        }
     }
 
     func update(
@@ -152,8 +169,6 @@ private final class FolderGlassPlateItemView: NSView {
         incomingDropAppID: String?
     ) {
         frame = rect
-        glassEffectView?.frame = bounds
-        contentView.frame = bounds
         alphaValue = CGFloat(alpha)
 
         if #available(macOS 26.0, *), let glass = glassEffectView as? NSGlassEffectView {
@@ -221,20 +236,17 @@ private final class FlippedGlassContainerView: NSGlassEffectContainerView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-private final class FlippedContainerView: NSView {
-    override var isFlipped: Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-
 /// Host view placed directly behind `LaunchpadMetalView`.
 ///
 /// On macOS 26+: uses `NSGlassEffectContainerView` with `spacing = 0` for batch-rendering
-/// eligible glass plates at 120Hz.
-/// Manages native glass plates in sync with Metal frame updates.
+/// stationary glass plates at 120Hz.
+/// Dragged/returning folder plates are isolated in `floatingHostView` layered above
+/// `containerView`, preventing them from fusing with stationary plates while moving.
 @MainActor
 final class FolderGlassHostView: NSView {
     private var containerView: NSView?
     private let hostView = FlippedContainerView()
+    private let floatingHostView = FlippedContainerView()
     private var itemsByID: [String: FolderGlassPlateItemView] = [:]
 
     override var isFlipped: Bool { true }
@@ -245,6 +257,8 @@ final class FolderGlassHostView: NSView {
         wantsLayer = true
         hostView.wantsLayer = true
         hostView.autoresizingMask = [.width, .height]
+        floatingHostView.wantsLayer = true
+        floatingHostView.autoresizingMask = [.width, .height]
 
         if #available(macOS 26.0, *) {
             let container = FlippedGlassContainerView(frame: bounds)
@@ -256,6 +270,7 @@ final class FolderGlassHostView: NSView {
         } else {
             addSubview(hostView)
         }
+        addSubview(floatingHostView)
     }
 
     required init?(coder: NSCoder) {
@@ -266,6 +281,7 @@ final class FolderGlassHostView: NSView {
         super.layout()
         containerView?.frame = bounds
         hostView.frame = bounds
+        floatingHostView.frame = bounds
     }
 
     func update(plates: [FolderPlateModel]) {
@@ -283,8 +299,13 @@ final class FolderGlassHostView: NSView {
                 item = existing
             } else {
                 item = FolderGlassPlateItemView(frame: plate.rect)
-                hostView.addSubview(item)
                 itemsByID[plate.id] = item
+            }
+
+            let shouldIsolate = plate.isIsolated || plate.id == "source"
+            let targetParent: NSView = shouldIsolate ? floatingHostView : hostView
+            if item.superview !== targetParent {
+                targetParent.addSubview(item)
             }
 
             let cornerRadius = plate.rect.width * 0.225

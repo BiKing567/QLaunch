@@ -3883,6 +3883,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     let members = currentFolder.appIDs.compactMap { store.app(withID: $0) }
                     let isFolderHoverTarget = isHoverVisualTarget || itemID == dragHoverTargetID || itemID == groupingCandidateID
                     let incomingAppID = isFolderHoverTarget ? draggedAppID : nil
+                    let isIsolated = isDragged || isCollapsedSibling || isReturning || isExpandingSibling
                     folderPlates.append(
                         FolderPlateModel(
                             id: itemID,
@@ -3891,7 +3892,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                             members: members,
                             previewVisible: true,
                             iconSize: iconSize,
-                            incomingDropAppID: incomingAppID
+                            incomingDropAppID: incomingAppID,
+                            isIsolated: isIsolated
                         )
                     )
                 }
