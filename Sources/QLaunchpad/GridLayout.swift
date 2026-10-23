@@ -340,4 +340,23 @@ struct GridMetrics {
         guard (dx * dx + dy * dy) <= hitRadius * hitRadius else { return nil }
         return (page, row * Self.columns + column)
     }
+
+    /// Hit-test that returns the grid slot for the containing cell (including gaps and padding),
+    /// without requiring the point to be within the icon's center radius.
+    func cellSlot(
+        topPoint: CGPoint,
+        pageOffset: Double
+    ) -> (page: Int, localIndex: Int)? {
+        let relative = (topPoint.x - gridLeft) / max(size.width, 1) + pageOffset
+        let page = Int(floor(relative + 1e-6))
+        guard page >= 0 else { return nil }
+
+        let pageShift = CGFloat(Double(page) - pageOffset) * size.width
+        let localX = topPoint.x - gridLeft - pageShift
+        let localY = topPoint.y - gridTop
+        let column = Int(floor(localX / cellWidth))
+        let row = Int(floor(localY / cellHeight))
+        guard row >= 0, row < Self.rows, column >= 0, column < Self.columns else { return nil }
+        return (page, row * Self.columns + column)
+    }
 }
