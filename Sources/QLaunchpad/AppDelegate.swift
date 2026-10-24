@@ -515,6 +515,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
             switch event.keyCode {
             case 53: // Escape
+                if self.store.openedFolderID != nil {
+                    self.store.exitFolder()
+                    return nil
+                }
                 self.dismissLaunchpad()
                 return nil
             case 123: // Left
@@ -694,7 +698,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func toggleLaunchpad() {
+        if isInteractiveFinishing {
+            interruptInteractiveFinishing()
+        }
         if store.presentation == .dismissing {
+            return
+        }
+        if isAnimating {
             return
         }
         if store.isPresented || launchpadPanel.isVisible {
@@ -795,7 +805,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 NSApp.activate(ignoringOtherApps: true)
                 self.launchpadPanel.makeKey()
                 self.syncSettingsWindowLevel()
-                NotificationCenter.default.post(name: .qlaunchpadFocusSearch, object: nil)
                 self.updateStatusMenu()
             } else {
                 self.completeDismissal(generation: generation)
@@ -810,6 +819,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             interruptInteractiveFinishing()
         }
         interactiveTakeoverBaseProgress = nil
+
         guard !isAnimating else { return }
         guard let screen = currentTargetScreen else { return }
 
@@ -854,12 +864,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
               store.presentation == .presenting,
               launchpadPanel.isVisible else { return }
 
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .qlaunchpadFocusSearch, object: nil)
-        }
-
         if animationStyle != .none {
-            containerView.animateWallpaperIn(duration: animationStyle.duration * 0.9)
+            containerView.animateWallpaperIn(duration: animationStyle.duration)
         }
 
         // The GPU has replaced any retained drawable with this presentation's
@@ -874,14 +880,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 "animationStyle": animationStyle.rawValue
             ]
         )
-        // Refresh the catalog after the open animation. The first-page bake
+        // Refresh the catalog after the open animation if needed. The first-page bake
         // already waited for the initial scan so this pass does not block UI.
         DispatchQueue.main.asyncAfter(deadline: .now() + animationStyle.duration) { [weak self] in
             guard let self,
                   generation == self.presentationGeneration,
                   self.store.isPresented,
                   self.launchpadPanel.isVisible else { return }
-            self.store.load()
+            self.store.loadIfNeeded()
         }
         ignoreLaunchReopen = false
         ignoreReopenUntil = Date().addingTimeInterval(0.8)
@@ -909,7 +915,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             interruptInteractiveFinishing()
         }
         interactiveTakeoverBaseProgress = nil
-        guard launchpadPanel.isVisible || store.presentation == .presenting else {
+        guard !isAnimating else { return }
+        guard store.isPresented || launchpadPanel.isVisible else {
             return
         }
 
@@ -928,7 +935,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         var presentationInfo: [String: Any] = [
             "showing": false,
-            "animationStyle": animationStyle.rawValue
+            "animationStyle": animationStyle.rawValue,
+            "effectiveDuration": dismissalDuration
         ]
         if let openingAppID {
             presentationInfo["openingAppID"] = openingAppID
@@ -984,7 +992,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func updateStatusMenu() {
-        let visible = launchpadPanel?.isVisible == true && store.presentation != .hidden
+        let visible = launchpadPanel?.isVisible == true && store.presentation != .hidden && store.presentation != .dismissing
         showMenuItem?.title = L10n.tr(visible ? "menu.hide" : "menu.show")
     }
 

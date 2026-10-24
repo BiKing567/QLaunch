@@ -6,7 +6,7 @@ import Darwin
 import ImageIO
 
 private enum BackgroundVisualTokens {
-    static let saturation: CGFloat = 1.20
+    static let saturation: CGFloat = 1.00
     static let maximumLongEdge: CGFloat = 2_000
     /// Scales slider blur down to a soft, translucent acrylic range (~20-24pt).
     static let blurScale: CGFloat = 0.50
@@ -318,7 +318,7 @@ private actor PrivateWallpaperRenderer {
         let controls = CIFilter.colorControls()
         controls.inputImage = blurredImage
         controls.saturation = Float(saturation)
-        controls.contrast = 1.02
+        controls.contrast = 1.0
         controls.brightness = 0
 
         guard let output = controls.outputImage?.cropped(to: scaledExtent) else {
@@ -593,7 +593,7 @@ final class DesktopBackgroundView: NSView {
                 self?.applyAccessibilityPreferences()
             }
         }
-        applyAccessibilityPreferences()
+        updateLayersForMode(LaunchpadBackgroundPreferences.mode)
     }
 
     required init?(coder: NSCoder) {
@@ -610,7 +610,7 @@ final class DesktopBackgroundView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard let window else { return }
-        applyAccessibilityPreferences()
+        updateLayersForMode(LaunchpadBackgroundPreferences.mode)
         guard let screen = window.screen ?? NSScreen.main else { return }
         prepare(for: screen)
     }
@@ -632,11 +632,13 @@ final class DesktopBackgroundView: NSView {
 
     /// Recapture after the panel is gone so the next open is fresh, not black.
     func refreshAfterHide() {
+        guard LaunchpadBackgroundPreferences.mode != .screen else { return }
         guard let screen = window?.screen ?? NSScreen.main else { return }
         startCapture(on: screen, replaceExisting: true)
     }
 
     func reloadForPreferenceChange() {
+        updateLayersForMode(LaunchpadBackgroundPreferences.mode)
         guard let screen = window?.screen ?? NSScreen.main else { return }
         startCapture(on: screen, replaceExisting: true)
     }
@@ -648,6 +650,7 @@ final class DesktopBackgroundView: NSView {
         wallpaperImageView.isHidden = true
         visualEffectView.isHidden = false
         preparedScreenIdentifier = nil
+        updateLayersForMode(LaunchpadBackgroundPreferences.mode)
 
         if let screen = window?.screen ?? NSScreen.main {
             startCapture(on: screen, replaceExisting: true)
@@ -663,6 +666,7 @@ final class DesktopBackgroundView: NSView {
         let displayID = screenIdentifier ?? CGMainDisplayID()
         let screenChanged = preparedScreenIdentifier != screenIdentifier
         let mode = LaunchpadBackgroundPreferences.mode
+        updateLayersForMode(mode)
 
         if mode == .screen {
             captureGeneration += 1
@@ -749,12 +753,15 @@ final class DesktopBackgroundView: NSView {
         alphaValue = 0
         wallpaperImageView.alphaValue = 1
         visualEffectView.alphaValue = 1
+        if LaunchpadBackgroundPreferences.mode == .screen {
+            stripVisualEffectTints(in: visualEffectView.layer)
+        }
     }
 
     func animateWallpaperIn(duration: CFTimeInterval = 0.64) {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             animator().alphaValue = 1
         }
     }
@@ -769,13 +776,48 @@ final class DesktopBackgroundView: NSView {
         applyLiveBlurRadius()
     }
 
+    private func isBackdropLayerTree(_ layer: CALayer) -> Bool {
+        let typeName = String(describing: type(of: layer))
+        if typeName.contains("Backdrop") { return true }
+        return layer.sublayers?.contains(where: { isBackdropLayerTree($0) }) ?? false
+    }
+
+    private var lastStrippedSublayerCount: Int = -1
+
+    private func stripVisualEffectTints(in layer: CALayer?) {
+        guard let layer else { return }
+        let currentCount = layer.sublayers?.count ?? 0
+        if layer === visualEffectView.layer, currentCount == lastStrippedSublayerCount, currentCount > 0 {
+            return
+        }
+        if layer === visualEffectView.layer {
+            lastStrippedSublayerCount = currentCount
+        }
+        for sub in layer.sublayers ?? [] {
+            if !isBackdropLayerTree(sub) {
+                sub.isHidden = true
+                sub.opacity = 0
+                sub.backgroundColor = nil
+            } else {
+                stripVisualEffectTints(in: sub)
+            }
+        }
+    }
+
     private func applyLiveBlurRadius() {
+        if LaunchpadBackgroundPreferences.mode == .screen {
+            stripVisualEffectTints(in: visualEffectView.layer)
+        }
         guard let layer = gaussianBlurLayer(in: visualEffectView.layer) else { return }
         let effectiveRadius = Double(LaunchpadBackgroundPreferences.blurAmount)
             * Double(BackgroundVisualTokens.blurScale)
         layer.setValue(
             NSNumber(value: effectiveRadius),
             forKeyPath: "filters.gaussianBlur.inputRadius"
+        )
+        layer.setValue(
+            NSNumber(value: Double(BackgroundVisualTokens.saturation)),
+            forKeyPath: "filters.colorSaturate.inputAmount"
         )
     }
 
@@ -798,12 +840,46 @@ final class DesktopBackgroundView: NSView {
         return nil
     }
 
+    private func updateLayersForMode(_ mode: LaunchpadBackgroundMode) {
+        if mode == .screen {
+            veilView.isHidden = true
+            veilView.alphaValue = 0
+            noiseView.isHidden = true
+            noiseView.layer?.opacity = 0
+            tintView.isHidden = true
+            tintView.layer?.backgroundColor = NSColor.clear.cgColor
+            vignetteView.isHidden = true
+            vignetteView.layer?.opacity = 0
+            stripVisualEffectTints(in: visualEffectView.layer)
+        } else {
+            vignetteView.isHidden = false
+            vignetteView.layer?.opacity = 1
+            tintView.isHidden = false
+            noiseView.layer?.opacity = Float(BackgroundVisualTokens.noiseAlpha)
+            applyAccessibilityPreferences()
+        }
+    }
+
     private func applyAccessibilityPreferences() {
+        guard LaunchpadBackgroundPreferences.mode != .screen else {
+            veilView.isHidden = true
+            veilView.alphaValue = 0
+            noiseView.isHidden = true
+            noiseView.layer?.opacity = 0
+            tintView.isHidden = true
+            tintView.layer?.backgroundColor = NSColor.clear.cgColor
+            vignetteView.isHidden = true
+            vignetteView.layer?.opacity = 0
+            return
+        }
+
         let reduceTransparency = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
         let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
 
         veilView.isHidden = reduceTransparency
+        veilView.alphaValue = reduceTransparency ? 0 : 1
         noiseView.isHidden = reduceTransparency
+        noiseView.layer?.opacity = reduceTransparency ? 0 : Float(BackgroundVisualTokens.noiseAlpha)
 
         let tintAlpha: CGFloat
         if reduceTransparency {

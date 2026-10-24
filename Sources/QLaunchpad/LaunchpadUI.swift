@@ -18,12 +18,18 @@ extension Notification.Name {
     static let qlaunchpadShowSystemDockChanged = Notification.Name("QLaunchpadShowSystemDockChanged")
 }
 
+private final class PassthroughFlippedView: NSView {
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// Overlay hosting view that only intercepts hits in the search / chrome regions.
 final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
     var pageCount = 0
     var currentPage = 0
     var isSearching = false
     var safeInsets: LaunchpadSafeInsets = .zero
+    var folderCardMetrics: FolderCardMetrics?
     var onSelectPageAt: ((NSPoint) -> Void)?
     private var isScrubbingPages = false
 
@@ -31,10 +37,16 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
         LaunchpadPageIndicatorHitArea.isEnabled(pageCount: pageCount, isSearching: isSearching)
     }
 
+    private var isFolderOpen: Bool {
+        folderCardMetrics != nil
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
-        if searchPadRect.contains(local) {
-            return super.hitTest(point) ?? self
+        if !isFolderOpen {
+            if searchPadRect.contains(local) {
+                return super.hitTest(point) ?? self
+            }
         }
         if pageIndicatorEnabled, pageIndicatorRect.contains(local) {
             return self
@@ -48,10 +60,12 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        if searchPadRect.contains(point) {
-            isScrubbingPages = false
-            super.mouseDown(with: event)
-            return
+        if !isFolderOpen {
+            if searchPadRect.contains(point) {
+                isScrubbingPages = false
+                super.mouseDown(with: event)
+                return
+            }
         }
         if pageIndicatorEnabled, pageIndicatorRect.contains(point) {
             isScrubbingPages = true
@@ -89,6 +103,7 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
             pageCount: pageCount,
             currentPage: currentPage,
             safeInsets: safeInsets,
+            cardMetrics: folderCardMetrics,
             flipped: isFlipped
         )
     }
@@ -169,8 +184,12 @@ enum LaunchpadPageIndicatorHitArea {
         pageCount: Int,
         currentPage: Int,
         safeInsets: LaunchpadSafeInsets = .zero,
+        cardMetrics: FolderCardMetrics? = nil,
         flipped: Bool = false
     ) -> NSRect {
+        if let cardMetrics {
+            return cardMetrics.pageIndicatorVisualRect(pageCount: pageCount, currentPage: currentPage, flipped: flipped)
+        }
         let size = visualSize(pageCount: pageCount, currentPage: currentPage)
         let usableWidth = max(bounds.width - safeInsets.left - safeInsets.right, 1)
         let x = safeInsets.left + (usableWidth - size.width) / 2
@@ -198,6 +217,7 @@ enum LaunchpadPageIndicatorHitArea {
             pageCount: pageCount,
             currentPage: currentPage,
             safeInsets: LaunchpadSafeInsets(bottom: safeBottomInset),
+            cardMetrics: nil,
             flipped: flipped
         )
     }
@@ -207,13 +227,18 @@ enum LaunchpadPageIndicatorHitArea {
         pageCount: Int,
         currentPage: Int,
         safeInsets: LaunchpadSafeInsets = .zero,
+        cardMetrics: FolderCardMetrics? = nil,
         flipped: Bool = false
     ) -> NSRect {
-        visualRect(
+        if let cardMetrics {
+            return cardMetrics.pageIndicatorHitRect(pageCount: pageCount, currentPage: currentPage, flipped: flipped)
+        }
+        return visualRect(
             in: bounds,
             pageCount: pageCount,
             currentPage: currentPage,
             safeInsets: safeInsets,
+            cardMetrics: nil,
             flipped: flipped
         ).insetBy(dx: -hitSlopX, dy: -hitSlopY)
     }
@@ -230,6 +255,7 @@ enum LaunchpadPageIndicatorHitArea {
             pageCount: pageCount,
             currentPage: currentPage,
             safeInsets: LaunchpadSafeInsets(bottom: safeBottomInset),
+            cardMetrics: nil,
             flipped: flipped
         )
     }
@@ -240,9 +266,19 @@ enum LaunchpadPageIndicatorHitArea {
         pageCount: Int,
         currentPage: Int,
         safeInsets: LaunchpadSafeInsets = .zero,
+        cardMetrics: FolderCardMetrics? = nil,
         requireHitPad: Bool = true,
         flipped: Bool = false
     ) -> Int? {
+        if let cardMetrics {
+            return cardMetrics.pageIndicatorPageIndex(
+                at: point,
+                pageCount: pageCount,
+                currentPage: currentPage,
+                requireHitPad: requireHitPad,
+                flipped: flipped
+            )
+        }
         guard pageCount > 1 else { return nil }
         if requireHitPad {
             let pad = rect(
@@ -250,6 +286,7 @@ enum LaunchpadPageIndicatorHitArea {
                 pageCount: pageCount,
                 currentPage: currentPage,
                 safeInsets: safeInsets,
+                cardMetrics: nil,
                 flipped: flipped
             )
             guard pad.contains(point) else { return nil }
@@ -324,9 +361,14 @@ enum LaunchpadPageIndicatorHitArea {
 final class LaunchpadContainerView: NSView {
     private let store: AppStore
     private let backgroundView: DesktopBackgroundView
-    private let folderHostView: FolderGlassHostView
+    private let backdropView: FolderDepthBackdropView
+    private let fullScreenDimView = PassthroughFlippedView()
+    private let backgroundFolderHostView: FolderGlassHostView
+    private let foregroundFolderHostView: FolderGlassHostView
     private let metalView: LaunchpadMetalView
     private let overlayView: PassthroughHostingView<LaunchpadOverlayView>
+    private let folderTitleView: FolderTitleView
+    private var activeTransitionFolderID: String?
     private var cancellables = Set<AnyCancellable>()
 
     var metal: LaunchpadMetalView { metalView }
@@ -337,18 +379,97 @@ final class LaunchpadContainerView: NSView {
     init(store: AppStore) {
         self.store = store
         backgroundView = DesktopBackgroundView(screen: NSScreen.main)
-        folderHostView = FolderGlassHostView()
+        backdropView = FolderDepthBackdropView()
+        fullScreenDimView.wantsLayer = true
+        fullScreenDimView.layer?.backgroundColor = NSColor.black.cgColor
+        fullScreenDimView.alphaValue = 0.0
+        fullScreenDimView.isHidden = true
+        backgroundFolderHostView = FolderGlassHostView()
+        foregroundFolderHostView = FolderGlassHostView()
         metalView = LaunchpadMetalView(store: store)
         overlayView = PassthroughHostingView(rootView: LaunchpadOverlayView(store: store))
+        folderTitleView = FolderTitleView(store: store)
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
         addSubview(backgroundView)
-        addSubview(folderHostView)
+        addSubview(backdropView)
+        addSubview(backgroundFolderHostView)
+        addSubview(fullScreenDimView)
+        addSubview(foregroundFolderHostView)
         addSubview(metalView)
         addSubview(overlayView)
-        metalView.onUpdateFolderPlates = { [weak self] plates in
-            self?.folderHostView.update(plates: plates)
+        addSubview(folderTitleView)
+        metalView.onUpdateFolderPlates = { [weak self] plates, backdropAlpha in
+            guard let self else { return }
+            let fgPlates = plates.filter { $0.id.hasPrefix("opened-folder-") }
+            let bgPlates = plates.filter { !$0.id.hasPrefix("opened-folder-") }
+            let shouldRemoveUnused = (self.store.openedFolderID == nil) && !self.metalView.isFolderTransitionActive
+            if !bgPlates.isEmpty || shouldRemoveUnused {
+                self.backgroundFolderHostView.update(plates: bgPlates, removeUnused: shouldRemoveUnused)
+            }
+            self.foregroundFolderHostView.update(plates: fgPlates)
+
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            if backdropAlpha > 0.005 {
+                self.fullScreenDimView.frame = self.bounds
+                self.fullScreenDimView.alphaValue = CGFloat(backdropAlpha)
+                self.fullScreenDimView.isHidden = false
+            } else {
+                self.fullScreenDimView.alphaValue = 0
+                self.fullScreenDimView.isHidden = true
+            }
+            CATransaction.commit()
+        }
+        metalView.onUpdateFolderTitleTransition = { [weak self] state in
+            self?.folderTitleView.update(state: state)
+        }
+        metalView.onFolderTransitionBakeBackdrop = { [weak self] folderID, generation, rootItems, pageOffset, canvasScale, canvasPan, canvasAdaptive in
+            guard let self else { return }
+            self.activeTransitionFolderID = folderID
+            self.backgroundFolderHostView.setPlateHidden(true, for: folderID)
+            guard let device = self.metalView.device else { return }
+            let scale = self.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+            self.backdropView.bake(
+                device: device,
+                commandQueue: self.metalView.commandQueue,
+                boundsSize: self.bounds.size,
+                scale: scale
+            ) { commandBuffer, targetTexture in
+                self.metalView.renderBackdropRootGrid(
+                    to: targetTexture,
+                    commandBuffer: commandBuffer,
+                    excluding: folderID,
+                    items: rootItems,
+                    pageOffset: pageOffset,
+                    canvasScale: canvasScale,
+                    canvasPan: canvasPan,
+                    canvasAdaptive: canvasAdaptive
+                )
+            }
+        }
+        metalView.onFolderTransitionProgress = { [weak self] progress in
+            guard let self else { return }
+            self.backdropView.updateProgress(progress)
+            let sink = FolderDepthBackdropView.sinkTransform(progress: progress)
+            self.backgroundFolderHostView.applySinkTransform(sink.transform, progress: progress)
+        }
+        metalView.isDepthBackdropActive = { [weak self] in
+            guard let self else { return false }
+            return self.backdropView.isReady && !self.backdropView.isHidden
+        }
+        metalView.onFolderTransitionEnd = { [weak self] generation in
+            guard let self else { return }
+            guard generation == self.metalView.folderTransitionGeneration else { return }
+            guard !self.metalView.isFolderTransitionActive else { return }
+            if self.store.openedFolderID == nil {
+                self.backdropView.dismiss()
+                self.backgroundFolderHostView.resetSinkTransform()
+                self.backgroundFolderHostView.setAllPlatesHidden(false)
+                self.foregroundFolderHostView.removeAllPlates()
+                self.activeTransitionFolderID = nil
+            }
         }
         metalView.onInteractiveDismissProgress = { [weak self] progress in
             self?.onInteractiveDismissProgress?(progress)
@@ -430,39 +551,66 @@ final class LaunchpadContainerView: NSView {
             overlayView.alphaValue = showing ? 1 : 0
             if !showing {
                 backgroundView.alphaValue = 0
-                folderHostView.removeAllPlates()
+                backgroundFolderHostView.removeAllPlates()
+                foregroundFolderHostView.removeAllPlates()
+                backgroundFolderHostView.resetSinkTransform()
+                activeTransitionFolderID = nil
+                backdropView.dismiss()
+                fullScreenDimView.alphaValue = 0
+                fullScreenDimView.isHidden = true
             }
             return
         }
         // Fade dismissal is performed on the containing NSPanel. Keeping these
         // child layers unchanged avoids multiplying two opacity animations.
         if !showing, style == .fade { return }
-        let transitionDuration = showing ? style.duration : style.dismissalDuration
+        let transitionDuration = (note.userInfo?["effectiveDuration"] as? CFTimeInterval)
+            ?? (showing ? style.duration : style.dismissalDuration)
         let overlayDuration = min(transitionDuration, 0.32)
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = overlayDuration
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            ctx.allowsImplicitAnimation = true
             overlayView.animator().alphaValue = showing ? 1 : 0
         }
         if !showing {
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = style.dismissalDuration
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                ctx.duration = transitionDuration
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                ctx.allowsImplicitAnimation = true
                 backgroundView.animator().alphaValue = 0
             }
-            folderHostView.removeAllPlates()
+            backgroundFolderHostView.removeAllPlates()
+            foregroundFolderHostView.removeAllPlates()
+            backgroundFolderHostView.resetSinkTransform()
+            activeTransitionFolderID = nil
+            backdropView.dismiss()
+            fullScreenDimView.alphaValue = 0
+            fullScreenDimView.isHidden = true
         }
     }
 
     @objc private func cacheClearRequested() {
         backgroundView.clearCacheAndReload()
-        folderHostView.removeAllPlates()
-        folderHostView.clearCache()
+        backgroundFolderHostView.removeAllPlates()
+        backgroundFolderHostView.clearCache()
+        foregroundFolderHostView.removeAllPlates()
+        foregroundFolderHostView.clearCache()
+        backgroundFolderHostView.resetSinkTransform()
+        activeTransitionFolderID = nil
+        backdropView.purgeTextures()
+        backdropView.dismiss()
     }
 
     @objc private func gridLayoutChangedNote() {
-        folderHostView.removeAllPlates()
-        folderHostView.clearCache()
+        backgroundFolderHostView.removeAllPlates()
+        backgroundFolderHostView.clearCache()
+        foregroundFolderHostView.removeAllPlates()
+        foregroundFolderHostView.clearCache()
+        backgroundFolderHostView.resetSinkTransform()
+        activeTransitionFolderID = nil
+        backdropView.purgeTextures()
+        backdropView.dismiss()
         metalView.needsDisplay = true
         syncPageIndicatorHitState()
     }
@@ -480,14 +628,27 @@ final class LaunchpadContainerView: NSView {
         overlayView.currentPage = store.currentPage
         overlayView.isSearching = store.isSearching
         overlayView.safeInsets = store.safeInsets
+        if let folderID = store.openedFolderID, let folder = store.folder(withID: folderID) {
+            overlayView.folderCardMetrics = FolderCardMetrics(
+                boundsSize: bounds.size,
+                safeInsets: store.safeInsets,
+                itemCount: folder.appIDs.count
+            )
+        } else {
+            overlayView.folderCardMetrics = nil
+        }
     }
 
     override func layout() {
         super.layout()
         backgroundView.frame = bounds
-        folderHostView.frame = bounds
+        backdropView.frame = bounds
+        backgroundFolderHostView.frame = bounds
+        fullScreenDimView.frame = bounds
+        foregroundFolderHostView.frame = bounds
         metalView.frame = bounds
         overlayView.frame = bounds
+        folderTitleView.frame = bounds
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -497,6 +658,10 @@ final class LaunchpadContainerView: NSView {
     override func keyDown(with event: NSEvent) {
         // Esc
         if event.keyCode == 53 {
+            if store.openedFolderID != nil {
+                store.exitFolder()
+                return
+            }
             NotificationCenter.default.post(name: .qlaunchpadDismiss, object: nil)
             return
         }
@@ -525,12 +690,11 @@ final class LaunchpadContainerView: NSView {
         animationStyle _: LaunchpadAnimationStyle
     ) {
         setPresentationScale(1)
-        // Hide any drawable retained from the previous presentation until Metal
-        // confirms that the new animation's transparent start frame is ready.
         metalView.alphaValue = 0
         overlayView.alphaValue = 0
         backgroundView.prepare(for: screen)
         backgroundView.prepareForPresentation()
+        window?.makeFirstResponder(self)
     }
 
     func prepareForInteractiveShow(on screen: NSScreen, style: LaunchpadAnimationStyle = LaunchpadAnimationStyle.current, initialProgress: CGFloat = 0.0) {
@@ -541,6 +705,7 @@ final class LaunchpadContainerView: NSView {
         backgroundView.prepare(for: screen)
         backgroundView.prepareForPresentation()
         metalView.prepareForInteractivePresentation(style: style, initialProgress: initialProgress)
+        window?.makeFirstResponder(self)
     }
 
     func prepareForInteractiveDismiss(style: LaunchpadAnimationStyle = LaunchpadAnimationStyle.current) {
@@ -584,11 +749,15 @@ final class LaunchpadContainerView: NSView {
 
     func hideImmediately() {
         metalView.resetInteractivePresentationState()
+        metalView.clearDrawableIfAvailable()
         [backgroundView, metalView, overlayView].forEach { view in
             view.layer?.removeAllAnimations()
             view.alphaValue = 0
         }
-        folderHostView.removeAllPlates()
+        backgroundFolderHostView.removeAllPlates()
+        foregroundFolderHostView.removeAllPlates()
+        backgroundFolderHostView.resetSinkTransform()
+        activeTransitionFolderID = nil
         setPresentationScale(1)
     }
 
@@ -616,42 +785,52 @@ struct LaunchpadOverlayView: View {
     @ObservedObject private var language = LocalizationManager.shared
 
     var body: some View {
-        GeometryReader { _ in
+        GeometryReader { geo in
             ZStack {
+                // Top Search Bar & bottom PageIndicator for root grid
                 VStack(spacing: 0) {
-                    ZStack {
-                        if let folderID = store.openedFolderID,
-                           let folder = store.folder(withID: folderID) {
-                            FolderTitleField(store: store, folder: folder)
-                                .transition(.opacity)
-                        } else {
-                            SearchField(store: store)
-                                .transition(.opacity)
-                        }
-                    }
-                    .animation(.easeOut(duration: 0.40), value: store.openedFolderID)
-                    .background {
-                        Color.clear
-                            .frame(
-                                width: LaunchpadFieldHitArea.padSize.width,
-                                height: LaunchpadFieldHitArea.padSize.height
-                            )
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                guard store.openedFolderID == nil else { return }
-                                NotificationCenter.default.post(
-                                    name: .qlaunchpadFocusSearch,
-                                    object: nil
-                                )
+                    if store.openedFolderID == nil {
+                        SearchField(store: store)
+                            .transition(.opacity)
+                            .background {
+                                Color.clear
+                                    .frame(
+                                        width: LaunchpadFieldHitArea.padSize.width,
+                                        height: LaunchpadFieldHitArea.padSize.height
+                                    )
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        NotificationCenter.default.post(
+                                            name: .qlaunchpadFocusSearch,
+                                            object: nil
+                                        )
+                                    }
+                                    .accessibilityHidden(true)
                             }
-                            .accessibilityHidden(true)
+                            .padding(.top, LaunchpadFieldHitArea.topInset + store.safeInsets.top)
                     }
-                    .padding(.top, LaunchpadFieldHitArea.topInset + store.safeInsets.top)
                     Spacer(minLength: 0)
-                    PageIndicator(store: store)
-                        .padding(.bottom, LaunchpadPageIndicatorHitArea.bottomInset + store.safeInsets.bottom)
+                    if store.openedFolderID == nil {
+                        PageIndicator(store: store)
+                            .padding(.bottom, LaunchpadPageIndicatorHitArea.bottomInset + store.safeInsets.bottom)
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .animation(.easeOut(duration: 0.30), value: store.openedFolderID)
+
+                if let folderID = store.openedFolderID,
+                   !store.isFolderTransitionActive,
+                   let folder = store.folder(withID: folderID),
+                   store.pageCount > 1 {
+                    let metrics = FolderCardMetrics(
+                        boundsSize: geo.size,
+                        safeInsets: store.safeInsets,
+                        itemCount: folder.appIDs.count
+                    )
+                    PageIndicator(store: store)
+                        .position(x: metrics.cardRect.midX, y: metrics.cardRect.maxY - 14)
+                        .transition(.opacity)
+                }
 
                 if store.isDraggingFolderApp {
                     FolderRemovalDropZone(isTargeted: store.isFolderRemovalTargeted)
@@ -698,74 +877,23 @@ private struct FolderRemovalDropZone: View {
 
 // MARK: - Liquid glass search field
 
-private struct FolderTitleField: View {
-    @ObservedObject var store: AppStore
-    let folder: AppFolder
-    @State private var draftName: String
-    @FocusState private var isFocused: Bool
-
-    init(store: AppStore, folder: AppFolder) {
-        self.store = store
-        self.folder = folder
-        _draftName = State(initialValue: folder.name)
-    }
-
-    var body: some View {
-        TextField(L10n.tr("launchpad.folder"), text: $draftName) {
-            commitName()
-        }
-        .textFieldStyle(.plain)
-        .font(.system(size: 22, weight: .semibold, design: .rounded))
-        .foregroundStyle(.white.opacity(0.94))
-        .multilineTextAlignment(.center)
-        .lineLimit(1)
-        .truncationMode(.middle)
-        .focused($isFocused)
-        .padding(.horizontal, 16)
-        .frame(
-            width: LaunchpadFieldHitArea.fieldSize.width + 40,
-            height: LaunchpadFieldHitArea.fieldSize.height
-        )
-        .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(isFocused ? 0.12 : 0))
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(L10n.tr("launchpad.folderName"))
-        .onAppear {
-            draftName = folder.name
-        }
-        .onChange(of: folder.name) { _, name in
-            if !isFocused {
-                draftName = name
-            }
-        }
-        .onChange(of: isFocused) { _, focused in
-            if !focused {
-                commitName()
-            }
-        }
-    }
-
-    private func commitName() {
-        store.renameFolder(folder.id, to: draftName)
-        if let currentName = store.folder(withID: folder.id)?.name {
-            draftName = currentName
-        }
-    }
-}
 
 private struct SearchField: View {
     @ObservedObject var store: AppStore
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isFocused = false
     /// Bumped to request first-responder; survives overlay reuse across presentations.
     @State private var focusRequestID = 0
+
+    private var isDark: Bool {
+        colorScheme == .dark
+    }
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.72))
+                .foregroundStyle(isDark ? Color.white.opacity(0.72) : Color.black.opacity(0.65))
                 .symbolRenderingMode(.hierarchical)
 
             // AppKit field: custom placeholder color + native IME marked-text handling.
@@ -777,16 +905,12 @@ private struct SearchField: View {
                 ),
                 isFocused: $isFocused,
                 focusRequestID: focusRequestID,
-                placeholder: L10n.tr("launchpad.search")
+                placeholder: L10n.tr("launchpad.search"),
+                isDark: isDark
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onAppear {
-                DispatchQueue.main.async {
-                    focusRequestID &+= 1
-                }
-            }
             .onReceive(NotificationCenter.default.publisher(for: .qlaunchpadFocusSearch)) { _ in
-                // Overlay persists between presentations; re-focus on each open.
+                // Focus only when user explicitly clicks search or types
                 focusRequestID &+= 1
             }
 
@@ -797,7 +921,7 @@ private struct SearchField: View {
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(isDark ? Color.white.opacity(0.45) : Color.black.opacity(0.45))
                     .symbolRenderingMode(.hierarchical)
                     .frame(width: 18, height: 18)
             }
@@ -814,7 +938,7 @@ private struct SearchField: View {
             } label: {
                 Image(systemName: "gearshape.fill")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.68))
+                    .foregroundStyle(isDark ? Color.white.opacity(0.68) : Color.black.opacity(0.65))
                     .symbolRenderingMode(.hierarchical)
                     .frame(width: 18, height: 18)
             }
@@ -841,9 +965,14 @@ private extension View {
 /// the field holds first-responder (search is auto-focused on open).
 private struct LaunchpadGlassFieldChrome: ViewModifier {
     var isEmphasized: Bool
+    @Environment(\.colorScheme) private var colorScheme
     private let width: CGFloat = 320
     private let height: CGFloat = 38
     private let cornerRadius: CGFloat = 19
+
+    private var isDark: Bool {
+        colorScheme == .dark
+    }
 
     func body(content: Content) -> some View {
         content
@@ -851,7 +980,11 @@ private struct LaunchpadGlassFieldChrome: ViewModifier {
             .frame(width: width, height: height)
             .background { glassBackground }
             .overlay { glassStroke }
-            .shadow(color: .black.opacity(isEmphasized ? 0.20 : 0.12), radius: isEmphasized ? 18 : 14, y: 6)
+            .shadow(
+                color: Color.black.opacity(isEmphasized ? (isDark ? 0.20 : 0.12) : (isDark ? 0.12 : 0.08)),
+                radius: isEmphasized ? 18 : 14,
+                y: 6
+            )
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .animation(.easeOut(duration: 0.16), value: isEmphasized)
     }
@@ -865,13 +998,17 @@ private struct LaunchpadGlassFieldChrome: ViewModifier {
                 .glassEffect(.clear.interactive(true), in: shape)
         } else if #available(macOS 15.0, *) {
             ZStack {
-                shape.fill(.ultraThinMaterial).opacity(0.55)
+                shape.fill(.ultraThinMaterial).opacity(isDark ? 0.55 : 0.65)
                 shape.fill(
                     LinearGradient(
-                        colors: [
+                        colors: isDark ? [
                             Color.white.opacity(0.14),
                             Color.white.opacity(0.04),
                             Color.white.opacity(0.02)
+                        ] : [
+                            Color.white.opacity(0.50),
+                            Color.white.opacity(0.25),
+                            Color.white.opacity(0.12)
                         ],
                         startPoint: .top,
                         endPoint: .bottom
@@ -879,9 +1016,13 @@ private struct LaunchpadGlassFieldChrome: ViewModifier {
                 )
                 shape.stroke(
                     LinearGradient(
-                        colors: [
+                        colors: isDark ? [
                             Color.white.opacity(0.45),
                             Color.white.opacity(0.06),
+                            Color.clear
+                        ] : [
+                            Color.black.opacity(0.12),
+                            Color.black.opacity(0.04),
                             Color.clear
                         ],
                         startPoint: .top,
@@ -892,19 +1033,20 @@ private struct LaunchpadGlassFieldChrome: ViewModifier {
             }
         } else {
             ZStack {
-                shape.fill(.ultraThinMaterial).opacity(0.5)
-                shape.fill(Color.white.opacity(0.05))
+                shape.fill(.ultraThinMaterial).opacity(isDark ? 0.5 : 0.6)
+                shape.fill(isDark ? Color.white.opacity(0.05) : Color.white.opacity(0.3))
             }
         }
     }
 
     private var glassStroke: some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let baseColor = isDark ? Color.white : Color.black
+        return RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .strokeBorder(
                 LinearGradient(
                     colors: [
-                        Color.white.opacity(isEmphasized ? 0.46 : 0.22),
-                        Color.white.opacity(0.06)
+                        baseColor.opacity(isEmphasized ? (isDark ? 0.46 : 0.32) : (isDark ? 0.22 : 0.14)),
+                        baseColor.opacity(0.06)
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
@@ -924,6 +1066,7 @@ private struct AppKitSearchTextField: NSViewRepresentable {
     @Binding var isFocused: Bool
     var focusRequestID: Int
     var placeholder: String
+    var isDark: Bool
 
     private static let textFont: NSFont = {
         let base = NSFont.systemFont(ofSize: 16, weight: .medium)
@@ -933,15 +1076,13 @@ private struct AppKitSearchTextField: NSViewRepresentable {
         return base
     }()
 
-    private static let textColor = NSColor.white.withAlphaComponent(0.95)
-    private static let placeholderColor = NSColor.white.withAlphaComponent(0.55)
-
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
 
     func makeNSView(context: Context) -> IMESearchTextView {
         let view = IMESearchTextView(frame: .zero)
+        view.explicitIsDark = isDark
         view.setSearchText(text)
         view.placeholder = placeholder
         view.delegate = context.coordinator
@@ -953,6 +1094,7 @@ private struct AppKitSearchTextField: NSViewRepresentable {
 
     func updateNSView(_ field: IMESearchTextView, context: Context) {
         context.coordinator.parent = self
+        field.explicitIsDark = isDark
 
         // Never replace the text while IME marked text is active.
         if !field.hasMarkedText(), field.string != text {
@@ -1013,6 +1155,37 @@ private struct AppKitSearchTextField: NSViewRepresentable {
 private final class IMESearchTextView: NSTextView {
     var placeholder = "Search"
     var onTextChange: ((String) -> Void)?
+    var explicitIsDark: Bool? {
+        didSet {
+            if oldValue != explicitIsDark {
+                updateColors()
+            }
+        }
+    }
+
+    private var isDarkMode: Bool {
+        if let explicit = explicitIsDark {
+            return explicit
+        }
+        let appearance = window?.effectiveAppearance ?? effectiveAppearance
+        return appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    }
+
+    private var currentTextColor: NSColor {
+        isDarkMode
+            ? NSColor.white.withAlphaComponent(0.95)
+            : NSColor.black.withAlphaComponent(0.88)
+    }
+
+    private var currentPlaceholderColor: NSColor {
+        isDarkMode
+            ? NSColor.white.withAlphaComponent(0.55)
+            : NSColor.black.withAlphaComponent(0.48)
+    }
+
+    private var currentInsertionPointColor: NSColor {
+        isDarkMode ? .white : .black
+    }
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -1049,14 +1222,37 @@ private final class IMESearchTextView: NSTextView {
         textContainer?.widthTracksTextView = true
         textContainerInset = .zero
         font = NSFont.systemFont(ofSize: 16, weight: .medium)
-        textColor = NSColor.white.withAlphaComponent(0.95)
-        insertionPointColor = .white
         backgroundColor = .clear
         allowsUndo = true
-        typingAttributes = [
+        updateColors()
+    }
+
+    func updateColors() {
+        textColor = currentTextColor
+        insertionPointColor = currentInsertionPointColor
+        let attributes: [NSAttributedString.Key: Any] = [
             .font: font as Any,
-            .foregroundColor: textColor as Any
+            .foregroundColor: currentTextColor as Any
         ]
+        typingAttributes = attributes
+        if let textStorage, textStorage.length > 0 {
+            textStorage.addAttribute(
+                .foregroundColor,
+                value: currentTextColor,
+                range: NSRange(location: 0, length: textStorage.length)
+            )
+        }
+        needsDisplay = true
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateColors()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateColors()
     }
 
     func setSearchText(_ value: String) {
@@ -1068,7 +1264,7 @@ private final class IMESearchTextView: NSTextView {
         // without changing the storage during a draw pass.
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font as Any,
-            .foregroundColor: textColor as Any
+            .foregroundColor: currentTextColor as Any
         ]
         textStorage?.setAttributedString(
             NSAttributedString(string: value, attributes: attributes)
@@ -1126,7 +1322,7 @@ private final class IMESearchTextView: NSTextView {
         guard string.isEmpty, !hasMarkedText() else { return }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 16, weight: .medium),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.55)
+            .foregroundColor: currentPlaceholderColor
         ]
         let size = placeholder.size(withAttributes: attributes)
         let y = max(0, (bounds.height - size.height) / 2)

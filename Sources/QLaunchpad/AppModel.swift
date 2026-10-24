@@ -525,8 +525,10 @@ final class AppStore: ObservableObject {
     @Published private(set) var launchpadItems: [LaunchpadItem] = []
     @Published private(set) var folders: [AppFolder] = []
     @Published private(set) var openedFolderID: String?
+    private(set) var lastClosedFolderPageOffset: Double?
     @Published private(set) var isDraggingFolderApp = false
     @Published private(set) var isFolderRemovalTargeted = false
+    @Published private(set) var isFolderTransitionActive = false
     @Published private(set) var searchText = ""
     @Published private(set) var isLoading = true
     @Published private(set) var isApplyingRenderQuality = false
@@ -579,6 +581,11 @@ final class AppStore: ObservableObject {
 
     var pageCapacity: Int {
         let preset = GridLayoutPreset.current
+        if openedFolderID != nil {
+            let cols = min(preset.columns, 7)
+            let maxRows = min(preset.rows, 4)
+            return max(1, cols * maxRows)
+        }
         return preset.columns * preset.exportedRows(itemCount: activeDisplayItems.count)
     }
 
@@ -792,6 +799,20 @@ final class AppStore: ObservableObject {
         isFolderRemovalTargeted = targeted
     }
 
+    func setFolderTransitionActive(_ active: Bool) {
+        guard isFolderTransitionActive != active else { return }
+        isFolderTransitionActive = active
+    }
+
+    private var lastScanTime: Date?
+
+    func loadIfNeeded(minimumInterval: TimeInterval = 60) {
+        if let lastScanTime, Date().timeIntervalSince(lastScanTime) < minimumInterval {
+            return
+        }
+        load()
+    }
+
     func load() {
         // A detached scan cannot be stopped reliably once it has started.
         // Ignore duplicate requests instead of allowing two filesystem scans
@@ -799,11 +820,12 @@ final class AppStore: ObservableObject {
         // or nil this task — they only bump `layoutGeneration`.
         guard scanTask == nil else { return }
 
+        lastScanTime = Date()
         isLoading = true
         let generationAtStart = layoutGeneration
         let additionalRoots = customApplicationSourcePaths.map { URL(fileURLWithPath: $0) }
         scanTask = Task { @MainActor [weak self] in
-            let result = await Task.detached(priority: .userInitiated) {
+            let result = await Task.detached(priority: .utility) {
                 AppScanner.scan(additionalRoots: additionalRoots)
             }.value
             guard let self else { return }
@@ -1182,6 +1204,10 @@ final class AppStore: ObservableObject {
         if openedFolderID == nil {
             pageBeforeFolder = Double(currentPage)
         }
+        lastClosedFolderPageOffset = nil
+        if !isSearching, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            isFolderTransitionActive = true
+        }
         openedFolderID = folderID
         pageBeforeSearch = nil
         searchText = ""
@@ -1219,6 +1245,10 @@ final class AppStore: ObservableObject {
     @discardableResult
     private func leaveOpenedFolder() -> String? {
         guard let folderID = openedFolderID else { return nil }
+        lastClosedFolderPageOffset = pageOffset
+        if !isSearching, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            isFolderTransitionActive = true
+        }
         openedFolderID = nil
         isDraggingFolderApp = false
         isFolderRemovalTargeted = false
@@ -1359,9 +1389,13 @@ final class AppStore: ObservableObject {
         } ?? fallback
         let pageEnd = min(pageStart + pageCapacity, items.count)
         let local = current - pageStart
-        let navigationColumns = GridLayoutPreset.current.isInfiniteCanvas
-            ? infiniteCanvasNavigationColumns
-            : GridMetrics.columns
+        let navigationColumns = if openedFolderID != nil {
+            min(GridLayoutPreset.current.columns, 7)
+        } else if GridLayoutPreset.current.isInfiniteCanvas {
+            infiniteCanvasNavigationColumns
+        } else {
+            GridMetrics.columns
+        }
         let row = local / navigationColumns
         let column = local % navigationColumns
         var destination = current
@@ -1437,12 +1471,18 @@ final class AppStore: ObservableObject {
             pageCount: pageCount,
             isSearching: isSearching
         ) else { return false }
+        let cardMetrics: FolderCardMetrics? = openedFolderID != nil ? FolderCardMetrics(
+            boundsSize: bounds.size,
+            safeInsets: safeInsets,
+            itemCount: activeDisplayItems.count
+        ) : nil
         guard let page = LaunchpadPageIndicatorHitArea.pageIndex(
             at: point,
             in: bounds,
             pageCount: pageCount,
             currentPage: currentPage,
             safeInsets: safeInsets,
+            cardMetrics: cardMetrics,
             requireHitPad: !scrubbing,
             flipped: flipped
         ) else { return false }

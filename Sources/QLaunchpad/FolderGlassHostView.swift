@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import QLaunchpadCore
 import QuartzCore
 
@@ -12,6 +13,7 @@ struct FolderPlateModel: Equatable, Sendable {
     let iconSize: CGFloat
     let incomingDropAppID: String?
     let isIsolated: Bool
+    let customCornerRadius: CGFloat?
 
     init(
         id: String,
@@ -21,7 +23,8 @@ struct FolderPlateModel: Equatable, Sendable {
         previewVisible: Bool,
         iconSize: CGFloat,
         incomingDropAppID: String? = nil,
-        isIsolated: Bool = false
+        isIsolated: Bool = false,
+        customCornerRadius: CGFloat? = nil
     ) {
         self.id = id
         self.rect = rect
@@ -31,6 +34,7 @@ struct FolderPlateModel: Equatable, Sendable {
         self.iconSize = iconSize
         self.incomingDropAppID = incomingDropAppID
         self.isIsolated = isIsolated
+        self.customCornerRadius = customCornerRadius
     }
 }
 
@@ -77,6 +81,7 @@ private final class FolderGlassPlateItemView: NSView {
     private var glassEffectView: NSView?
     private let contentView = FlippedContainerView()
     private var previewLayers: [CALayer] = []
+    private(set) var memberIDs: [String] = []
 
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -84,6 +89,7 @@ private final class FolderGlassPlateItemView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
+        layer?.masksToBounds = false
 
         contentView.frame = bounds
         contentView.wantsLayer = true
@@ -147,14 +153,9 @@ private final class FolderGlassPlateItemView: NSView {
 
     private func updateFallbackAppearance() {
         guard let visual = glassEffectView as? NSVisualEffectView else { return }
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        if isDark {
-            visual.layer?.backgroundColor = NSColor(white: 0.22, alpha: 0.65).cgColor
-            visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.14).cgColor
-            visual.layer?.borderWidth = 0.5
-        } else {
-            visual.layer?.backgroundColor = NSColor(white: 0.95, alpha: 0.60).cgColor
-            visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.35).cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            visual.layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
+            visual.layer?.borderColor = NSColor.separatorColor.cgColor
             visual.layer?.borderWidth = 0.5
         }
     }
@@ -180,6 +181,7 @@ private final class FolderGlassPlateItemView: NSView {
         }
 
         guard previewVisible, !members.isEmpty else {
+            memberIDs = []
             for layer in previewLayers { layer.isHidden = true }
             return
         }
@@ -192,6 +194,7 @@ private final class FolderGlassPlateItemView: NSView {
         let miniSize = FolderPreviewLayout.miniSize(in: effectiveIconSize)
 
         let displayMembers = Array(members.prefix(FolderPreviewLayout.capacity))
+        memberIDs = displayMembers.map(\.id)
 
         for (index, layer) in previewLayers.enumerated() {
             if index < displayMembers.count {
@@ -231,6 +234,55 @@ private final class FolderGlassPlateItemView: NSView {
             }
         }
     }
+
+    /// Draws the visible mini-icons directly into a flipped CGContext without CPU shadow overhead.
+    func drawPreview(in ctx: CGContext) {
+        for layer in previewLayers where !layer.isHidden {
+            guard let contents = layer.contents,
+                  CFGetTypeID(contents as CFTypeRef) == CGImage.typeID else { continue }
+            let cgImage = contents as! CGImage
+            let frame = layer.frame
+            ctx.saveGState()
+            ctx.translateBy(x: frame.minX, y: frame.maxY)
+            ctx.scaleBy(x: 1.0, y: -1.0)
+            ctx.draw(cgImage, in: CGRect(origin: .zero, size: frame.size))
+            ctx.restoreGState()
+        }
+    }
+
+    private static let filterName = "plateBlur"
+    private var blurFilter: CIFilter?
+
+    /// Smoothly blurs the entire folder plate (liquid glass baseplate + borders + mini-icons)
+    /// using a named CIGaussianBlur filter updated via layer keypath, matching the background icons.
+    func updateBlur(progress: CGFloat) {
+        let local = min(max(progress, 0), 1)
+        let blurRadius = 16.0 * local
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        if blurRadius > 0.05 {
+            if layer?.filters == nil || layer?.filters?.isEmpty == true {
+                let filter = blurFilter ?? CIFilter(name: "CIGaussianBlur")
+                blurFilter = filter
+                filter?.name = Self.filterName
+                filter?.setValue(blurRadius, forKey: kCIInputRadiusKey)
+                if let filter {
+                    layer?.filters = [filter]
+                }
+            } else {
+                layer?.setValue(blurRadius, forKeyPath: "filters.\(Self.filterName).inputRadius")
+            }
+        } else {
+            if layer?.filters != nil {
+                layer?.setValue(0.0, forKeyPath: "filters.\(Self.filterName).inputRadius")
+                layer?.filters = nil
+            }
+        }
+
+        CATransaction.commit()
+    }
 }
 
 /// Host view placed directly behind `LaunchpadMetalView`.
@@ -244,6 +296,7 @@ private final class FolderGlassPlateItemView: NSView {
 final class FolderGlassHostView: NSView {
     private let hostView = FlippedContainerView()
     private var itemsByID: [String: FolderGlassPlateItemView] = [:]
+    private var currentRawSinkTransform: CATransform3D?
 
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -251,8 +304,9 @@ final class FolderGlassHostView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
+        layer?.masksToBounds = false
         hostView.wantsLayer = true
-        hostView.autoresizingMask = [.width, .height]
+        hostView.layer?.masksToBounds = false
         addSubview(hostView)
     }
 
@@ -260,12 +314,29 @@ final class FolderGlassHostView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func layout() {
-        super.layout()
-        hostView.frame = bounds
+    private func centeredTransform(for transform: CATransform3D, in bounds: CGRect) -> CATransform3D {
+        guard bounds.width > 0, bounds.height > 0 else { return transform }
+        let midX = bounds.midX
+        let midY = bounds.midY
+        let toOrigin = CATransform3DMakeTranslation(-midX, -midY, 0)
+        let fromOrigin = CATransform3DMakeTranslation(midX, midY, 0)
+        return CATransform3DConcat(CATransform3DConcat(toOrigin, transform), fromOrigin)
     }
 
-    func update(plates: [FolderPlateModel]) {
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        hostView.frame = bounds
+        if let raw = currentRawSinkTransform {
+            hostView.layer?.sublayerTransform = centeredTransform(for: raw, in: bounds)
+        } else {
+            hostView.layer?.sublayerTransform = CATransform3DIdentity
+        }
+        CATransaction.commit()
+    }
+
+    func update(plates: [FolderPlateModel], removeUnused: Bool = true) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
@@ -289,7 +360,7 @@ final class FolderGlassHostView: NSView {
                 hostView.addSubview(item)
             }
 
-            let cornerRadius = plate.rect.width * 0.225
+            let cornerRadius = plate.customCornerRadius ?? (plate.rect.width * 0.225)
             item.update(
                 rect: plate.rect,
                 cornerRadius: cornerRadius,
@@ -302,25 +373,70 @@ final class FolderGlassHostView: NSView {
             item.isHidden = false
         }
 
-        for (id, item) in itemsByID where !activeIDs.contains(id) {
-            item.isHidden = true
+        if removeUnused {
+            for (id, item) in itemsByID where !activeIDs.contains(id) {
+                item.isHidden = true
+            }
         }
 
         CATransaction.commit()
     }
 
-    func clearCache() {
-        AppIconImageProvider.shared.clear()
+    func setPlateHidden(_ isHidden: Bool, for id: String) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        itemsByID[id]?.isHidden = isHidden
+        CATransaction.commit()
+    }
+
+    func setAllPlatesHidden(_ isHidden: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for item in itemsByID.values {
+            item.isHidden = isHidden
+        }
+        CATransaction.commit()
+    }
+
+    /// Applies the shared depth backdrop sink transform (scale and translateY) and blurs 9-grid previews.
+    func applySinkTransform(_ transform: CATransform3D, progress: CGFloat) {
+        currentRawSinkTransform = transform
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        hostView.layer?.sublayerTransform = centeredTransform(for: transform, in: bounds)
+        for item in itemsByID.values {
+            item.updateBlur(progress: progress)
+        }
+        CATransaction.commit()
+    }
+
+    /// Resets the sink transform to identity and clears 9-grid blur filters.
+    func resetSinkTransform() {
+        currentRawSinkTransform = nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        hostView.layer?.sublayerTransform = CATransform3DIdentity
+        for item in itemsByID.values {
+            item.updateBlur(progress: 0)
+        }
+        CATransaction.commit()
     }
 
     func removeAllPlates() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for (_, item) in itemsByID {
+            item.updateBlur(progress: 0)
             item.removeFromSuperview()
         }
         itemsByID.removeAll()
+        currentRawSinkTransform = nil
+        hostView.layer?.sublayerTransform = CATransform3DIdentity
         AppIconImageProvider.shared.clear()
         CATransaction.commit()
+    }
+
+    func clearCache() {
+        AppIconImageProvider.shared.clear()
     }
 }
