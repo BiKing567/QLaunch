@@ -16,7 +16,7 @@
   <b>本分支基于 <a href="https://github.com/qzrzz/QLaunch">qzrzz/QLaunch</a> 进行了多项手势、动画与稳定性的深度重构优化。</b>
 </p>
 
-- 📦 **本分支最新下载**：[BiKing567/QLaunch Releases (V1.2.0)](https://github.com/BiKing567/QLaunch/releases)
+- 📦 **本分支最新下载**：[BiKing567/QLaunch Releases (V1.3.0)](https://github.com/BiKing567/QLaunch/releases)
 - 🏠 **原项目主页**：[https://qzrzz.com/QLaunch/](https://qzrzz.com/QLaunch/)
 - 🔗 **原项目仓库**：[https://github.com/qzrzz/QLaunch](https://github.com/qzrzz/QLaunch)
 
@@ -30,6 +30,12 @@
 ## 🌟 本分支重点改进与优化
 
 本项目在原版 QLaunch 的优秀基础上，针对触控板多指手势、动画交互细节、系统原生兼容性进行了全面深度优化与修复：
+
+### 📁 文件夹拖拽层级与深度背景生命周期重构 (V1.3.0)
+- **文件夹拖拽置顶层级**：新增置顶拖拽底板宿主层，彻底解决文件夹在被拖动划过普通应用图标时出现层级倒置、被普通图标遮挡的问题。
+- **画质切换与背景生命周期同步**：修复打开文件夹期间切换渲染质量时，旧深度背景快照残留或新画质背景缺失的问题，实现毫秒级即时同步。
+- **缓存重置自动重建背景**：修复文件夹展开状态下清理缓存时背景底板丢失且不重建的问题，自动恢复底板并应用下沉效果。
+- **代码精简与暗色模式优化**：移除废弃的 GPU 文件夹纹理缓存（`FolderIconTextureStore`）及只写不读冗余属性；深度统一暗色模式，清理无用资源与文案。
 
 ### 🪟 原生毛玻璃文件夹与图标自由调节 (V1.2.0)
 - **原生 Liquid Glass 毛玻璃文件夹**：采用 macOS 系统级 `NSGlassEffectView` 与 `NSGlassEffectContainerView` 混合架构，呈现真实的光感折射与圆角连续磨砂玻璃质感。

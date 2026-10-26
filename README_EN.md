@@ -16,7 +16,7 @@
   <b>This branch is based on <a href="https://github.com/qzrzz/QLaunch">qzrzz/QLaunch</a>, featuring deep refactorings and optimizations for trackpad gestures, animation continuity, and stability.</b>
 </p>
 
-- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.2.0)](https://github.com/BiKing567/QLaunch/releases)
+- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.3.0)](https://github.com/BiKing567/QLaunch/releases)
 - 🏠 **Original Project Homepage**: [https://qzrzz.com/QLaunch/](https://qzrzz.com/QLaunch/)
 - 🔗 **Original Project Repository**: [https://github.com/qzrzz/QLaunch](https://github.com/qzrzz/QLaunch)
 
@@ -30,6 +30,12 @@
 ## 🌟 Key Improvements & Features in this Fork
 
 Built upon the excellent foundation of the original QLaunch, this fork deeply addresses multi-finger trackpad gestures, micro-interaction animation details, and system compatibility:
+
+### 📁 Folder Dragging Hierarchy & Depth Backdrop Lifecycle Refactoring (V1.3.0)
+- **Topmost Folder Dragging Layer**: Added a dedicated drag host view above `LaunchpadMetalView`, completely resolving the z-index issue where a dragged folder would slide underneath normal app icons.
+- **Render Quality Switching & Background Lifecycle Sync**: Fixed lingering depth snapshots when switching from quality to performance mode, and automatically bakes sharp depth backdrops when entering quality mode with an open folder.
+- **Cache Clearing Background Rebuilding**: Fixed the issue where clearing the cache while a folder is open permanently removed background plates, ensuring the depth backdrop and sunk plates are properly restored.
+- **Code Pruning & Unified Dark Aesthetics**: Fully removed dead GPU folder texture caches (`FolderIconTextureStore`) and write-only properties; unified dark mode styles and deleted obsolete assets and localized strings.
 
 ### 🪟 Native Liquid Glass Folders & Icon Sizing (V1.2.0)
 - **Native macOS Liquid Glass Folders**: Rebuilt using system `NSGlassEffectView` & `NSGlassEffectContainerView` hybrid architecture, delivering authentic optical refraction and continuous curvature frosted glass aesthetics.
