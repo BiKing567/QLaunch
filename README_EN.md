@@ -16,7 +16,7 @@
   <b>This branch is based on <a href="https://github.com/qzrzz/QLaunch">qzrzz/QLaunch</a>, featuring deep refactorings and optimizations for trackpad gestures, animation continuity, and stability.</b>
 </p>
 
-- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.3.0)](https://github.com/BiKing567/QLaunch/releases)
+- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.3.1)](https://github.com/BiKing567/QLaunch/releases)
 - 🏠 **Original Project Homepage**: [https://qzrzz.com/QLaunch/](https://qzrzz.com/QLaunch/)
 - 🔗 **Original Project Repository**: [https://github.com/qzrzz/QLaunch](https://github.com/qzrzz/QLaunch)
 
@@ -30,6 +30,9 @@
 ## 🌟 Key Improvements & Features in this Fork
 
 Built upon the excellent foundation of the original QLaunch, this fork deeply addresses multi-finger trackpad gestures, micro-interaction animation details, and system compatibility:
+
+### ⚡️ Folder Renaming Text Cache Hotfix (V1.3.1)
+- **Text Atlas Cache Invalidation**: Hotfix for the issue where in-place folder renaming did not immediately refresh the text label under the folder icon on the root grid. The actual displayed name is now part of the text atlas signature comparison, instantly updating the label when exiting the folder.
 
 ### 🌌 Folder Depth Blur Transition & Interaction Refactoring (V1.3.0)
 - **iOS-Grade 3D Depth Backdrop Blur**: Opening a folder smoothly sinks the root grid icons and plates into a 3D depth backdrop accompanied by progressive Gaussian blur and gentle ambient dimming. The blur exclusively targets application layers, keeping the underlying desktop wallpaper crisp and clean.

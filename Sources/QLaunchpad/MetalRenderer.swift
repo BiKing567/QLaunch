@@ -120,17 +120,22 @@ private struct AppResourceSignature: Equatable, Sendable {
 
 private struct TextAtlasSignature: Equatable, Sendable {
     let apps: AppListSignature
+    let displayNames: [String]
     let scale: CGFloat
     let options: TextAtlas.Options
 
     init(apps: [AppInfo], scale: CGFloat, options: TextAtlas.Options) {
         self.apps = AppListSignature(apps: apps)
+        self.displayNames = apps.map { $0.name.isEmpty ? $0.bundleIdentifier : $0.name }
         self.scale = scale
         self.options = options
     }
 
     func matches(_ displayedApps: [AppInfo], scale: CGFloat, options: TextAtlas.Options) -> Bool {
         self.scale == scale && self.options == options && apps.matches(displayedApps)
+            && zip(displayNames, displayedApps).allSatisfy { entry in
+                entry.0 == (entry.1.name.isEmpty ? entry.1.bundleIdentifier : entry.1.name)
+            }
     }
 }
 
