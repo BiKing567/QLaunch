@@ -31,11 +31,13 @@
 
 Built upon the excellent foundation of the original QLaunch, this fork deeply addresses multi-finger trackpad gestures, micro-interaction animation details, and system compatibility:
 
-### 📁 Folder Dragging Hierarchy & Depth Backdrop Lifecycle Refactoring (V1.3.0)
-- **Topmost Folder Dragging Layer**: Added a dedicated drag host view above `LaunchpadMetalView`, completely resolving the z-index issue where a dragged folder would slide underneath normal app icons.
-- **Render Quality Switching & Background Lifecycle Sync**: Fixed lingering depth snapshots when switching from quality to performance mode, and automatically bakes sharp depth backdrops when entering quality mode with an open folder.
-- **Cache Clearing Background Rebuilding**: Fixed the issue where clearing the cache while a folder is open permanently removed background plates, ensuring the depth backdrop and sunk plates are properly restored.
-- **Code Pruning & Unified Dark Aesthetics**: Fully removed dead GPU folder texture caches (`FolderIconTextureStore`) and write-only properties; unified dark mode styles and deleted obsolete assets and localized strings.
+### 🌌 Folder Depth Blur Transition & Interaction Refactoring (V1.3.0)
+- **iOS-Grade 3D Depth Backdrop Blur**: Opening a folder smoothly sinks the root grid icons and plates into a 3D depth backdrop accompanied by progressive Gaussian blur and gentle ambient dimming. The blur exclusively targets application layers, keeping the underlying desktop wallpaper crisp and clean.
+- **Midpoint Crossfade Title Handover**: During folder open/close transitions, the title smoothly interpolates in position and scale between the grid label and the expanded header card, seamlessly crossfading at 50% midpoint to eliminate abrupt jumps.
+- **Native In-Place Title Editing**: Clicking the expanded folder title activates native inline text editing with auto-selection, Enter to confirm, and auto-save on blur for an effortless renaming experience.
+- **Independent Glass Plates & CALayer 9-Grid**: Each folder now lives in its own native frosted glass container, completely eliminating liquid melting blobs and ghosting between adjacent folders. The 9-grid preview icons run on an independent CALayer architecture with enlarged crisp icons and zero CPU texture baking overhead.
+- **Precision Drag Sorting & Grouping**: Introduced a 0.25s settle threshold to cleanly differentiate between grid reordering and folder creation, resolving jitter, false grouping, and edge-icon collision misses. Dragged folders and icons now stay on a dedicated topmost overlay without getting clipped or obscured by neighboring icons.
+- **Deep Architecture Pruning & Dark Aesthetics**: Fully purged legacy offscreen GPU folder texture caches, significantly lowering memory footprint; unified pure dark styling and removed obsolete assets and unreferenced localizations.
 
 ### 🪟 Native Liquid Glass Folders & Icon Sizing (V1.2.0)
 - **Native macOS Liquid Glass Folders**: Rebuilt using system `NSGlassEffectView` & `NSGlassEffectContainerView` hybrid architecture, delivering authentic optical refraction and continuous curvature frosted glass aesthetics.
