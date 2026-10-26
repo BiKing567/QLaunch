@@ -81,7 +81,6 @@ private final class FolderGlassPlateItemView: NSView {
     private var glassEffectView: NSView?
     private let contentView = FlippedContainerView()
     private var previewLayers: [CALayer] = []
-    private(set) var memberIDs: [String] = []
 
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -181,7 +180,6 @@ private final class FolderGlassPlateItemView: NSView {
         }
 
         guard previewVisible, !members.isEmpty else {
-            memberIDs = []
             for layer in previewLayers { layer.isHidden = true }
             return
         }
@@ -194,7 +192,6 @@ private final class FolderGlassPlateItemView: NSView {
         let miniSize = FolderPreviewLayout.miniSize(in: effectiveIconSize)
 
         let displayMembers = Array(members.prefix(FolderPreviewLayout.capacity))
-        memberIDs = displayMembers.map(\.id)
 
         for (index, layer) in previewLayers.enumerated() {
             if index < displayMembers.count {
@@ -232,21 +229,6 @@ private final class FolderGlassPlateItemView: NSView {
             } else {
                 layer.isHidden = true
             }
-        }
-    }
-
-    /// Draws the visible mini-icons directly into a flipped CGContext without CPU shadow overhead.
-    func drawPreview(in ctx: CGContext) {
-        for layer in previewLayers where !layer.isHidden {
-            guard let contents = layer.contents,
-                  CFGetTypeID(contents as CFTypeRef) == CGImage.typeID else { continue }
-            let cgImage = contents as! CGImage
-            let frame = layer.frame
-            ctx.saveGState()
-            ctx.translateBy(x: frame.minX, y: frame.maxY)
-            ctx.scaleBy(x: 1.0, y: -1.0)
-            ctx.draw(cgImage, in: CGRect(origin: .zero, size: frame.size))
-            ctx.restoreGState()
         }
     }
 

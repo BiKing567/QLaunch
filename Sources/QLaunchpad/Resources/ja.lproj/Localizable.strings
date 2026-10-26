@@ -34,7 +34,7 @@
 "background.mode.custom.title" = "カスタム画像";
 "background.mode.custom.detail" = "選択した画像に透明感のあるアクリル擦りガラス効果を重ねて使います";
 "settings.background.blur" = "ぼかし量";
-"settings.background.blur.detail" = "背景のアクリルぼかし量を調整します。現在の画面ではリアルタイムのシステムぼかしを使用します";
+"settings.background.blur.detail" = "背景のアクリルぼかし量を調整します";
 "settings.background.custom.choose" = "画像を選択";
 "settings.background.custom.instructions" = "ローカルの画像ファイルを選択します";
 "settings.background.custom.missing" = "画像がまだ選択されていません";
@@ -93,10 +93,8 @@
 "about.autoUpdates" = "アップデートを自動確認";
 "about.autoUpdates.detail" = "起動時に確認し、その後も定期的にバックグラウンドで確認します";
 "about.authorCommunity" = "作者とコミュニティ";
-"about.author" = "作者";
 "about.github.original" = "原作者リポジトリ (qzrzz/QLaunch)";
 "about.github.my" = "私のリポジトリ (BiKing567/QLaunch)";
-"about.twitter" = "X（Twitter）";
 "about.xiaohongshu" = "小紅書";
 "about.bilibili" = "Bilibili";
 "about.openLink" = "リンクを開く：%@";

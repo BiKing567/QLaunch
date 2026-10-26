@@ -34,7 +34,7 @@
 "background.mode.custom.title" = "사용자 지정 이미지";
 "background.mode.custom.detail" = "선택한 이미지에 은은하고 투명한 아크릴 프로스트 글래스 효과를 덧씌워 사용합니다";
 "settings.background.blur" = "블러 강도";
-"settings.background.blur.detail" = "배경의 아크릴 블러 강도를 조절합니다. 현재 화면은 실시간 시스템 블러를 사용합니다";
+"settings.background.blur.detail" = "배경의 아크릴 블러 강도를 조절합니다";
 "settings.background.custom.choose" = "이미지 선택";
 "settings.background.custom.instructions" = "로컬 이미지 파일을 선택합니다";
 "settings.background.custom.missing" = "아직 이미지를 선택하지 않았습니다";
@@ -93,10 +93,8 @@
 "about.autoUpdates" = "자동으로 업데이트 확인";
 "about.autoUpdates.detail" = "실행 시 조용히 확인하고 이후 백그라운드에서 주기적으로 확인합니다";
 "about.authorCommunity" = "개발자 및 커뮤니티";
-"about.author" = "개발자";
 "about.github.original" = "원작자 리포지토리 (qzrzz/QLaunch)";
 "about.github.my" = "내 리포지토리 (BiKing567/QLaunch)";
-"about.twitter" = "X(트위터)";
 "about.xiaohongshu" = "샤오홍슈";
 "about.bilibili" = "빌리빌리";
 "about.openLink" = "링크 열기: %@";

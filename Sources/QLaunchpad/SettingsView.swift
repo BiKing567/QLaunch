@@ -1286,11 +1286,9 @@ private struct AboutSettingsView: View {
 
     private static let githubURL = "https://github.com/qzrzz/QLaunch"
     private static let myGithubURL = "https://github.com/BiKing567/QLaunch"
-    private static let authorURL = "https://qzrzz.com/"
-    private static let xURL = "https://x.com/qzrz256"
-    private static let xiaohongshuURL = "https://www.xiaohongshu.com/"
-    private static let bilibiliURL = "https://space.bilibili.com/3546636494047957"
-    private static let emailAddress = "qlaunchpad@qzrzz.com"
+    private static let xiaohongshuURL = "https://xhslink.cn/o/5gJIISqUXw2"
+    private static let bilibiliURL = "https://space.bilibili.com/434571339"
+    private static let emailAddress = "biking567@biking567.top"
 
     private var versionLabel: String {
         let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0"
@@ -1402,21 +1400,7 @@ private struct AboutSettingsView: View {
     private var authorAndCommunityCard: some View {
         aboutCard(header: L10n.tr("about.authorCommunity")) {
             VStack(spacing: 0) {
-                linkRow(
-                    title: L10n.tr("about.author"),
-                    subtitle: "Qzrzz · https://qzrzz.com/",
-                    url: Self.authorURL,
-                    icon: authorLogo
-                )
-                aboutDivider()
                 githubMenuRow
-                aboutDivider()
-                linkRow(
-                    title: L10n.tr("about.twitter"),
-                    subtitle: Self.xURL,
-                    url: Self.xURL,
-                    icon: templateIcon("RemixTwitterX", systemFallback: "at", tint: .primary)
-                )
                 aboutDivider()
                 linkRow(
                     title: L10n.tr("about.xiaohongshu"),
@@ -1497,22 +1481,6 @@ private struct AboutSettingsView: View {
         } else {
             menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
         }
-    }
-
-    private var authorLogo: some View {
-        Group {
-            if let logo = QLaunchpadAppIcon.resourceImage(named: "QzrzzLogo", pointSize: 22) {
-                Image(nsImage: logo)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .clipShape(Circle())
-            } else {
-                Image(systemName: "person.circle.fill")
-                    .font(.system(size: 16))
-                    .foregroundStyle(.green)
-            }
-        }
-        .frame(width: 22, height: 22)
     }
 
     private func templateIcon(

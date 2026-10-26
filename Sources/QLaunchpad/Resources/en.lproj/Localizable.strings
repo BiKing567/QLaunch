@@ -34,7 +34,7 @@
 "background.mode.custom.title" = "Custom Image";
 "background.mode.custom.detail" = "Use your chosen image with a translucent acrylic frosted glass effect";
 "settings.background.blur" = "Blur Amount";
-"settings.background.blur.detail" = "Adjust the acrylic frosted blur amount; Current Screen uses live system blur";
+"settings.background.blur.detail" = "Adjust the acrylic frosted blur amount";
 "settings.background.custom.choose" = "Choose an image";
 "settings.background.custom.instructions" = "Choose a local image file";
 "settings.background.custom.missing" = "No image selected yet";
@@ -93,10 +93,8 @@
 "about.autoUpdates" = "Automatically Check for Updates";
 "about.autoUpdates.detail" = "Check quietly at launch, then periodically in the background";
 "about.authorCommunity" = "Author & Community";
-"about.author" = "Author";
 "about.github.original" = "Original Author (qzrzz/QLaunch)";
 "about.github.my" = "My Repository (BiKing567/QLaunch)";
-"about.twitter" = "X (Twitter)";
 "about.xiaohongshu" = "Xiaohongshu";
 "about.bilibili" = "Bilibili";
 "about.openLink" = "Open link: %@";

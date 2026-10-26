@@ -365,10 +365,10 @@ final class LaunchpadContainerView: NSView {
     private let fullScreenDimView = PassthroughFlippedView()
     private let backgroundFolderHostView: FolderGlassHostView
     private let foregroundFolderHostView: FolderGlassHostView
+    private let dragFolderHostView: FolderGlassHostView
     private let metalView: LaunchpadMetalView
     private let overlayView: PassthroughHostingView<LaunchpadOverlayView>
     private let folderTitleView: FolderTitleView
-    private var activeTransitionFolderID: String?
     private var cancellables = Set<AnyCancellable>()
 
     var metal: LaunchpadMetalView { metalView }
@@ -386,6 +386,7 @@ final class LaunchpadContainerView: NSView {
         fullScreenDimView.isHidden = true
         backgroundFolderHostView = FolderGlassHostView()
         foregroundFolderHostView = FolderGlassHostView()
+        dragFolderHostView = FolderGlassHostView()
         metalView = LaunchpadMetalView(store: store)
         overlayView = PassthroughHostingView(rootView: LaunchpadOverlayView(store: store))
         folderTitleView = FolderTitleView(store: store)
@@ -398,17 +399,23 @@ final class LaunchpadContainerView: NSView {
         addSubview(fullScreenDimView)
         addSubview(foregroundFolderHostView)
         addSubview(metalView)
+        addSubview(dragFolderHostView)
         addSubview(overlayView)
         addSubview(folderTitleView)
         metalView.onUpdateFolderPlates = { [weak self] plates, backdropAlpha in
             guard let self else { return }
             let fgPlates = plates.filter { $0.id.hasPrefix("opened-folder-") }
-            let bgPlates = plates.filter { !$0.id.hasPrefix("opened-folder-") }
-            let shouldRemoveUnused = (self.store.openedFolderID == nil) && !self.metalView.isFolderTransitionActive
+            let dragPlates = plates.filter { !$0.id.hasPrefix("opened-folder-") && $0.isIsolated }
+            let bgPlates = plates.filter { !$0.id.hasPrefix("opened-folder-") && !$0.isIsolated }
+            let retainsDepthPlates = IconRenderQuality.current == .quality
+                && self.backdropView.isReady && !self.backdropView.isHidden
+                && (self.store.openedFolderID != nil || self.metalView.isFolderTransitionActive)
+            let shouldRemoveUnused = !retainsDepthPlates
             if !bgPlates.isEmpty || shouldRemoveUnused {
                 self.backgroundFolderHostView.update(plates: bgPlates, removeUnused: shouldRemoveUnused)
             }
             self.foregroundFolderHostView.update(plates: fgPlates)
+            self.dragFolderHostView.update(plates: dragPlates, removeUnused: true)
 
             CATransaction.begin()
             CATransaction.setDisableActions(true)
@@ -427,7 +434,6 @@ final class LaunchpadContainerView: NSView {
         }
         metalView.onFolderTransitionBakeBackdrop = { [weak self] folderID, generation, rootItems, pageOffset, canvasScale, canvasPan, canvasAdaptive in
             guard let self else { return }
-            self.activeTransitionFolderID = folderID
             self.backgroundFolderHostView.setPlateHidden(true, for: folderID)
             guard let device = self.metalView.device else { return }
             let scale = self.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
@@ -437,7 +443,7 @@ final class LaunchpadContainerView: NSView {
                 boundsSize: self.bounds.size,
                 scale: scale
             ) { commandBuffer, targetTexture in
-                self.metalView.renderBackdropRootGrid(
+                let bgPlates = self.metalView.renderBackdropRootGrid(
                     to: targetTexture,
                     commandBuffer: commandBuffer,
                     excluding: folderID,
@@ -447,6 +453,12 @@ final class LaunchpadContainerView: NSView {
                     canvasPan: canvasPan,
                     canvasAdaptive: canvasAdaptive
                 )
+                if !bgPlates.isEmpty {
+                    self.backgroundFolderHostView.update(plates: bgPlates, removeUnused: true)
+                    self.backgroundFolderHostView.setPlateHidden(true, for: folderID)
+                    let sink = FolderDepthBackdropView.sinkTransform(progress: 1.0)
+                    self.backgroundFolderHostView.applySinkTransform(sink.transform, progress: 1.0)
+                }
             }
         }
         metalView.onFolderTransitionProgress = { [weak self] progress in
@@ -459,6 +471,12 @@ final class LaunchpadContainerView: NSView {
             guard let self else { return false }
             return self.backdropView.isReady && !self.backdropView.isHidden
         }
+        metalView.onFolderDepthBackdropDismiss = { [weak self] in
+            guard let self else { return }
+            self.backdropView.dismiss()
+            self.backgroundFolderHostView.resetSinkTransform()
+            self.backgroundFolderHostView.setAllPlatesHidden(false)
+        }
         metalView.onFolderTransitionEnd = { [weak self] generation in
             guard let self else { return }
             guard generation == self.metalView.folderTransitionGeneration else { return }
@@ -468,7 +486,7 @@ final class LaunchpadContainerView: NSView {
                 self.backgroundFolderHostView.resetSinkTransform()
                 self.backgroundFolderHostView.setAllPlatesHidden(false)
                 self.foregroundFolderHostView.removeAllPlates()
-                self.activeTransitionFolderID = nil
+                self.dragFolderHostView.removeAllPlates()
             }
         }
         metalView.onInteractiveDismissProgress = { [weak self] progress in
@@ -553,8 +571,8 @@ final class LaunchpadContainerView: NSView {
                 backgroundView.alphaValue = 0
                 backgroundFolderHostView.removeAllPlates()
                 foregroundFolderHostView.removeAllPlates()
+                dragFolderHostView.removeAllPlates()
                 backgroundFolderHostView.resetSinkTransform()
-                activeTransitionFolderID = nil
                 backdropView.dismiss()
                 fullScreenDimView.alphaValue = 0
                 fullScreenDimView.isHidden = true
@@ -582,8 +600,8 @@ final class LaunchpadContainerView: NSView {
             }
             backgroundFolderHostView.removeAllPlates()
             foregroundFolderHostView.removeAllPlates()
+            dragFolderHostView.removeAllPlates()
             backgroundFolderHostView.resetSinkTransform()
-            activeTransitionFolderID = nil
             backdropView.dismiss()
             fullScreenDimView.alphaValue = 0
             fullScreenDimView.isHidden = true
@@ -596,8 +614,9 @@ final class LaunchpadContainerView: NSView {
         backgroundFolderHostView.clearCache()
         foregroundFolderHostView.removeAllPlates()
         foregroundFolderHostView.clearCache()
+        dragFolderHostView.removeAllPlates()
+        dragFolderHostView.clearCache()
         backgroundFolderHostView.resetSinkTransform()
-        activeTransitionFolderID = nil
         backdropView.purgeTextures()
         backdropView.dismiss()
     }
@@ -607,8 +626,9 @@ final class LaunchpadContainerView: NSView {
         backgroundFolderHostView.clearCache()
         foregroundFolderHostView.removeAllPlates()
         foregroundFolderHostView.clearCache()
+        dragFolderHostView.removeAllPlates()
+        dragFolderHostView.clearCache()
         backgroundFolderHostView.resetSinkTransform()
-        activeTransitionFolderID = nil
         backdropView.purgeTextures()
         backdropView.dismiss()
         metalView.needsDisplay = true
@@ -647,6 +667,7 @@ final class LaunchpadContainerView: NSView {
         fullScreenDimView.frame = bounds
         foregroundFolderHostView.frame = bounds
         metalView.frame = bounds
+        dragFolderHostView.frame = bounds
         overlayView.frame = bounds
         folderTitleView.frame = bounds
     }
@@ -756,8 +777,8 @@ final class LaunchpadContainerView: NSView {
         }
         backgroundFolderHostView.removeAllPlates()
         foregroundFolderHostView.removeAllPlates()
+        dragFolderHostView.removeAllPlates()
         backgroundFolderHostView.resetSinkTransform()
-        activeTransitionFolderID = nil
         setPresentationScale(1)
     }
 
@@ -880,20 +901,15 @@ private struct FolderRemovalDropZone: View {
 
 private struct SearchField: View {
     @ObservedObject var store: AppStore
-    @Environment(\.colorScheme) private var colorScheme
     @State private var isFocused = false
     /// Bumped to request first-responder; survives overlay reuse across presentations.
     @State private var focusRequestID = 0
-
-    private var isDark: Bool {
-        colorScheme == .dark
-    }
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(isDark ? Color.white.opacity(0.72) : Color.black.opacity(0.65))
+                .foregroundStyle(Color.white.opacity(0.72))
                 .symbolRenderingMode(.hierarchical)
 
             // AppKit field: custom placeholder color + native IME marked-text handling.
@@ -906,7 +922,7 @@ private struct SearchField: View {
                 isFocused: $isFocused,
                 focusRequestID: focusRequestID,
                 placeholder: L10n.tr("launchpad.search"),
-                isDark: isDark
+                isDark: true
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onReceive(NotificationCenter.default.publisher(for: .qlaunchpadFocusSearch)) { _ in
@@ -921,7 +937,7 @@ private struct SearchField: View {
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(isDark ? Color.white.opacity(0.45) : Color.black.opacity(0.45))
+                    .foregroundStyle(Color.white.opacity(0.45))
                     .symbolRenderingMode(.hierarchical)
                     .frame(width: 18, height: 18)
             }
@@ -938,7 +954,7 @@ private struct SearchField: View {
             } label: {
                 Image(systemName: "gearshape.fill")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(isDark ? Color.white.opacity(0.68) : Color.black.opacity(0.65))
+                    .foregroundStyle(Color.white.opacity(0.68))
                     .symbolRenderingMode(.hierarchical)
                     .frame(width: 18, height: 18)
             }
@@ -965,14 +981,9 @@ private extension View {
 /// the field holds first-responder (search is auto-focused on open).
 private struct LaunchpadGlassFieldChrome: ViewModifier {
     var isEmphasized: Bool
-    @Environment(\.colorScheme) private var colorScheme
     private let width: CGFloat = 320
     private let height: CGFloat = 38
     private let cornerRadius: CGFloat = 19
-
-    private var isDark: Bool {
-        colorScheme == .dark
-    }
 
     func body(content: Content) -> some View {
         content
@@ -981,7 +992,7 @@ private struct LaunchpadGlassFieldChrome: ViewModifier {
             .background { glassBackground }
             .overlay { glassStroke }
             .shadow(
-                color: Color.black.opacity(isEmphasized ? (isDark ? 0.20 : 0.12) : (isDark ? 0.12 : 0.08)),
+                color: Color.black.opacity(isEmphasized ? 0.20 : 0.12),
                 radius: isEmphasized ? 18 : 14,
                 y: 6
             )
@@ -998,17 +1009,13 @@ private struct LaunchpadGlassFieldChrome: ViewModifier {
                 .glassEffect(.clear.interactive(true), in: shape)
         } else if #available(macOS 15.0, *) {
             ZStack {
-                shape.fill(.ultraThinMaterial).opacity(isDark ? 0.55 : 0.65)
+                shape.fill(.ultraThinMaterial).opacity(0.55)
                 shape.fill(
                     LinearGradient(
-                        colors: isDark ? [
+                        colors: [
                             Color.white.opacity(0.14),
                             Color.white.opacity(0.04),
                             Color.white.opacity(0.02)
-                        ] : [
-                            Color.white.opacity(0.50),
-                            Color.white.opacity(0.25),
-                            Color.white.opacity(0.12)
                         ],
                         startPoint: .top,
                         endPoint: .bottom
@@ -1016,13 +1023,9 @@ private struct LaunchpadGlassFieldChrome: ViewModifier {
                 )
                 shape.stroke(
                     LinearGradient(
-                        colors: isDark ? [
+                        colors: [
                             Color.white.opacity(0.45),
                             Color.white.opacity(0.06),
-                            Color.clear
-                        ] : [
-                            Color.black.opacity(0.12),
-                            Color.black.opacity(0.04),
                             Color.clear
                         ],
                         startPoint: .top,
@@ -1033,19 +1036,19 @@ private struct LaunchpadGlassFieldChrome: ViewModifier {
             }
         } else {
             ZStack {
-                shape.fill(.ultraThinMaterial).opacity(isDark ? 0.5 : 0.6)
-                shape.fill(isDark ? Color.white.opacity(0.05) : Color.white.opacity(0.3))
+                shape.fill(.ultraThinMaterial).opacity(0.5)
+                shape.fill(Color.white.opacity(0.05))
             }
         }
     }
 
     private var glassStroke: some View {
-        let baseColor = isDark ? Color.white : Color.black
+        let baseColor = Color.white
         return RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .strokeBorder(
                 LinearGradient(
                     colors: [
-                        baseColor.opacity(isEmphasized ? (isDark ? 0.46 : 0.32) : (isDark ? 0.22 : 0.14)),
+                        baseColor.opacity(isEmphasized ? 0.46 : 0.22),
                         baseColor.opacity(0.06)
                     ],
                     startPoint: .topLeading,
@@ -1067,14 +1070,6 @@ private struct AppKitSearchTextField: NSViewRepresentable {
     var focusRequestID: Int
     var placeholder: String
     var isDark: Bool
-
-    private static let textFont: NSFont = {
-        let base = NSFont.systemFont(ofSize: 16, weight: .medium)
-        if let rounded = base.fontDescriptor.withDesign(.rounded) {
-            return NSFont(descriptor: rounded, size: 16) ?? base
-        }
-        return base
-    }()
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)

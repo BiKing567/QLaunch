@@ -208,7 +208,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private let iconPipelineUnorm8: MTLRenderPipelineState
     private let textPipelineUnorm8: MTLRenderPipelineState
     private let iconTextures: IconTextureStore
-    private let folderIconTextures: FolderIconTextureStore
     private let fallbackTexture: MTLTexture
     private let textAtlas: TextAtlas
 
@@ -276,7 +275,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private let groupingAcquireRadiusScale: CGFloat = 0.52
     private let groupingReleaseRadiusScale: CGFloat = 0.72
     private let groupingDwellDuration: CFTimeInterval = 0.30
-    private let groupingAcquireSpeedThreshold: CGFloat = 380
     private let groupingBreakoutSpeedThreshold: CGFloat = 850
     private let groupingSettledSpeedThreshold: CGFloat = 120
     private var pendingReorderDestination: Int?
@@ -411,6 +409,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     ) -> Void)?
     var onFolderTransitionProgress: ((CGFloat) -> Void)?
     var onFolderTransitionEnd: ((UInt64) -> Void)?
+    var onFolderDepthBackdropDismiss: (() -> Void)?
     var isDepthBackdropActive: (() -> Bool)?
     private(set) var folderTransitionGeneration: UInt64 = 0
     private var pendingFolderTransitionGeneration: UInt64 = 0
@@ -420,7 +419,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private var stationaryDismissedAppID: String?
 
     private let pageSpringResponse: Double = 22
-    private let edgePageInset: CGFloat = 72
     private let edgePageTurnDelay: CFTimeInterval = 0.45
     private var presentStartTime: CFTimeInterval = 0
     private var presentFrom: CGFloat = 0
@@ -507,7 +505,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
         self.commandQueue = commandQueue
         iconTextures = IconTextureStore(device: device)
-        folderIconTextures = FolderIconTextureStore(device: device)
 
         let fallbackDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm,
@@ -1437,6 +1434,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     @objc private func iconTexturesUpdated() {
         guard !isHoldingPresentationPrime else { return }
         // Background bakes finished — paint without doing work on this path.
+        if store.openedFolderID != nil, IconRenderQuality.current == .quality, folderTransition == nil {
+            syncFolderDepthBackdropIfNeeded()
+        }
         needsDisplay = true
         startDisplayLink()
     }
@@ -1454,7 +1454,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         pauseResourcePrewarming()
         iconTextures.resetForRenderQualityChange()
-        folderIconTextures.clear()
         cancelTextAtlasBuild()
         textAtlas.clear()
         lastTextSignature = nil
@@ -1466,6 +1465,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         lastResourceFolders = nil
         resourcePrewarmSignature = nil
         isResourcePrewarmingPaused = false
+
+        if quality == .quality {
+            syncFolderDepthBackdropIfNeeded()
+        } else {
+            onFolderDepthBackdropDismiss?()
+        }
 
         scheduleResourcePrewarmingIfNeeded(prune: true)
         if resourcePrewarmTask == nil {
@@ -1479,7 +1484,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     @objc private func clearCacheRequested() {
         pauseResourcePrewarming()
         iconTextures.clear()
-        folderIconTextures.clear()
         cancelTextAtlasBuild()
         textAtlas.clear()
         lastCatalogSignature = nil
@@ -1492,6 +1496,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         resourcePrewarmSignature = nil
         lastTextureWindowPage = -1
         isResourcePrewarmingPaused = false
+        if store.openedFolderID != nil, IconRenderQuality.current == .quality {
+            syncFolderDepthBackdropIfNeeded()
+        }
         scheduleResourcePrewarmingIfNeeded(prune: true)
         startDisplayLink()
         needsDisplay = true
@@ -1798,7 +1805,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         isResourcePrewarmingPaused = false
         if !IconRenderQuality.current.usesLazyTextureLoading {
             iconTextures.setAllowedAppIDs(nil)
-            folderIconTextures.setAllowedFolderIDs(nil)
         }
         scheduleResourcePrewarmingIfNeeded(prune: IconRenderQuality.current.usesLazyTextureLoading)
         clearDrawableIfAvailable()
@@ -1905,7 +1911,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         // Unrestricted baking — always clear the allow-list first so a previous
         // low-memory session cannot block resident uploads.
         iconTextures.setAllowedAppIDs(nil)
-        folderIconTextures.setAllowedFolderIDs(nil)
 
         // Skip only while the same full-catalog job is already running or done.
         if signature == resourcePrewarmSignature {
@@ -2000,7 +2005,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             lastTextureWindowPage = targetPage
         } else {
             iconTextures.expandAllowedAppIDs(window.appIDs)
-            folderIconTextures.expandAllowedFolderIDs(window.folderIDs)
         }
 
         if signature == resourcePrewarmSignature, resourcePrewarmTask != nil {
@@ -2131,7 +2135,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
     private func pruneIconTextureCaches(appIDs: Set<String>, folderIDs: Set<String>) {
         iconTextures.retainOnly(appIDs: appIDs)
-        folderIconTextures.retainOnly(folderIDs: folderIDs)
     }
 
     private func scheduleTextAtlasRebuildIfNeeded(
@@ -2234,33 +2237,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 }
             }
         }
-    }
-
-    func playPresentAnimation() {
-        presentationChanged(Notification(
-            name: .qlaunchpadPresentationChanged,
-            object: nil,
-            userInfo: [
-                "showing": true,
-                "animationStyle": LaunchpadAnimationStyle.current.rawValue
-            ]
-        ))
-    }
-
-    func playDismissAnimation(completion: @escaping @Sendable () -> Void) {
-        let style = presentationStyle
-        presentationChanged(Notification(
-            name: .qlaunchpadPresentationChanged,
-            object: nil,
-            userInfo: [
-                "showing": false,
-                "animationStyle": style.rawValue
-            ]
-        ))
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + style.dismissalDuration + 0.02,
-            execute: completion
-        )
     }
 
     // MARK: Search transition
@@ -2778,10 +2754,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
         folderTransition = nil
         store.setFolderTransitionActive(false)
-        if IconRenderQuality.current == .quality {
-            pendingFolderTransitionEnd = true
-            pendingFolderTransitionGeneration = folderTransitionGeneration
-        }
+        pendingFolderTransitionEnd = true
+        pendingFolderTransitionGeneration = folderTransitionGeneration
         // Morph drawing does not record lazy-reveal misses. Drop any that
         // arrived mid-flight so the settled grid does not fade the same icons
         // in again and flash after they reach full size.
@@ -2793,6 +2767,33 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             lastDisplaySignature = nil
             noteDisplayChangeIfNeeded()
         }
+    }
+
+    func syncFolderDepthBackdropIfNeeded() {
+        guard IconRenderQuality.current == .quality,
+              let folderID = store.openedFolderID,
+              !store.isSearching,
+              folderTransition == nil else {
+            return
+        }
+        let rootItems = store.displayItems
+        let rootPageOffset = lastFolderSource?.rootPageOffset ?? Double(store.currentPage)
+        let scale = lastFolderSource?.canvasScale ?? canvasScale
+        let pan = lastFolderSource?.canvasPan ?? canvasPan
+        let adaptive = lastFolderSource?.canvasAdaptive ?? canvasStateUsesAdaptiveLayout
+
+        onFolderTransitionBakeBackdrop?(
+            folderID,
+            folderTransitionGeneration,
+            rootItems,
+            rootPageOffset,
+            scale,
+            pan,
+            adaptive
+        )
+        onFolderTransitionProgress?(1.0)
+        needsDisplay = true
+        startDisplayLink()
     }
 
     private func applyFolderOpenCanvas(itemCount: Int) {
@@ -3236,6 +3237,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         noteDisplayChangeIfNeeded()
         synchronizeCanvasStateIfNeeded(itemCount: displayedItems.count)
+
+        if store.openedFolderID != nil, !store.isSearching, folderTransition == nil, IconRenderQuality.current == .quality, isDepthBackdropActive?() != true {
+            syncFolderDepthBackdropIfNeeded()
+        }
 
         let quality = IconRenderQuality.current
         if quality.usesLazyTextureLoading {
@@ -3836,6 +3841,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     /// Renders the root grid into an offscreen texture for the depth backdrop blur effect.
+    @discardableResult
     func renderBackdropRootGrid(
         to destinationTexture: MTLTexture,
         commandBuffer: MTLCommandBuffer,
@@ -3845,8 +3851,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         canvasScale: CGFloat,
         canvasPan: CGPoint,
         canvasAdaptive: Bool
-    ) {
-        guard device != nil else { return }
+    ) -> [FolderPlateModel] {
+        guard device != nil else { return [] }
         let preset = GridLayoutPreset.current
         let rootCapacity = preset.columns * preset.exportedRows(itemCount: items.count)
         var rootStyle = GridDrawStyle(
@@ -3904,7 +3910,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         rpd.colorAttachments[0].storeAction = .store
 
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: rpd) else { return }
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: rpd) else { return folderPlates }
         var uniforms = FrameUniforms(
             viewport: SIMD2(Float(bounds.width), Float(bounds.height)),
             drawable: SIMD2(Float(destinationTexture.width), Float(destinationTexture.height)),
@@ -3939,6 +3945,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
 
         encoder.endEncoding()
+        return folderPlates
     }
 
     private func buildGrid(

@@ -34,7 +34,7 @@
 "background.mode.custom.title" = "自定义图片";
 "background.mode.custom.detail" = "使用你选择的图片，呈现通透细腻的亚克力磨砂质感";
 "settings.background.blur" = "模糊度";
-"settings.background.blur.detail" = "调节背景亚克力磨砂强度；当前画面使用实时系统模糊";
+"settings.background.blur.detail" = "调节背景亚克力磨砂强度";
 "settings.background.custom.choose" = "选择图片";
 "settings.background.custom.instructions" = "选择本地图片文件";
 "settings.background.custom.missing" = "尚未选择图片";
@@ -93,10 +93,8 @@
 "about.autoUpdates" = "自动检查更新";
 "about.autoUpdates.detail" = "启动时静默检查，之后按计划后台检查";
 "about.authorCommunity" = "关于作者与社区";
-"about.author" = "作者";
 "about.github.original" = "原作者仓库 (qzrzz/QLaunch)";
 "about.github.my" = "我的仓库 (BiKing567/QLaunch)";
-"about.twitter" = "X（推特）";
 "about.xiaohongshu" = "小红书";
 "about.bilibili" = "哔哩哔哩";
 "about.openLink" = "打开链接：%@";

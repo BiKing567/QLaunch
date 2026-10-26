@@ -23,9 +23,7 @@ final class FolderDepthBackdropView: NSView {
     private var cachedPixelSize: CGSize = .zero
     private var currentScale: CGFloat = 2.0
 
-    private(set) var isBaking = false
     private(set) var isReady = false
-    private(set) var currentProgress: CGFloat = 0
 
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -110,9 +108,6 @@ final class FolderDepthBackdropView: NSView {
         scale: CGFloat,
         renderPass: (MTLCommandBuffer, MTLTexture) -> Void
     ) {
-        isBaking = true
-        defer { isBaking = false }
-
         self.device = device
         self.commandQueue = commandQueue
         self.currentScale = scale
@@ -218,13 +213,8 @@ final class FolderDepthBackdropView: NSView {
         return (scale, offsetY, transform)
     }
 
-    var currentSinkTransform: CATransform3D {
-        containerLayer.transform
-    }
-
     /// Updates the depth backdrop animation progress (0 = fully closed/resting root, 1 = fully open folder).
     func updateProgress(_ progress: CGFloat) {
-        currentProgress = progress
         guard !isHidden else { return }
 
         let local = min(max(progress, 0), 1)
@@ -247,7 +237,6 @@ final class FolderDepthBackdropView: NSView {
         CATransaction.setDisableActions(true)
         isHidden = true
         isReady = false
-        currentProgress = 0
         containerLayer.transform = CATransform3DIdentity
         containerLayer.opacity = 1.0
         CATransaction.commit()
