@@ -853,7 +853,7 @@ struct LaunchpadOverlayView: View {
                         itemCount: folder.appIDs.count
                     )
                     PageIndicator(store: store)
-                        .position(x: metrics.cardRect.midX, y: metrics.cardRect.maxY - 14)
+                        .position(metrics.pageIndicatorCenter(flipped: true))
                         .transition(.opacity)
                 }
 

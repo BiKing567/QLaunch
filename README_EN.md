@@ -16,7 +16,7 @@
   <b>This branch is based on <a href="https://github.com/qzrzz/QLaunch">qzrzz/QLaunch</a>, featuring deep refactorings and optimizations for trackpad gestures, animation continuity, and stability.</b>
 </p>
 
-- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.3.2)](https://github.com/BiKing567/QLaunch/releases)
+- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.3.3)](https://github.com/BiKing567/QLaunch/releases)
 - 🏠 **Original Project Homepage**: [https://qzrzz.com/QLaunch/](https://qzrzz.com/QLaunch/)
 - 🔗 **Original Project Repository**: [https://github.com/qzrzz/QLaunch](https://github.com/qzrzz/QLaunch)
 
@@ -30,6 +30,12 @@
 ## 🌟 Key Improvements & Features in this Fork
 
 Built upon the excellent foundation of the original QLaunch, this fork deeply addresses multi-finger trackpad gestures, micro-interaction animation details, and system compatibility:
+
+### ⚡️ Multi-Page Folder Rendering & Transition Hotfix (V1.3.3)
+- **Active-Page Transition Isolation**: Fixed an issue where open/close animations drew icons across all pages simultaneously, causing off-page icons to fly across the screen. Transitions now strictly animate the active page; closing from page > 0 smoothly collapses active items to center and crossfades the 9 root mini-icons during the latter half of collapse.
+- **Hardware GPU Scissor Viewport Clipping**: Applied hardware-level GPU scissor clipping to normal open folder icons and text labels matching the card boundary, completely preventing icons and captions from bleeding outside the frosted glass card during horizontal paging.
+- **Page Indicator Bottom Clearance**: Dynamically allocated dedicated bottom bar clearance for multi-page folders, eliminating overlap between page 1 bottom-row labels and the page indicator capsule.
+- **Markdown Update Notes Dialog**: Adapted update checking and new version prompt dialogs to a native, beautifully rendered Markdown reader view with dynamic app icon styling.
 
 ### ⚡️ Quality Mode Folder Launch Dismissal Fix (V1.3.2)
 - **Backdrop Lingering Fix**: Fixed an issue in Quality mode where launching an app from an open folder caused the depth blur background icons to be rebaked mid-dismissal, lingering on screen until window hide. Dismissal now halts backdrop reconstruction, synchronizes depth layer and plate fade-out with the desktop background, and cleans up cleanly upon completion.

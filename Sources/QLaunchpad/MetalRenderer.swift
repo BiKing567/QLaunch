@@ -255,6 +255,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private var labelsBySheet: [[SpriteInstance]] = []
     private var textSprites: [SpriteInstance] = []
     private var textBatches: [TextBatch] = []
+    private var clippedFolderIconCount: Int = 0
+    private var activeFolderCardMetricsForScissor: FolderCardMetrics? = nil
 
     private var dragSource: Int?
     private var draggedAppID: String?
@@ -2981,6 +2983,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         labelsBySheet: inout [[SpriteInstance]],
         folderPlates: inout [FolderPlateModel]
     ) -> Float {
+        clippedFolderIconCount = 0
+        activeFolderCardMetricsForScissor = nil
         guard let transition = folderTransition else { return 0 }
         let local = min(max(transition.progress, 0), 1)
         let hasBackdrop = (IconRenderQuality.current == .quality) && (isDepthBackdropActive?() ?? false)
@@ -3149,66 +3153,105 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         let fullUV = SIMD4<Float>(0, 0, 1, 1)
         let miniSize = FolderPreviewLayout.miniSize(in: transition.sourceSize)
-        for (index, item) in transition.folderItems.enumerated() {
-            guard case .app(let app) = item else { continue }
-            let destCenter = destination.centers.indices.contains(index)
-                ? destination.centers[index]
-                : CGPoint(x: midX, y: midY)
-            let fromCenter: CGPoint
-            let fromSize: CGFloat
-            let fromAlpha: Float
-            if index < FolderPreviewLayout.capacity {
-                fromCenter = FolderPreviewLayout.miniCenter(
-                    index: index,
-                    folderCenter: transition.sourceCenter,
-                    folderSize: transition.sourceSize,
-                    yIncreasesDown: true
-                )
-                fromSize = miniSize
-                fromAlpha = 1
-            } else {
-                fromCenter = transition.sourceCenter
-                fromSize = destination.iconSize * 0.18
-                fromAlpha = 0
-            }
-            let center = folderMix(fromCenter, destCenter, local)
-            let size = folderMix(fromSize, destination.iconSize, local)
-            let iconAlpha = folderMix(CGFloat(fromAlpha), 1, local)
-            let texture = iconTextures.cachedTexture(for: app)
-            let drawnAlpha = alphaScale * Float(iconAlpha)
-            if let texture, drawnAlpha > 0.002 {
-                iconDrawTextures.append(texture)
-                iconSprites.append(
-                    .icon(
-                        center: center,
-                        size: size,
-                        uv: fullUV,
-                        alpha: drawnAlpha,
-                        pressed: false
+
+        let activePage = max(0, Int(round(transition.folderPageOffset)))
+        let pageCapacity = cardMetrics.pageCapacity
+        let pageStartIndex = activePage * pageCapacity
+        let pageEndIndex = min(transition.folderItems.count, pageStartIndex + pageCapacity)
+
+        if pageStartIndex < pageEndIndex {
+            for index in pageStartIndex..<pageEndIndex {
+                let item = transition.folderItems[index]
+                guard case .app(let app) = item else { continue }
+                let destCenter = destination.centers.indices.contains(index)
+                    ? destination.centers[index]
+                    : CGPoint(x: midX, y: midY)
+                let fromCenter: CGPoint
+                let fromSize: CGFloat
+                let fromAlpha: Float
+                if activePage == 0 && index < FolderPreviewLayout.capacity {
+                    fromCenter = FolderPreviewLayout.miniCenter(
+                        index: index,
+                        folderCenter: transition.sourceCenter,
+                        folderSize: transition.sourceSize,
+                        yIncreasesDown: true
                     )
-                )
-            }
-            let labelFade = max(0, min(1, (local - 0.55) / 0.45))
-            if showLabels,
-               labelFade > 0.02,
-               let label = textAtlas.layouts[app.id],
-               labelsBySheet.indices.contains(label.sheet) {
-                let lc = CGPoint(
-                    x: center.x,
-                    y: center.y + size * 0.5 + 6 + label.heightPoints * 0.5
-                )
-                labelsBySheet[label.sheet].append(
-                    .label(
-                        center: lc,
-                        size: CGSize(
-                            width: label.widthPoints,
-                            height: label.heightPoints
-                        ),
-                        uv: label.uv,
-                        alpha: drawnAlpha * Float(labelFade) * 0.95,
-                        snapToPixels: false
+                    fromSize = miniSize
+                    fromAlpha = 1
+                } else {
+                    fromCenter = transition.sourceCenter
+                    fromSize = destination.iconSize * 0.18
+                    fromAlpha = 0
+                }
+                let center = folderMix(fromCenter, destCenter, local)
+                let size = folderMix(fromSize, destination.iconSize, local)
+                let iconAlpha = folderMix(CGFloat(fromAlpha), 1, local)
+                let texture = iconTextures.cachedTexture(for: app)
+                let drawnAlpha = alphaScale * Float(iconAlpha)
+                if let texture, drawnAlpha > 0.002 {
+                    iconDrawTextures.append(texture)
+                    iconSprites.append(
+                        .icon(
+                            center: center,
+                            size: size,
+                            uv: fullUV,
+                            alpha: drawnAlpha,
+                            pressed: false
+                        )
                     )
-                )
+                }
+                let labelFade = max(0, min(1, (local - 0.55) / 0.45))
+                if showLabels,
+                   labelFade > 0.02,
+                   let label = textAtlas.layouts[app.id],
+                   labelsBySheet.indices.contains(label.sheet) {
+                    let lc = CGPoint(
+                        x: center.x,
+                        y: center.y + size * 0.5 + 6 + label.heightPoints * 0.5
+                    )
+                    labelsBySheet[label.sheet].append(
+                        .label(
+                            center: lc,
+                            size: CGSize(
+                                width: label.widthPoints,
+                                height: label.heightPoints
+                            ),
+                            uv: label.uv,
+                            alpha: drawnAlpha * Float(labelFade) * 0.95,
+                            snapToPixels: false
+                        )
+                    )
+                }
+            }
+        }
+
+        if activePage > 0 {
+            let previewCount = min(FolderPreviewLayout.capacity, transition.folderItems.count)
+            let previewProgress = Float(max(0, min(1, (0.5 - local) / 0.5)))
+            if previewProgress > 0.005 {
+                for index in 0..<previewCount {
+                    let item = transition.folderItems[index]
+                    guard case .app(let app) = item else { continue }
+                    let miniCenter = FolderPreviewLayout.miniCenter(
+                        index: index,
+                        folderCenter: transition.sourceCenter,
+                        folderSize: transition.sourceSize,
+                        yIncreasesDown: true
+                    )
+                    let drawnAlpha = alphaScale * previewProgress
+                    if let texture = iconTextures.cachedTexture(for: app), drawnAlpha > 0.002 {
+                        iconDrawTextures.append(texture)
+                        iconSprites.append(
+                            .icon(
+                                center: miniCenter,
+                                size: miniSize,
+                                uv: fullUV,
+                                alpha: drawnAlpha,
+                                pressed: false
+                            )
+                        )
+                    }
+                }
             }
         }
         let backdropAlpha = Float(local) * 0.28 * alphaScale
@@ -3516,10 +3559,31 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             index: 1
         )
 
+        let fullScissor = MTLScissorRect(
+            x: 0,
+            y: 0,
+            width: max(1, Int(drawableSize.width)),
+            height: max(1, Int(drawableSize.height))
+        )
+        var cardScissor: MTLScissorRect?
+        if let cardMetrics = activeFolderCardMetricsForScissor {
+            let scaleX = drawableSize.width / max(bounds.width, 1)
+            let scaleY = drawableSize.height / max(bounds.height, 1)
+            let sx = max(0, Int(floor(cardMetrics.cardRect.minX * scaleX)))
+            let sy = max(0, Int(floor(cardMetrics.cardRect.minY * scaleY)))
+            let sw = max(0, min(Int(drawableSize.width) - sx, Int(ceil(cardMetrics.cardRect.width * scaleX))))
+            let sh = max(0, min(Int(drawableSize.height) - sy, Int(ceil(cardMetrics.cardRect.height * scaleY))))
+            cardScissor = (sw > 0 && sh > 0) ? MTLScissorRect(x: sx, y: sy, width: sw, height: sh) : nil
+        }
+
         encoder.setRenderPipelineState(activeIconPipeline)
         encoder.setFragmentSamplerState(iconSampler, index: 0)
         if let iconBuffer = frameSlot.iconBuffer {
-            for index in iconSprites.indices {
+            let regularCount = cardScissor != nil ? min(clippedFolderIconCount, iconSprites.count) : iconSprites.count
+            if let cardScissor, regularCount > 0 {
+                encoder.setScissorRect(cardScissor)
+            }
+            for index in 0..<regularCount {
                 let texture = iconDrawTextures[index]
                 encoder.setVertexBuffer(
                     iconBuffer,
@@ -3534,9 +3598,32 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     instanceCount: 1
                 )
             }
+            if regularCount < iconSprites.count {
+                if cardScissor != nil {
+                    encoder.setScissorRect(fullScissor)
+                }
+                for index in regularCount..<iconSprites.count {
+                    let texture = iconDrawTextures[index]
+                    encoder.setVertexBuffer(
+                        iconBuffer,
+                        offset: index * MemoryLayout<SpriteInstance>.stride,
+                        index: 0
+                    )
+                    encoder.setFragmentTexture(texture, index: 0)
+                    encoder.drawPrimitives(
+                        type: .triangle,
+                        vertexStart: 0,
+                        vertexCount: 6,
+                        instanceCount: 1
+                    )
+                }
+            }
         }
 
         if let textBuffer = frameSlot.textBuffer {
+            if let cardScissor {
+                encoder.setScissorRect(cardScissor)
+            }
             encoder.setRenderPipelineState(activeTextPipeline)
             encoder.setFragmentSamplerState(textSampler, index: 0)
             for batch in textBatches {
@@ -3553,6 +3640,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     vertexCount: 6,
                     instanceCount: batch.range.count
                 )
+            }
+            if cardScissor != nil {
+                encoder.setScissorRect(fullScissor)
             }
         }
 
@@ -4400,6 +4490,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 }
             }
         }
+        clippedFolderIconCount = isOpenedFolder ? iconSprites.count : 0
+        activeFolderCardMetricsForScissor = isOpenedFolder ? activeCardMetrics : nil
         for layer in pileIconDraws.sorted(by: { $0.layer > $1.layer }) {
             iconDrawTextures.append(layer.texture)
             iconSprites.append(layer.sprite)
@@ -5007,33 +5099,41 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             let miniSize = FolderPreviewLayout.miniSize(in: transition.sourceSize)
             var bestFolderItem: (item: LaunchpadItem, distance: CGFloat)?
 
-            for (index, item) in transition.folderItems.enumerated() {
-                let destCenter = destination.centers.indices.contains(index)
-                    ? destination.centers[index]
-                    : CGPoint(x: midX, y: midY)
-                let fromCenter: CGPoint
-                let fromSize: CGFloat
-                if index < FolderPreviewLayout.capacity {
-                    fromCenter = FolderPreviewLayout.miniCenter(
-                        index: index,
-                        folderCenter: transition.sourceCenter,
-                        folderSize: transition.sourceSize,
-                        yIncreasesDown: true
-                    )
-                    fromSize = miniSize
-                } else {
-                    fromCenter = transition.sourceCenter
-                    fromSize = destination.iconSize * 0.18
-                }
-                let currentCenter = folderMix(fromCenter, destCenter, local)
-                let currentSize = folderMix(fromSize, destination.iconSize, local)
-                let radius = max(currentSize * 0.9, destination.iconSize * 0.85, 60)
+            let activePage = max(0, Int(round(transition.folderPageOffset)))
+            let pageCapacity = destination.cardMetrics.pageCapacity
+            let pageStartIndex = activePage * pageCapacity
+            let pageEndIndex = min(transition.folderItems.count, pageStartIndex + pageCapacity)
 
-                let visualDist = hypot(topPoint.x - currentCenter.x, topPoint.y - currentCenter.y)
+            if pageStartIndex < pageEndIndex {
+                for index in pageStartIndex..<pageEndIndex {
+                    let item = transition.folderItems[index]
+                    let destCenter = destination.centers.indices.contains(index)
+                        ? destination.centers[index]
+                        : CGPoint(x: midX, y: midY)
+                    let fromCenter: CGPoint
+                    let fromSize: CGFloat
+                    if activePage == 0 && index < FolderPreviewLayout.capacity {
+                        fromCenter = FolderPreviewLayout.miniCenter(
+                            index: index,
+                            folderCenter: transition.sourceCenter,
+                            folderSize: transition.sourceSize,
+                            yIncreasesDown: true
+                        )
+                        fromSize = miniSize
+                    } else {
+                        fromCenter = transition.sourceCenter
+                        fromSize = destination.iconSize * 0.18
+                    }
+                    let currentCenter = folderMix(fromCenter, destCenter, local)
+                    let currentSize = folderMix(fromSize, destination.iconSize, local)
+                    let radius = max(currentSize * 0.9, destination.iconSize * 0.85, 60)
 
-                if visualDist <= radius {
-                    if bestFolderItem == nil || visualDist < bestFolderItem!.distance {
-                        bestFolderItem = (item, visualDist)
+                    let visualDist = hypot(topPoint.x - currentCenter.x, topPoint.y - currentCenter.y)
+
+                    if visualDist <= radius {
+                        if bestFolderItem == nil || visualDist < bestFolderItem!.distance {
+                            bestFolderItem = (item, visualDist)
+                        }
                     }
                 }
             }

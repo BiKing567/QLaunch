@@ -154,8 +154,8 @@ final class FolderCardMetricsTests: XCTestCase {
         XCTAssertEqual(visualRectAppKit.midX, metrics.cardRect.midX, accuracy: 0.1)
 
         // Check vertical alignment
-        XCTAssertEqual(visualRectTop.midY, metrics.cardRect.maxY - 14, accuracy: 0.1)
-        XCTAssertEqual(visualRectAppKit.midY, size.height - (metrics.cardRect.maxY - 14), accuracy: 0.1)
+        XCTAssertEqual(visualRectTop.midY, metrics.pageIndicatorCenter(flipped: true).y, accuracy: 0.1)
+        XCTAssertEqual(visualRectAppKit.midY, metrics.pageIndicatorCenter(flipped: false).y, accuracy: 0.1)
 
         // Test hit testing on page indicator dots
         let centers = metrics.pageIndicatorDotCenters(pageCount: 3, currentPage: 0)

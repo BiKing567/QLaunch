@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import QLaunchpadCore
+import SwiftUI
 
 /// GitHub Releases 更新管理器（从当前分支维护的仓库获取更新）。
 @MainActor
@@ -117,7 +118,7 @@ final class Updater: ObservableObject {
                 let body = latest["body"] as? String ?? ""
                 let htmlURL = latest["html_url"] as? String ?? Self.releasesWebURL
 
-                let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.2"
+                let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.3"
 
                 if Self.isVersion(tagName, greaterThan: currentVersion) || Self.isVersion(releaseName, greaterThan: currentVersion) {
                     showNewVersionAlert(name: releaseName, tag: tagName, body: body, urlString: htmlURL)
@@ -138,16 +139,39 @@ final class Updater: ObservableObject {
         VersionComparator.isVersion(v1, greaterThan: v2)
     }
 
+    private var appIconImage: NSImage? {
+        if let image = QLaunchpadAppIcon.image {
+            return image
+        }
+        let bundleURL = Bundle.main.bundleURL
+        if bundleURL.pathExtension == "app" {
+            let icon = NSWorkspace.shared.icon(forFile: bundleURL.path)
+            if icon.size.width > 0 {
+                return icon
+            }
+        }
+        return NSApplication.shared.applicationIconImage
+    }
+
     private func showNewVersionAlert(name: String, tag: String, body: String, urlString: String) {
         let alert = NSAlert()
+        if let appIcon = appIconImage {
+            alert.icon = appIcon
+        }
         alert.messageText = "发现新版本 \(name)"
-        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.2"
-        let notes = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        let notePreview = notes.isEmpty ? "" : "\n\n更新说明：\n" + (notes.count > 500 ? String(notes.prefix(500)) + "…" : notes)
-        alert.informativeText = "当前版本：v\(currentVersion)\n最新版本：\(tag)\(notePreview)"
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.3"
+        alert.informativeText = "当前版本：v\(currentVersion)    最新版本：\(tag)"
         alert.addButton(withTitle: "前往下载")
         alert.addButton(withTitle: "稍后")
         alert.alertStyle = .informational
+
+        let notes = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !notes.isEmpty {
+            let markdownView = UpdateNotesMarkdownView(markdown: notes)
+            let hostView = NSHostingView(rootView: markdownView)
+            hostView.frame = NSRect(x: 0, y: 0, width: 450, height: 250)
+            alert.accessoryView = hostView
+        }
 
         if let window = NSApp.keyWindow ?? NSApp.mainWindow {
             alert.beginSheetModal(for: window) { response in
@@ -163,8 +187,11 @@ final class Updater: ObservableObject {
     }
 
     private func showUpToDateAlert() {
-        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.2"
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.3"
         let alert = NSAlert()
+        if let appIcon = appIconImage {
+            alert.icon = appIcon
+        }
         alert.messageText = "已是最新版本"
         alert.informativeText = "QLaunch \(currentVersion) 当前已是最新版本，无需更新。"
         alert.addButton(withTitle: "好")
@@ -178,6 +205,9 @@ final class Updater: ObservableObject {
 
     private func showErrorAlert() {
         let alert = NSAlert()
+        if let appIcon = appIconImage {
+            alert.icon = appIcon
+        }
         alert.messageText = "检查更新失败"
         alert.informativeText = "无法连接至 GitHub 获取更新信息，请检查网络连接或稍后重试。"
         alert.addButton(withTitle: "好")

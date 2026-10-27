@@ -50,7 +50,9 @@ public struct FolderCardMetrics: Equatable, Sendable {
 
         let headerHeight: CGFloat = 64
         let hPadding: CGFloat = 32
-        let bottomPadding: CGFloat = 24
+        let isMultiPage = self.itemCount > self.pageCapacity
+        let bottomBarHeight: CGFloat = isMultiPage ? 36 : 0
+        let bottomPadding: CGFloat = 24 + bottomBarHeight
 
         let rawCardWidth = CGFloat(self.columns) * self.cellWidth + hPadding * 2
         let maxAllowedWidth = max(boundsSize.width - safeInsets.left - safeInsets.right - 48, 320)
@@ -188,9 +190,14 @@ public struct FolderCardMetrics: Equatable, Sendable {
     public static let indicatorHitSlopX: CGFloat = 28
     public static let indicatorHitSlopY: CGFloat = 24
 
+    /// Whether this folder contains multiple pages.
+    public var isMultiPage: Bool {
+        itemCount > pageCapacity
+    }
+
     /// Center of the page indicator in top-left coordinates (flipped = true) or AppKit coordinates (flipped = false).
     public func pageIndicatorCenter(flipped: Bool = false) -> CGPoint {
-        let yTop = cardRect.maxY - 14
+        let yTop = isMultiPage ? (cardRect.maxY - 22) : (cardRect.maxY - 14)
         let y = flipped ? yTop : (boundsSize.height - yTop)
         return CGPoint(x: cardRect.midX, y: y)
     }
