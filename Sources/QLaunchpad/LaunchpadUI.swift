@@ -597,12 +597,11 @@ final class LaunchpadContainerView: NSView {
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 ctx.allowsImplicitAnimation = true
                 backgroundView.animator().alphaValue = 0
+                backdropView.animator().alphaValue = 0
+                backgroundFolderHostView.animator().alphaValue = 0
             }
-            backgroundFolderHostView.removeAllPlates()
             foregroundFolderHostView.removeAllPlates()
             dragFolderHostView.removeAllPlates()
-            backgroundFolderHostView.resetSinkTransform()
-            backdropView.dismiss()
             fullScreenDimView.alphaValue = 0
             fullScreenDimView.isHidden = true
         }
@@ -775,6 +774,11 @@ final class LaunchpadContainerView: NSView {
             view.layer?.removeAllAnimations()
             view.alphaValue = 0
         }
+        backdropView.layer?.removeAllAnimations()
+        backdropView.dismiss()
+        backdropView.alphaValue = 1
+        backgroundFolderHostView.layer?.removeAllAnimations()
+        backgroundFolderHostView.alphaValue = 1
         backgroundFolderHostView.removeAllPlates()
         foregroundFolderHostView.removeAllPlates()
         dragFolderHostView.removeAllPlates()

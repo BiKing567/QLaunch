@@ -16,7 +16,7 @@
   <b>本分支基于 <a href="https://github.com/qzrzz/QLaunch">qzrzz/QLaunch</a> 进行了多项手势、动画与稳定性的深度重构优化。</b>
 </p>
 
-- 📦 **本分支最新下载**：[BiKing567/QLaunch Releases (V1.3.1)](https://github.com/BiKing567/QLaunch/releases)
+- 📦 **本分支最新下载**：[BiKing567/QLaunch Releases (V1.3.2)](https://github.com/BiKing567/QLaunch/releases)
 - 🏠 **原项目主页**：[https://qzrzz.com/QLaunch/](https://qzrzz.com/QLaunch/)
 - 🔗 **原项目仓库**：[https://github.com/qzrzz/QLaunch](https://github.com/qzrzz/QLaunch)
 
@@ -30,6 +30,9 @@
 ## 🌟 本分支重点改进与优化
 
 本项目在原版 QLaunch 的优秀基础上，针对触控板多指手势、动画交互细节、系统原生兼容性进行了全面深度优化与修复：
+
+### ⚡️ 画质优先文件夹启动退出动效修复 (V1.3.2)
+- **退出模糊背景残留修复**：修复画质优先模式下从文件夹启动应用退出时，深度模糊背景图标被意外重新生成并延迟残留消失的问题。退出期间禁止补建，使深度背景、原生底板与桌面背景同步平滑淡出，并在窗口隐藏时彻底清理收尾。
 
 ### ⚡️ 文件夹重命名文字刷新紧急修复 (V1.3.1)
 - **文字贴图缓存失效修复**：紧急修复就地重命名文件夹后主屏幕图标下方文字缓存未立即刷新的问题。将实际显示名称纳入文字贴图缓存签名比对，退出文件夹时即刻呈现最新名称，无需等待或重开启动台。

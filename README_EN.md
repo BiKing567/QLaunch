@@ -16,7 +16,7 @@
   <b>This branch is based on <a href="https://github.com/qzrzz/QLaunch">qzrzz/QLaunch</a>, featuring deep refactorings and optimizations for trackpad gestures, animation continuity, and stability.</b>
 </p>
 
-- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.3.1)](https://github.com/BiKing567/QLaunch/releases)
+- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.3.2)](https://github.com/BiKing567/QLaunch/releases)
 - 🏠 **Original Project Homepage**: [https://qzrzz.com/QLaunch/](https://qzrzz.com/QLaunch/)
 - 🔗 **Original Project Repository**: [https://github.com/qzrzz/QLaunch](https://github.com/qzrzz/QLaunch)
 
@@ -30,6 +30,9 @@
 ## 🌟 Key Improvements & Features in this Fork
 
 Built upon the excellent foundation of the original QLaunch, this fork deeply addresses multi-finger trackpad gestures, micro-interaction animation details, and system compatibility:
+
+### ⚡️ Quality Mode Folder Launch Dismissal Fix (V1.3.2)
+- **Backdrop Lingering Fix**: Fixed an issue in Quality mode where launching an app from an open folder caused the depth blur background icons to be rebaked mid-dismissal, lingering on screen until window hide. Dismissal now halts backdrop reconstruction, synchronizes depth layer and plate fade-out with the desktop background, and cleans up cleanly upon completion.
 
 ### ⚡️ Folder Renaming Text Cache Hotfix (V1.3.1)
 - **Text Atlas Cache Invalidation**: Hotfix for the issue where in-place folder renaming did not immediately refresh the text label under the folder icon on the root grid. The actual displayed name is now part of the text atlas signature comparison, instantly updating the label when exiting the folder.

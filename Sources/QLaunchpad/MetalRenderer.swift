@@ -2775,7 +2775,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     func syncFolderDepthBackdropIfNeeded() {
-        guard IconRenderQuality.current == .quality,
+        guard store.isPresented,
+              IconRenderQuality.current == .quality,
               let folderID = store.openedFolderID,
               !store.isSearching,
               folderTransition == nil else {
