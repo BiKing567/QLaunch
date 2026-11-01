@@ -648,7 +648,11 @@ final class AppStore: ObservableObject {
     private var deferredAutoLayoutKinds = Set<LaunchpadAutoLayoutKind>()
 
     private static var preferenceDomain: String {
-        Bundle.main.bundleIdentifier ?? (kCFPreferencesCurrentApplication as String)
+        let domain = Bundle.main.bundleIdentifier ?? (kCFPreferencesCurrentApplication as String)
+        if domain == LaunchpadPreferenceStore.releaseDomain || domain == LaunchpadPreferenceStore.developmentDomain {
+            return domain
+        }
+        return LaunchpadPreferenceStore.releaseDomain
     }
 
     init() {
@@ -673,6 +677,30 @@ final class AppStore: ObservableObject {
         } else {
             recentLaunchDates = [:]
         }
+
+        // Restore cached catalog snapshot before building items so initial
+        // presentation does not see an empty catalog with only folders.
+        let cachedEntries = AppCatalogCacheStore.loadEntries(domain: Self.preferenceDomain)
+        if !cachedEntries.isEmpty {
+            let validApps: [AppInfo] = cachedEntries.compactMap { entry in
+                guard FileManager.default.fileExists(atPath: entry.path) else { return nil }
+                return AppInfo(
+                    id: entry.id,
+                    name: entry.name,
+                    url: URL(fileURLWithPath: entry.path),
+                    bundleIdentifier: entry.bundleIdentifier,
+                    installedAt: entry.installedAt,
+                    lastUsedAt: entry.lastUsedAt
+                )
+            }
+            if !validApps.isEmpty {
+                self.apps = validApps
+                self.appsByID = validApps.reduce(into: [:]) { index, app in
+                    index[app.id] = app
+                }
+            }
+        }
+
         rebuildLaunchpadItems()
     }
 
@@ -830,6 +858,23 @@ final class AppStore: ObservableObject {
             }.value
             guard let self else { return }
             let catalogChanged = apps != result
+            let shouldSaveCache = catalogChanged || !FileManager.default.fileExists(atPath: AppCatalogCacheStore.cacheFileURL(domain: Self.preferenceDomain).path)
+            if shouldSaveCache {
+                let entries = result.map { app in
+                    CachedAppEntry(
+                        id: app.id,
+                        name: app.name,
+                        path: app.url.standardizedFileURL.path,
+                        bundleIdentifier: app.bundleIdentifier,
+                        installedAt: app.installedAt,
+                        lastUsedAt: app.lastUsedAt
+                    )
+                }
+                let domain = Self.preferenceDomain
+                Task.detached(priority: .utility) {
+                    AppCatalogCacheStore.saveEntries(entries, domain: domain)
+                }
+            }
             let affectedAutoLayouts: Set<LaunchpadAutoLayoutKind> = catalogChanged
                 ? autoLayoutsAffectedByCatalogChange(from: apps, to: result)
                 : []

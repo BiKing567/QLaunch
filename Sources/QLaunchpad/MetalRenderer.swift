@@ -206,6 +206,8 @@ private final class SelectionOverlayView: NSView {
 
 @MainActor
 final class LaunchpadMetalView: MTKView, MTKViewDelegate {
+    private let folderDrawableProvider = FolderDrawableProvider()
+    private var hasDrawnFolderFrame = false
     private let store: AppStore
     let commandQueue: MTLCommandQueue
     private let iconPipelineFloat16: MTLRenderPipelineState
@@ -568,7 +570,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         delegate = self
         enableSetNeedsDisplay = true
         isPaused = true
-        preferredFramesPerSecond = min(120, NSScreen.main?.maximumFramesPerSecond ?? 60)
+        preferredFramesPerSecond = max(60, NSScreen.main?.maximumFramesPerSecond ?? 60)
         framebufferOnly = false
         clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         wantsLayer = true
@@ -873,7 +875,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         guard displayLink == nil else { return }
         let link = displayLink(target: self, selector: #selector(displayLinkFired(_:)))
         let targetScreen = window?.screen ?? NSScreen.main ?? NSScreen.screens.first
-        let maxFps = Float(min(120, targetScreen?.maximumFramesPerSecond ?? 60))
+        let maxFps = Float(max(60, targetScreen?.maximumFramesPerSecond ?? 60))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: maxFps, preferred: maxFps)
         link.add(to: .main, forMode: .common)
         displayLink = link
@@ -1569,6 +1571,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     /// - Quality / performance: keep **all** resident icon textures (fluency first).
     /// - Low memory: keep only the **current page**, drop the rest.
     private func releaseIconGPUResources() {
+        hasDrawnFolderFrame = false
+        presentsWithTransaction = false
+        folderDrawableProvider.invalidate()
         pauseResourcePrewarming()
         resourcePrewarmTask = nil
         isResourcePrewarmingPaused = true
@@ -1839,20 +1844,51 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         return apps
     }
 
+    /// Member apps for folder mini previews on the visible first page.
+    private func firstPageFolderPreviewApps() -> [AppInfo] {
+        let items = displayedItems.isEmpty ? store.activeDisplayItems : displayedItems
+        let capacity = max(store.pageCapacity, 1)
+        let page = max(0, Int((displayedItems.isEmpty ? store.pageOffset : currentPageOffset).rounded()))
+        let start = min(items.count, page * capacity)
+        let end = min(items.count, start + capacity)
+        guard start < end else {
+            return []
+        }
+
+        var folderApps: [AppInfo] = []
+        for item in items[start..<end] {
+            if case .folder(let folder) = item {
+                for appID in folder.appIDs.prefix(FolderPreviewLayout.capacity) {
+                    if let app = store.app(withID: appID) {
+                        folderApps.append(app)
+                    }
+                }
+            }
+        }
+        return folderApps
+    }
+
     private func isFirstPageReady() -> Bool {
+        if store.apps.isEmpty && store.isLoading {
+            return false
+        }
         let items = displayedItems.isEmpty ? store.activeDisplayItems : displayedItems
         if items.isEmpty {
             return !store.isLoading
         }
         let apps = firstPageApps()
-        if apps.isEmpty {
-            return true
+        if !apps.allSatisfy({ iconTextures.cachedTexture(for: $0) != nil }) {
+            return false
         }
-        return apps.allSatisfy { iconTextures.cachedTexture(for: $0) != nil }
+        let folderApps = firstPageFolderPreviewApps()
+        if !folderApps.allSatisfy({ AppIconImageProvider.shared.hasCachedCGImage(for: $0) }) {
+            return false
+        }
+        return true
     }
 
-    /// Bake the visible first page at user-initiated priority so presentation
-    /// never starts with missing homepage icons.
+    /// Bake the visible first page icons and folder previews at user-initiated
+    /// priority so presentation never starts with missing homepage visuals.
     func prepareFirstPageIcons() async {
         if displayedItems.isEmpty, !store.activeDisplayItems.isEmpty {
             displayedItems = store.activeDisplayItems
@@ -1863,10 +1899,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
 
         let apps = firstPageApps()
-        guard !apps.isEmpty else { return }
+        let folderApps = firstPageFolderPreviewApps()
+        guard !apps.isEmpty || !folderApps.isEmpty else { return }
 
-        let alreadyReady = apps.allSatisfy { iconTextures.cachedTexture(for: $0) != nil }
-        if alreadyReady { return }
+        let appsReady = apps.allSatisfy { iconTextures.cachedTexture(for: $0) != nil }
+        let foldersReady = folderApps.allSatisfy { AppIconImageProvider.shared.hasCachedCGImage(for: $0) }
+        if appsReady && foldersReady { return }
 
         if IconRenderQuality.current.usesLazyTextureLoading {
             iconTextures.expandAllowedAppIDs(Set(apps.map(\.id)))
@@ -1879,6 +1917,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             for app in apps {
                 guard !Task.isCancelled else { return }
                 autoreleasepool { _ = textureStore.ensureTexture(for: app) }
+            }
+            for folderApp in folderApps {
+                guard !Task.isCancelled else { return }
+                autoreleasepool { _ = AppIconImageProvider.shared.prepare(app: folderApp) }
             }
         }.value
     }
@@ -1939,8 +1981,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
 
         let firstPageApps = self.firstPageApps()
+        let firstPageFolderApps = self.firstPageFolderPreviewApps()
         let firstPageAppIDs = Set(firstPageApps.map(\.id))
         let remainingApps = catalog.filter { !firstPageAppIDs.contains($0.id) }
+        let allFolderApps = store.folders.flatMap { folder in
+            folder.appIDs.prefix(FolderPreviewLayout.capacity).compactMap { store.app(withID: $0) }
+        }
 
         let textureStore = iconTextures
 
@@ -1948,6 +1994,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             for app in firstPageApps {
                 guard !Task.isCancelled else { return }
                 autoreleasepool { _ = textureStore.ensureTexture(for: app) }
+            }
+            for folderApp in firstPageFolderApps {
+                guard !Task.isCancelled else { return }
+                autoreleasepool { _ = AppIconImageProvider.shared.prepare(app: folderApp) }
             }
 
             // Reveal the visible batch once. Remaining off-page resident bakes
@@ -1958,6 +2008,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             for app in remainingApps {
                 guard !Task.isCancelled else { return }
                 autoreleasepool { _ = textureStore.texture(for: app, allowCreate: true) }
+                await Task.yield()
+            }
+
+            for folderApp in allFolderApps {
+                guard !Task.isCancelled else { return }
+                autoreleasepool { _ = AppIconImageProvider.shared.prepare(app: folderApp) }
                 await Task.yield()
             }
 
@@ -2051,12 +2107,21 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let priorityApps =
             window.apps.filter { pageAppIDs.contains($0.id) }
             + window.apps.filter { !pageAppIDs.contains($0.id) }
+        let windowFolderApps = window.folders.flatMap { pair in
+            pair.folder.appIDs.prefix(FolderPreviewLayout.capacity).compactMap { id in
+                pair.members.first(where: { $0.id == id }) ?? store.app(withID: id)
+            }
+        }
         let textureStore = iconTextures
 
         resourcePrewarmTask = Task.detached(priority: .utility) { [self] in
             for app in priorityApps {
                 guard !Task.isCancelled else { return }
                 autoreleasepool { _ = textureStore.texture(for: app, allowCreate: true) }
+            }
+            for folderApp in windowFolderApps {
+                guard !Task.isCancelled else { return }
+                autoreleasepool { _ = AppIconImageProvider.shared.prepare(app: folderApp) }
             }
 
             guard !Task.isCancelled else { return }
@@ -2516,6 +2581,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 }
                 reverseFolderTransition(&active, to: .closing)
                 active.rootItems = target
+                presentsWithTransaction = true
                 folderTransition = active
                 startDisplayLink()
                 needsDisplay = true
@@ -2527,6 +2593,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     return true
                 }
                 reverseFolderTransition(&active, to: .opening)
+                presentsWithTransaction = true
                 folderTransition = active
                 startDisplayLink()
                 needsDisplay = true
@@ -2566,6 +2633,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     ) -> Bool {
         if var active = folderTransition, active.folderID == folderID {
             reverseFolderTransition(&active, to: .opening)
+            presentsWithTransaction = true
             folderTransition = active
             startDisplayLink()
             needsDisplay = true
@@ -2597,6 +2665,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         contentTransitionPhase = .idle
         contentTransitionAlpha = 1
         pendingDisplayItems = nil
+        hasDrawnFolderFrame = false
+        presentsWithTransaction = true
         folderTransition = FolderTransition(
             direction: .opening,
             folderID: folderID,
@@ -2642,6 +2712,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         if var active = folderTransition, active.folderID == folderID {
             reverseFolderTransition(&active, to: .closing)
             active.rootItems = target
+            presentsWithTransaction = true
             folderTransition = active
             startDisplayLink()
             needsDisplay = true
@@ -2655,6 +2726,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         contentTransitionPhase = .idle
         contentTransitionAlpha = 1
         pendingDisplayItems = nil
+        hasDrawnFolderFrame = false
+        presentsWithTransaction = true
         folderTransition = FolderTransition(
             direction: .closing,
             folderID: folderID,
@@ -3348,6 +3421,21 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             )
         }
 
+        let isSynchronizedTransition = isFolderTransitionActive
+        // Avoid building frame storage when the layer cannot supply a drawable.
+        // Acquire the drawable first so that any WindowServer / swapchain wait
+        // occurs before sampling the animation timeline and advancing motion physics.
+        guard let target = frameTarget(),
+              let commandBuffer = commandQueue.makeCommandBuffer() else {
+            if !firstFrameWaiters.isEmpty {
+                startDisplayLink()
+                needsDisplay = true
+            }
+            return
+        }
+
+        let drawable = target.drawable
+        let passDescriptor = target.passDescriptor
         let now = CACurrentMediaTime()
         let dt = min(max(now - lastFrameTime, 1.0 / 240.0), 1.0 / 30.0)
         lastFrameTime = now
@@ -3457,17 +3545,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             return
         }
 
-        // Avoid building frame storage when the layer cannot supply a drawable.
-        guard let drawable = currentDrawable,
-              let passDescriptor = currentRenderPassDescriptor,
-              let commandBuffer = commandQueue.makeCommandBuffer() else {
-            if !firstFrameWaiters.isEmpty {
-                startDisplayLink()
-                needsDisplay = true
-            }
-            return
-        }
-
         let frameSlot = inFlightFrames[nextFrameIndex]
         nextFrameIndex = (nextFrameIndex + 1) % inFlightFrameCount
         // Never overwrite this slot while its previous command buffer is using it.
@@ -3532,6 +3609,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 folderPlates: &folderPlates
             )
         }
+        if isSynchronizedTransition {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+        }
         onUpdateFolderPlates?(folderPlates, backdropAlpha)
         onUpdateFolderTitleTransition?(currentFolderTitleState)
         refreshSelectionOverlay()
@@ -3545,6 +3626,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDescriptor) else {
             frameSlot.availability.signal()
+            if isSynchronizedTransition {
+                CATransaction.commit()
+            }
             return
         }
 
@@ -3647,7 +3731,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
 
         encoder.endEncoding()
-        commandBuffer.present(drawable)
         attachFirstFrameCompletion(to: commandBuffer)
         let frameSemaphore = frameSlot.availability
         commandBuffer.addCompletedHandler { _ in
@@ -3662,8 +3745,44 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 }
             }
         }
-        commandBuffer.commit()
+        if isSynchronizedTransition {
+            commandBuffer.commit()
+            commandBuffer.waitUntilScheduled()
+            drawable.present()
+            CATransaction.commit()
+        } else {
+            commandBuffer.present(drawable)
+            commandBuffer.commit()
+        }
+        hasDrawnFolderFrame = isFolderTransitionActive
+        presentsWithTransaction = isFolderTransitionActive
         stopDisplayLinkIfIdle()
+    }
+
+    private func frameTarget() -> (drawable: CAMetalDrawable, passDescriptor: MTLRenderPassDescriptor)? {
+        // Keep the first frame and its native view preparation in one transaction.
+        guard isFolderTransitionActive, hasDrawnFolderFrame,
+              let surface = layer as? CAMetalLayer else {
+            folderDrawableProvider.invalidate()
+            guard let drawable = currentDrawable,
+                  let passDescriptor = currentRenderPassDescriptor else { return nil }
+            return (drawable, passDescriptor)
+        }
+        guard let drawable = folderDrawableProvider.takeOrRequest(from: surface, ready: { [weak self] in
+            guard let self,
+                  self.store.isPresented,
+                  self.window?.isVisible == true,
+                  self.isFolderTransitionActive,
+                  self.hasDrawnFolderFrame else { return }
+            self.needsDisplay = true
+            self.startDisplayLink()
+        }) else { return nil }
+        let passDescriptor = MTLRenderPassDescriptor()
+        passDescriptor.colorAttachments[0].texture = drawable.texture
+        passDescriptor.colorAttachments[0].loadAction = .clear
+        passDescriptor.colorAttachments[0].storeAction = .store
+        passDescriptor.colorAttachments[0].clearColor = clearColor
+        return (drawable, passDescriptor)
     }
 
     func clearDrawableIfAvailable() {
@@ -4504,6 +4623,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        hasDrawnFolderFrame = false
+        folderDrawableProvider.invalidate()
         needsDisplay = true
     }
 

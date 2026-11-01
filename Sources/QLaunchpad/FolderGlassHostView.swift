@@ -39,16 +39,72 @@ struct FolderPlateModel: Equatable, Sendable {
 }
 
 /// High-resolution image provider that extracts crisp 512x512 retina CGImages directly.
-@MainActor
-final class AppIconImageProvider {
+final class AppIconImageProvider: @unchecked Sendable {
     static let shared = AppIconImageProvider()
-    private var cache = NSCache<NSString, CGImage>()
+    private let cache = NSCache<NSString, CGImage>()
+    private let queue = DispatchQueue(label: "com.qzrzz.qlaunchpad.preview-load", qos: .userInitiated)
+    private var inflightRequests = Set<String>()
 
-    func cgImage(for app: AppInfo) -> CGImage? {
+    private init() {
+        // Budget: ~120 MB (up to ~120-150 512x512 32-bit images)
+        cache.totalCostLimit = 120 * 1024 * 1024
+        cache.countLimit = 200
+    }
+
+    func hasCachedCGImage(for app: AppInfo) -> Bool {
+        let key = app.url.path as NSString
+        return cache.object(forKey: key) != nil
+    }
+
+    func cachedCGImage(for app: AppInfo) -> CGImage? {
+        let key = app.url.path as NSString
+        return cache.object(forKey: key)
+    }
+
+    /// Returns cached image if available. If missing, only creates synchronously
+    /// if `allowCreate` is true (non-animation contexts). In animation frames,
+    /// pass `allowCreate: false` to avoid blocking the main thread.
+    func cgImage(for app: AppInfo, allowCreate: Bool = true) -> CGImage? {
         let key = app.url.path as NSString
         if let cached = cache.object(forKey: key) {
             return cached
         }
+        guard allowCreate else { return nil }
+        return createAndCacheImage(for: app)
+    }
+
+    @discardableResult
+    func prepare(app: AppInfo) -> CGImage? {
+        let key = app.url.path as NSString
+        if let cached = cache.object(forKey: key) {
+            return cached
+        }
+        return createAndCacheImage(for: app)
+    }
+
+    func prepare(apps: [AppInfo]) {
+        for app in apps {
+            autoreleasepool {
+                _ = prepare(app: app)
+            }
+        }
+    }
+
+    func loadAsync(for app: AppInfo, completion: @escaping @MainActor (CGImage?) -> Void) {
+        let path = app.url.path
+        queue.async { [weak self] in
+            guard let self else { return }
+            if self.inflightRequests.contains(path) { return }
+            self.inflightRequests.insert(path)
+            let cg = self.createAndCacheImage(for: app)
+            self.inflightRequests.remove(path)
+            DispatchQueue.main.async {
+                completion(cg)
+            }
+        }
+    }
+
+    private func createAndCacheImage(for app: AppInfo) -> CGImage? {
         let image = NSWorkspace.shared.icon(forFile: app.url.path)
         // Request 256pt (512px on Retina) to ensure razor-sharp rendering in preview layers
         image.size = NSSize(width: 256, height: 256)
@@ -56,7 +112,8 @@ final class AppIconImageProvider {
         guard let cg = image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil) else {
             return nil
         }
-        cache.setObject(cg, forKey: key)
+        let cost = cg.bytesPerRow * cg.height
+        cache.setObject(cg, forKey: app.url.path as NSString, cost: cost)
         return cg
     }
 
@@ -81,6 +138,34 @@ private final class FolderGlassPlateItemView: NSView {
     private var glassEffectView: NSView?
     private let contentView = FlippedContainerView()
     private var previewLayers: [CALayer] = []
+    private var currentDisplayMemberIDs: [String] = []
+
+    private var lastBoundsSize: CGSize = .zero
+    private var lastPreviewBoundsSize: CGSize = .zero
+    private var lastCornerRadius: CGFloat = -1
+    private var lastAlpha: Float = -1
+    private var lastMemberIDs: [String] = []
+    private var lastPreviewVisible: Bool = false
+    private var lastIconSize: CGFloat = -1
+    private var lastScale: CGFloat = -1
+    private var lastIncomingDropAppID: String? = nil
+    private var lastBlurRadius: CGFloat = -1
+
+    private static let filterName = "plateBlur"
+    private var blurFilter: CIFilter?
+
+    func resetCachedState() {
+        lastBoundsSize = .zero
+        lastPreviewBoundsSize = .zero
+        lastCornerRadius = -1
+        lastAlpha = -1
+        lastMemberIDs = []
+        lastPreviewVisible = false
+        lastIconSize = -1
+        lastScale = -1
+        lastIncomingDropAppID = nil
+        lastBlurRadius = -1
+    }
 
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -94,6 +179,7 @@ private final class FolderGlassPlateItemView: NSView {
         contentView.wantsLayer = true
         contentView.layer?.masksToBounds = false
         contentView.autoresizingMask = [.width, .height]
+        addSubview(contentView)
 
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView(frame: bounds)
@@ -102,8 +188,7 @@ private final class FolderGlassPlateItemView: NSView {
                 glass.effectIsInteractive = false
             }
             glass.autoresizingMask = [.width, .height]
-            glass.contentView = contentView
-            addSubview(glass)
+            addSubview(glass, positioned: .below, relativeTo: contentView)
             glassEffectView = glass
         } else {
             let visual = NSVisualEffectView(frame: bounds)
@@ -114,8 +199,7 @@ private final class FolderGlassPlateItemView: NSView {
             visual.state = .active
             visual.layer?.cornerCurve = .continuous
             visual.layer?.masksToBounds = true
-            visual.addSubview(contentView)
-            addSubview(visual)
+            addSubview(visual, positioned: .below, relativeTo: contentView)
             glassEffectView = visual
             updateFallbackAppearance()
         }
@@ -141,8 +225,12 @@ private final class FolderGlassPlateItemView: NSView {
 
     override func layout() {
         super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         glassEffectView?.frame = bounds
         contentView.frame = bounds
+        lastBoundsSize = bounds.size
+        CATransaction.commit()
     }
 
     override func viewDidChangeEffectiveAppearance() {
@@ -151,11 +239,12 @@ private final class FolderGlassPlateItemView: NSView {
     }
 
     private func updateFallbackAppearance() {
-        guard let visual = glassEffectView as? NSVisualEffectView else { return }
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            visual.layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
-            visual.layer?.borderColor = NSColor.separatorColor.cgColor
-            visual.layer?.borderWidth = 0.5
+            if let visual = glassEffectView as? NSVisualEffectView {
+                visual.layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
+                visual.layer?.borderColor = NSColor.separatorColor.cgColor
+                visual.layer?.borderWidth = 0.5
+            }
         }
     }
 
@@ -169,29 +258,62 @@ private final class FolderGlassPlateItemView: NSView {
         incomingDropAppID: String?
     ) {
         frame = rect
-        glassEffectView?.frame = bounds
-        contentView.frame = bounds
-        alphaValue = CGFloat(alpha)
+        let currentBounds = bounds
+        if currentBounds.size != lastBoundsSize {
+            glassEffectView?.frame = currentBounds
+            contentView.frame = currentBounds
+            lastBoundsSize = currentBounds.size
+        }
+        if alpha != lastAlpha {
+            alphaValue = CGFloat(alpha)
+            lastAlpha = alpha
+        }
 
-        if #available(macOS 26.0, *), let glass = glassEffectView as? NSGlassEffectView {
-            glass.cornerRadius = cornerRadius
-        } else if let visual = glassEffectView as? NSVisualEffectView {
-            visual.layer?.cornerRadius = cornerRadius
+        if cornerRadius != lastCornerRadius {
+            if #available(macOS 26.0, *), let glass = glassEffectView as? NSGlassEffectView {
+                glass.cornerRadius = cornerRadius
+            } else if let visual = glassEffectView as? NSVisualEffectView {
+                visual.layer?.cornerRadius = cornerRadius
+            }
+            lastCornerRadius = cornerRadius
         }
 
         guard previewVisible, !members.isEmpty else {
-            for layer in previewLayers { layer.isHidden = true }
+            if lastPreviewVisible != previewVisible || !lastMemberIDs.isEmpty {
+                for layer in previewLayers { layer.isHidden = true }
+                lastPreviewVisible = previewVisible
+                lastMemberIDs = []
+            }
             return
         }
 
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        let displayMembers = Array(members.prefix(FolderPreviewLayout.capacity))
+        let memberIDs = displayMembers.map(\.id)
 
-        let side = min(bounds.width, bounds.height)
+        let contentUnchanged = currentBounds.size == lastPreviewBoundsSize
+            && memberIDs == lastMemberIDs
+            && previewVisible == lastPreviewVisible
+            && iconSize == lastIconSize
+            && scale == lastScale
+            && incomingDropAppID == lastIncomingDropAppID
+
+        if contentUnchanged {
+            return
+        }
+
+        lastPreviewBoundsSize = currentBounds.size
+        lastMemberIDs = memberIDs
+        lastPreviewVisible = previewVisible
+        lastIconSize = iconSize
+        lastScale = scale
+        lastIncomingDropAppID = incomingDropAppID
+        currentDisplayMemberIDs = memberIDs
+
+        let side = min(currentBounds.width, currentBounds.height)
         let folderCenter = CGPoint(x: side * 0.5, y: side * 0.5)
         let effectiveIconSize = iconSize > 0 ? iconSize : (side / 0.8125)
         let miniSize = FolderPreviewLayout.miniSize(in: effectiveIconSize)
-
-        let displayMembers = Array(members.prefix(FolderPreviewLayout.capacity))
 
         for (index, layer) in previewLayers.enumerated() {
             if index < displayMembers.count {
@@ -220,11 +342,19 @@ private final class FolderGlassPlateItemView: NSView {
                 layer.shadowOffset = CGSize(width: 0, height: 1.0 * (side / 128.0))
                 layer.shadowRadius = 1.5 * (side / 128.0)
 
-                if let cgImage = AppIconImageProvider.shared.cgImage(for: app) {
+                if let cgImage = AppIconImageProvider.shared.cachedCGImage(for: app) {
                     layer.contents = cgImage
                     layer.isHidden = false
                 } else {
+                    layer.contents = nil
                     layer.isHidden = true
+                    AppIconImageProvider.shared.loadAsync(for: app) { [weak self, weak layer] cgImage in
+                        guard let self, let layer, let cgImage else { return }
+                        guard self.currentDisplayMemberIDs.indices.contains(index),
+                              self.currentDisplayMemberIDs[index] == app.id else { return }
+                        layer.contents = cgImage
+                        layer.isHidden = false
+                    }
                 }
             } else {
                 layer.isHidden = true
@@ -232,14 +362,15 @@ private final class FolderGlassPlateItemView: NSView {
         }
     }
 
-    private static let filterName = "plateBlur"
-    private var blurFilter: CIFilter?
-
     /// Smoothly blurs the entire folder plate (liquid glass baseplate + borders + mini-icons)
     /// using a named CIGaussianBlur filter updated via layer keypath, matching the background icons.
     func updateBlur(progress: CGFloat) {
         let local = min(max(progress, 0), 1)
         let blurRadius = 16.0 * local
+        if abs(blurRadius - lastBlurRadius) < 0.02 {
+            return
+        }
+        lastBlurRadius = blurRadius
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -409,12 +540,12 @@ final class FolderGlassHostView: NSView {
         CATransaction.setDisableActions(true)
         for (_, item) in itemsByID {
             item.updateBlur(progress: 0)
+            item.resetCachedState()
             item.removeFromSuperview()
         }
         itemsByID.removeAll()
         currentRawSinkTransform = nil
         hostView.layer?.sublayerTransform = CATransform3DIdentity
-        AppIconImageProvider.shared.clear()
         CATransaction.commit()
     }
 

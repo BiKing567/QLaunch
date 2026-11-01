@@ -3,6 +3,130 @@ import Metal
 import MetalPerformanceShaders
 import QuartzCore
 
+/// Dedicated worker that executes Gaussian blur and CAMetalLayer presentation
+/// on a private serial queue so drawable waits never block the main thread.
+private final class BackdropBlurWorker: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.qzrzz.qlaunchpad.backdrop-blur", qos: .userInteractive)
+    private var isBlurInFlight = false
+    private var pendingProgress: Float?
+    private var blurKernels: [Int: MPSImageGaussianBlur] = [:]
+    private var activeGeneration: UInt64 = 0
+
+    func reset(generation: UInt64) {
+        queue.async {
+            self.activeGeneration = generation
+            self.pendingProgress = nil
+            self.isBlurInFlight = false
+        }
+    }
+
+    func purgeKernels() {
+        queue.async {
+            self.blurKernels.removeAll(keepingCapacity: true)
+        }
+    }
+
+    func schedule(
+        progress: Float,
+        generation: UInt64,
+        scale: CGFloat,
+        rawTex: MTLTexture,
+        metalLayer: CAMetalLayer,
+        device: MTLDevice,
+        commandQueue: MTLCommandQueue
+    ) {
+        queue.async {
+            guard generation == self.activeGeneration else { return }
+            if self.isBlurInFlight {
+                self.pendingProgress = progress
+                return
+            }
+            self.isBlurInFlight = true
+            self.executeBlur(
+                progress: progress,
+                generation: generation,
+                scale: scale,
+                rawTex: rawTex,
+                metalLayer: metalLayer,
+                device: device,
+                commandQueue: commandQueue
+            )
+        }
+    }
+
+    private func executeBlur(
+        progress: Float,
+        generation: UInt64,
+        scale: CGFloat,
+        rawTex: MTLTexture,
+        metalLayer: CAMetalLayer,
+        device: MTLDevice,
+        commandQueue: MTLCommandQueue
+    ) {
+        guard generation == self.activeGeneration else { return }
+
+        guard let drawable = metalLayer.nextDrawable(),
+              let commandBuffer = commandQueue.makeCommandBuffer() else {
+            isBlurInFlight = false
+            pendingProgress = nil
+            return
+        }
+
+        let blurRadiusPoints: Float = 16.0
+        let sigma = blurRadiusPoints * Float(scale) * progress
+
+        if sigma < 0.2 {
+            if let blit = commandBuffer.makeBlitCommandEncoder() {
+                blit.copy(
+                    from: rawTex,
+                    sourceSlice: 0,
+                    sourceLevel: 0,
+                    sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                    sourceSize: MTLSize(width: rawTex.width, height: rawTex.height, depth: 1),
+                    to: drawable.texture,
+                    destinationSlice: 0,
+                    destinationLevel: 0,
+                    destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
+                )
+                blit.endEncoding()
+            }
+        } else {
+            let key = Int((sigma * 10).rounded())
+            let blur: MPSImageGaussianBlur
+            if let cached = blurKernels[key] {
+                blur = cached
+            } else {
+                blur = MPSImageGaussianBlur(device: device, sigma: sigma)
+                blurKernels[key] = blur
+            }
+            blur.encode(commandBuffer: commandBuffer, sourceTexture: rawTex, destinationTexture: drawable.texture)
+        }
+
+        commandBuffer.present(drawable)
+        commandBuffer.addCompletedHandler { [weak self] _ in
+            guard let self else { return }
+            self.queue.async {
+                guard generation == self.activeGeneration else { return }
+                self.isBlurInFlight = false
+                if let next = self.pendingProgress {
+                    self.pendingProgress = nil
+                    self.isBlurInFlight = true
+                    self.executeBlur(
+                        progress: next,
+                        generation: generation,
+                        scale: scale,
+                        rawTex: rawTex,
+                        metalLayer: metalLayer,
+                        device: device,
+                        commandQueue: commandQueue
+                    )
+                }
+            }
+        }
+        commandBuffer.commit()
+    }
+}
+
 /// Dedicated backdrop view that manages the receding and blurred root icons during folder expansion.
 ///
 /// Hierarchy (bottom to top):
@@ -24,6 +148,9 @@ final class FolderDepthBackdropView: NSView {
     private var currentScale: CGFloat = 2.0
 
     private(set) var isReady = false
+
+    private let worker = BackdropBlurWorker()
+    private var generation: UInt64 = 0
 
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -111,6 +238,9 @@ final class FolderDepthBackdropView: NSView {
         self.device = device
         self.commandQueue = commandQueue
         self.currentScale = scale
+        generation &+= 1
+        let currentGen = generation
+        worker.reset(generation: currentGen)
 
         let pixelWidth = max(1, Int((boundsSize.width * scale).rounded()))
         let pixelHeight = max(1, Int((boundsSize.height * scale).rounded()))
@@ -127,9 +257,7 @@ final class FolderDepthBackdropView: NSView {
 
         // Render the root grid (excluding the opening folder) into rawTex
         renderPass(commandBuffer, rawTex)
-
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
 
         metalLayer.device = device
         metalLayer.drawableSize = CGSize(width: pixelWidth, height: pixelHeight)
@@ -144,60 +272,18 @@ final class FolderDepthBackdropView: NSView {
         metalLayer.position = CGPoint(x: targetBounds.midX, y: targetBounds.midY)
         CATransaction.commit()
 
-        if renderBlur(progress: 0.0) {
-            isReady = true
-            isHidden = false
-        } else {
-            isReady = false
-            isHidden = true
-        }
-    }
+        isReady = true
+        isHidden = false
 
-    @discardableResult
-    private func renderBlur(progress: Float) -> Bool {
-        guard let device,
-              let commandQueue,
-              let rawTex = rawTexture else {
-            isReady = false
-            return false
-        }
-
-        guard let drawable = metalLayer.nextDrawable() else {
-            isReady = false
-            return false
-        }
-        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
-            isReady = false
-            return false
-        }
-
-        let blurRadiusPoints: Float = 16.0
-        let sigma = blurRadiusPoints * Float(currentScale) * progress
-
-        if sigma < 0.2 {
-            guard let blit = commandBuffer.makeBlitCommandEncoder() else {
-                return false
-            }
-            blit.copy(
-                from: rawTex,
-                sourceSlice: 0,
-                sourceLevel: 0,
-                sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                sourceSize: MTLSize(width: rawTex.width, height: rawTex.height, depth: 1),
-                to: drawable.texture,
-                destinationSlice: 0,
-                destinationLevel: 0,
-                destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
-            )
-            blit.endEncoding()
-        } else {
-            let blur = MPSImageGaussianBlur(device: device, sigma: sigma)
-            blur.encode(commandBuffer: commandBuffer, sourceTexture: rawTex, destinationTexture: drawable.texture)
-        }
-
-        commandBuffer.present(drawable)
-        commandBuffer.commit()
-        return true
+        worker.schedule(
+            progress: 0.0,
+            generation: currentGen,
+            scale: scale,
+            rawTex: rawTex,
+            metalLayer: metalLayer,
+            device: device,
+            commandQueue: commandQueue
+        )
     }
 
     /// Canonical sink transform calculation shared across backdrop and background folder views.
@@ -219,20 +305,30 @@ final class FolderDepthBackdropView: NSView {
 
         let local = min(max(progress, 0), 1)
 
-        // Progressive Gaussian blur matching the folder baseplates
-        renderBlur(progress: Float(local))
+        if let rawTex = rawTexture, let device, let commandQueue {
+            worker.schedule(
+                progress: Float(local),
+                generation: generation,
+                scale: currentScale,
+                rawTex: rawTex,
+                metalLayer: metalLayer,
+                device: device,
+                commandQueue: commandQueue
+            )
+        }
 
         let sink = Self.sinkTransform(progress: progress)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         containerLayer.transform = sink.transform
-        // Icons remain 100% solid, full-screen dim overlay handles background darkening uniformly.
         containerLayer.opacity = 1.0
         CATransaction.commit()
     }
 
     /// Dismisses the backdrop when the folder is fully closed.
     func dismiss() {
+        generation &+= 1
+        worker.reset(generation: generation)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         isHidden = true
@@ -244,6 +340,9 @@ final class FolderDepthBackdropView: NSView {
 
     /// Releases cached textures on memory pressure or when quality changes.
     func purgeTextures() {
+        generation &+= 1
+        worker.reset(generation: generation)
+        worker.purgeKernels()
         cachedPixelSize = .zero
         rawTexture = nil
         isReady = false
