@@ -128,6 +128,11 @@ private final class FlippedContainerView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+enum FolderPlateMaterialStyle: Sendable {
+    case glass
+    case regular
+}
+
 /// An individual folder glass plate item using native CALayer architecture.
 ///
 /// On macOS 26+: uses genuine system `NSGlassEffectView` with `.regular` style
@@ -136,6 +141,8 @@ private final class FlippedContainerView: NSView {
 /// completely eliminating CPU CoreGraphics bitmap drawing, cache churn, and scale blur.
 private final class FolderGlassPlateItemView: NSView {
     private var glassEffectView: NSView?
+    private var visualEffectView: NSVisualEffectView?
+    private var currentMaterialStyle: FolderPlateMaterialStyle = .glass
     private let contentView = FlippedContainerView()
     private var previewLayers: [CALayer] = []
     private var currentDisplayMemberIDs: [String] = []
@@ -170,7 +177,8 @@ private final class FolderGlassPlateItemView: NSView {
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    override init(frame: NSRect) {
+    init(frame: NSRect, materialStyle: FolderPlateMaterialStyle = .glass) {
+        currentMaterialStyle = materialStyle
         super.init(frame: frame)
         wantsLayer = true
         layer?.masksToBounds = false
@@ -188,21 +196,22 @@ private final class FolderGlassPlateItemView: NSView {
                 glass.effectIsInteractive = false
             }
             glass.autoresizingMask = [.width, .height]
+            glass.isHidden = (materialStyle == .regular)
             addSubview(glass, positioned: .below, relativeTo: contentView)
             glassEffectView = glass
-        } else {
-            let visual = NSVisualEffectView(frame: bounds)
-            visual.wantsLayer = true
-            visual.autoresizingMask = [.width, .height]
-            visual.blendingMode = .withinWindow
-            visual.material = .hudWindow
-            visual.state = .active
-            visual.layer?.cornerCurve = .continuous
-            visual.layer?.masksToBounds = true
-            addSubview(visual, positioned: .below, relativeTo: contentView)
-            glassEffectView = visual
-            updateFallbackAppearance()
         }
+
+        let visual = NSVisualEffectView(frame: bounds)
+        visual.wantsLayer = true
+        visual.autoresizingMask = [.width, .height]
+        visual.blendingMode = .withinWindow
+        visual.state = .active
+        visual.layer?.cornerCurve = .continuous
+        visual.layer?.masksToBounds = true
+        visual.isHidden = (materialStyle == .glass && glassEffectView != nil)
+        addSubview(visual, positioned: .below, relativeTo: contentView)
+        visualEffectView = visual
+        updateFallbackAppearance()
 
         // Pre-create 9 reusable CALayers for the 3×3 grid
         for _ in 0..<FolderPreviewLayout.capacity {
@@ -219,8 +228,32 @@ private final class FolderGlassPlateItemView: NSView {
         }
     }
 
+    convenience override init(frame: NSRect) {
+        self.init(frame: frame, materialStyle: .glass)
+    }
+
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    func setMaterialStyle(_ style: FolderPlateMaterialStyle) {
+        guard style != currentMaterialStyle else { return }
+        currentMaterialStyle = style
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        switch style {
+        case .glass:
+            if glassEffectView != nil {
+                glassEffectView?.isHidden = false
+                visualEffectView?.isHidden = true
+            } else {
+                visualEffectView?.isHidden = false
+            }
+        case .regular:
+            glassEffectView?.isHidden = true
+            visualEffectView?.isHidden = false
+        }
+        CATransaction.commit()
     }
 
     override func layout() {
@@ -228,6 +261,7 @@ private final class FolderGlassPlateItemView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         glassEffectView?.frame = bounds
+        visualEffectView?.frame = bounds
         contentView.frame = bounds
         lastBoundsSize = bounds.size
         CATransaction.commit()
@@ -240,11 +274,12 @@ private final class FolderGlassPlateItemView: NSView {
 
     private func updateFallbackAppearance() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            if let visual = glassEffectView as? NSVisualEffectView {
-                visual.layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
-                visual.layer?.borderColor = NSColor.separatorColor.cgColor
-                visual.layer?.borderWidth = 0.5
-            }
+            guard let visual = visualEffectView else { return }
+            let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            visual.material = isDark ? .hudWindow : .popover
+            visual.layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
+            visual.layer?.borderColor = NSColor.separatorColor.cgColor
+            visual.layer?.borderWidth = 0.5
         }
     }
 
@@ -261,6 +296,7 @@ private final class FolderGlassPlateItemView: NSView {
         let currentBounds = bounds
         if currentBounds.size != lastBoundsSize {
             glassEffectView?.frame = currentBounds
+            visualEffectView?.frame = currentBounds
             contentView.frame = currentBounds
             lastBoundsSize = currentBounds.size
         }
@@ -272,9 +308,8 @@ private final class FolderGlassPlateItemView: NSView {
         if cornerRadius != lastCornerRadius {
             if #available(macOS 26.0, *), let glass = glassEffectView as? NSGlassEffectView {
                 glass.cornerRadius = cornerRadius
-            } else if let visual = glassEffectView as? NSVisualEffectView {
-                visual.layer?.cornerRadius = cornerRadius
             }
+            visualEffectView?.layer?.cornerRadius = cornerRadius
             lastCornerRadius = cornerRadius
         }
 
@@ -408,9 +443,21 @@ private final class FolderGlassPlateItemView: NSView {
 @MainActor
 final class FolderGlassHostView: NSView {
     var reusableSinglePlateID: String? = nil
+    var currentMaterialStyle: FolderPlateMaterialStyle = .glass {
+        didSet {
+            guard currentMaterialStyle != oldValue else { return }
+            for item in itemsByID.values {
+                item.setMaterialStyle(currentMaterialStyle)
+            }
+        }
+    }
     private let hostView = FlippedContainerView()
     private var itemsByID: [String: FolderGlassPlateItemView] = [:]
     private var currentRawSinkTransform: CATransform3D?
+
+    func setMaterialStyle(_ style: FolderPlateMaterialStyle) {
+        currentMaterialStyle = style
+    }
 
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -452,7 +499,7 @@ final class FolderGlassHostView: NSView {
 
     func prewarmPlate(id: String) {
         if itemsByID[id] == nil {
-            let item = FolderGlassPlateItemView(frame: .zero)
+            let item = FolderGlassPlateItemView(frame: .zero, materialStyle: currentMaterialStyle)
             item.isHidden = true
             hostView.addSubview(item)
             itemsByID[id] = item
@@ -473,8 +520,9 @@ final class FolderGlassHostView: NSView {
             let item: FolderGlassPlateItemView
             if let existing = itemsByID[plateID] {
                 item = existing
+                item.setMaterialStyle(currentMaterialStyle)
             } else {
-                item = FolderGlassPlateItemView(frame: plate.rect)
+                item = FolderGlassPlateItemView(frame: plate.rect, materialStyle: currentMaterialStyle)
                 hostView.addSubview(item)
                 itemsByID[plateID] = item
             }
@@ -537,10 +585,12 @@ final class FolderGlassHostView: NSView {
     /// Resets the sink transform to identity and clears 9-grid blur filters.
     func resetSinkTransform() {
         currentRawSinkTransform = nil
+        currentMaterialStyle = .glass
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         hostView.layer?.sublayerTransform = CATransform3DIdentity
         for item in itemsByID.values {
+            item.setMaterialStyle(.glass)
             item.updateBlur(progress: 0)
         }
         CATransaction.commit()
