@@ -18,7 +18,8 @@ final class FolderDrawableProvider {
         qos: .userInteractive
     )
     private var readyDrawable: CAMetalDrawable?
-    private var requestInFlight = false
+    private var inFlightGeneration: UInt64?
+    private var pendingReady: (@MainActor () -> Void)?
     private var generation: UInt64 = 0
     private var expectedLayer: ObjectIdentifier?
     private var expectedSize: CGSize = .zero
@@ -43,25 +44,43 @@ final class FolderDrawableProvider {
             if drawable.texture.width == Int(size.width.rounded()),
                drawable.texture.height == Int(size.height.rounded()),
                drawable.texture.pixelFormat == format {
+                requestNext(layer: layer, ready: nil)
                 return drawable
             }
         }
-        guard !requestInFlight else { return nil }
-        requestInFlight = true
+        requestNext(layer: layer, ready: ready)
+        return nil
+    }
+
+    private func requestNext(
+        layer: CAMetalLayer,
+        ready: (@MainActor () -> Void)?
+    ) {
+        if let ready {
+            self.pendingReady = ready
+        }
+        guard inFlightGeneration != generation else { return }
+        inFlightGeneration = generation
         let requestGeneration = generation
+        let fallbackReady = ready
         let request = FolderDrawableRequest(layer: layer)
         queue.async { [weak self] in
             let drawable = request.nextDrawable()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                self.requestInFlight = false
+                if self.inFlightGeneration == requestGeneration {
+                    self.inFlightGeneration = nil
+                }
                 if requestGeneration == self.generation {
                     self.readyDrawable = drawable
+                    let callback = self.pendingReady
+                    self.pendingReady = nil
+                    if drawable != nil { callback?() }
+                } else {
+                    if drawable != nil { fallbackReady?() }
                 }
-                if drawable != nil { ready() }
             }
         }
-        return nil
     }
 
     func invalidate() {
@@ -69,6 +88,7 @@ final class FolderDrawableProvider {
         // Keep a pending acquisition exclusive until its callback returns.
         generation &+= 1
         readyDrawable = nil
+        pendingReady = nil
         expectedLayer = nil
         expectedSize = .zero
         expectedFormat = .invalid

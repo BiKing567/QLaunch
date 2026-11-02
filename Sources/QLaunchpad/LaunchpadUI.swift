@@ -369,6 +369,7 @@ final class LaunchpadContainerView: NSView {
     private let metalView: LaunchpadMetalView
     private let overlayView: PassthroughHostingView<LaunchpadOverlayView>
     private let folderTitleView: FolderTitleView
+    private var pendingBackdropPlates: (folderID: String, plates: [FolderPlateModel])?
     private var cancellables = Set<AnyCancellable>()
 
     var metal: LaunchpadMetalView { metalView }
@@ -436,7 +437,6 @@ final class LaunchpadContainerView: NSView {
         }
         metalView.onFolderTransitionBakeBackdrop = { [weak self] folderID, generation, rootItems, pageOffset, canvasScale, canvasPan, canvasAdaptive in
             guard let self else { return }
-            self.backgroundFolderHostView.setPlateHidden(true, for: folderID)
             guard let device = self.metalView.device else { return }
             let scale = self.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
             self.backdropView.bake(
@@ -455,9 +455,13 @@ final class LaunchpadContainerView: NSView {
                     canvasPan: canvasPan,
                     canvasAdaptive: canvasAdaptive
                 )
-                if !bgPlates.isEmpty {
-                    self.backgroundFolderHostView.update(plates: bgPlates, removeUnused: true)
-                    self.backgroundFolderHostView.setPlateHidden(true, for: folderID)
+                if self.metalView.isFolderTransitionActive || !self.metalView.isPreparingFolderOpen {
+                    if !bgPlates.isEmpty {
+                        self.backgroundFolderHostView.update(plates: bgPlates, removeUnused: true)
+                        self.backgroundFolderHostView.setPlateHidden(true, for: folderID)
+                    }
+                } else {
+                    self.pendingBackdropPlates = (folderID: folderID, plates: bgPlates)
                 }
             }
         }
@@ -479,11 +483,20 @@ final class LaunchpadContainerView: NSView {
             guard let self else { return false }
             return self.backdropView.bakeFailed
         }
-        backdropView.onReadyChange = { [weak self] _ in
-            self?.metalView.needsDisplay = true
+        backdropView.onReadyChange = { [weak self] isReady in
+            guard let self else { return }
+            if isReady, let pending = self.pendingBackdropPlates {
+                self.backgroundFolderHostView.update(plates: pending.plates, removeUnused: true)
+                self.backgroundFolderHostView.setPlateHidden(true, for: pending.folderID)
+                self.pendingBackdropPlates = nil
+            } else if !isReady {
+                self.pendingBackdropPlates = nil
+            }
+            self.metalView.handleBackdropReady(isReady: isReady)
         }
         metalView.onFolderDepthBackdropDismiss = { [weak self] in
             guard let self else { return }
+            self.pendingBackdropPlates = nil
             self.backdropView.dismiss()
             self.backgroundFolderHostView.resetSinkTransform()
             self.backgroundFolderHostView.setAllPlatesHidden(false)
@@ -494,6 +507,7 @@ final class LaunchpadContainerView: NSView {
             guard generation == self.metalView.folderTransitionGeneration else { return }
             guard !self.metalView.isFolderTransitionActive else { return }
             if self.store.openedFolderID == nil {
+                self.pendingBackdropPlates = nil
                 self.backdropView.dismiss()
                 self.backgroundFolderHostView.resetSinkTransform()
                 self.backgroundFolderHostView.setAllPlatesHidden(false)

@@ -505,6 +505,15 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private let folderOpenDuration: CFTimeInterval = 0.46
     private let folderCloseDuration: CFTimeInterval = 0.38
 
+    private struct PendingFolderOpen {
+        let folderID: String
+        let target: [LaunchpadItem]
+        let signature: AppListSignature
+    }
+    private var pendingFolderOpen: PendingFolderOpen?
+
+    var isPreparingFolderOpen: Bool { pendingFolderOpen != nil }
+
     var isFolderTransitionActive: Bool { folderTransition != nil }
 
     // MARK: Init
@@ -2608,11 +2617,31 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             }
         }
 
+        if let pending = pendingFolderOpen {
+            if nextFolderID == nil {
+                pendingFolderOpen = nil
+                onFolderDepthBackdropDismiss?()
+                lastDisplaySignature = signature
+                return true
+            } else if nextFolderID == pending.folderID {
+                return true
+            } else {
+                pendingFolderOpen = nil
+            }
+        }
+
         if nextFolderID == displayedFolderID {
             return false
         }
 
         if let nextFolderID, displayedFolderID == nil {
+            if IconRenderQuality.current == .quality,
+               isDepthBackdropActive?() != true,
+               isDepthBackdropFailed?() != true {
+                prepareAndBakeFolderBackdrop(folderID: nextFolderID, target: target, signature: signature)
+                lastDisplaySignature = signature
+                return true
+            }
             if beginFolderOpenTransition(folderID: nextFolderID, target: target) {
                 lastDisplaySignature = signature
                 return true
@@ -2627,6 +2656,37 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             }
         }
         return false
+    }
+
+    private func prepareAndBakeFolderBackdrop(
+        folderID: String,
+        target: [LaunchpadItem],
+        signature: AppListSignature
+    ) {
+        pendingFolderOpen = PendingFolderOpen(folderID: folderID, target: target, signature: signature)
+        prepareFolderTransitionResources(items: target)
+        folderTransitionGeneration &+= 1
+        onFolderTransitionBakeBackdrop?(
+            folderID,
+            folderTransitionGeneration,
+            displayedItems,
+            currentPageOffset,
+            canvasScale,
+            canvasPan,
+            canvasStateUsesAdaptiveLayout
+        )
+        startDisplayLink()
+        needsDisplay = true
+    }
+
+    func handleBackdropReady(isReady: Bool) {
+        if let pending = pendingFolderOpen {
+            pendingFolderOpen = nil
+            if store.openedFolderID == pending.folderID {
+                beginFolderOpenTransition(folderID: pending.folderID, target: pending.target)
+            }
+        }
+        needsDisplay = true
     }
 
     @discardableResult
@@ -2691,7 +2751,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         folderTransitionGeneration &+= 1
         prepareFolderTransitionResources(items: target)
         store.setFolderTransitionActive(true)
-        if IconRenderQuality.current == .quality {
+        if IconRenderQuality.current == .quality,
+           isDepthBackdropActive?() != true,
+           isDepthBackdropBaking?() != true {
             onFolderTransitionBakeBackdrop?(
                 folderID,
                 folderTransitionGeneration,
@@ -2795,21 +2857,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private func tickFolderTransition(now: CFTimeInterval) {
         guard var transition = folderTransition else { return }
 
-        // Lock-step: when opening with quality depth backdrop, hold progress at 0.0
-        // until the backdrop's first frame is genuinely ready and presented.
-        // This ensures the animation starts strictly from progress 0 with the backdrop
-        // active, eliminating mid-flight handoff jumps between fallback and backdrop.
-        if transition.direction == .opening,
-           IconRenderQuality.current == .quality,
-           isDepthBackdropActive?() != true,
-           isDepthBackdropBaking?() == true {
-            transition.startTime = 0
-            transition.progress = 0
-            folderTransition = transition
-            startDisplayLink()
-            return
-        }
-
         if transition.startTime <= 0 {
             transition.startTime = now
         }
@@ -2852,6 +2899,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             }
         }
         folderTransition = nil
+        pendingFolderOpen = nil
         store.setFolderTransitionActive(false)
         pendingFolderTransitionEnd = true
         pendingFolderTransitionGeneration = folderTransitionGeneration
@@ -2874,6 +2922,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
               let folderID = store.openedFolderID,
               !store.isSearching,
               folderTransition == nil,
+              pendingFolderOpen == nil,
               isDepthBackdropBaking?() != true,
               isDepthBackdropFailed?() != true else {
             return
@@ -3423,7 +3472,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         noteDisplayChangeIfNeeded()
         synchronizeCanvasStateIfNeeded(itemCount: displayedItems.count)
 
-        if store.openedFolderID != nil, !store.isSearching, folderTransition == nil, IconRenderQuality.current == .quality, isDepthBackdropActive?() != true, isDepthBackdropBaking?() != true, isDepthBackdropFailed?() != true {
+        if store.openedFolderID != nil, !store.isSearching, folderTransition == nil, pendingFolderOpen == nil, IconRenderQuality.current == .quality, isDepthBackdropActive?() != true, isDepthBackdropBaking?() != true, isDepthBackdropFailed?() != true {
             syncFolderDepthBackdropIfNeeded()
         }
 
@@ -4241,7 +4290,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         style: GridDrawStyle = GridDrawStyle()
     ) -> Float {
         guard !items.isEmpty, alphaScale > 0.001 else { return 0 }
-        let isOpenedFolder = store.openedFolderID != nil && style.hiddenIDs.isEmpty
+        let isOpenedFolder = displayedFolderID != nil && store.openedFolderID != nil && pendingFolderOpen == nil && style.hiddenIDs.isEmpty
         let activeCardMetrics: FolderCardMetrics? = if isOpenedFolder {
             FolderCardMetrics(boundsSize: bounds.size, safeInsets: store.safeInsets, itemCount: items.count)
         } else {

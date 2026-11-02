@@ -26,17 +26,36 @@ private final class BackdropBlurWorker: @unchecked Sendable {
         }
     }
 
-    func prewarmKernels(device: MTLDevice, scale: CGFloat) {
+    func prewarmKernels(device: MTLDevice, commandQueue: MTLCommandQueue? = nil, scale: CGFloat) {
         queue.async {
             let blurRadius: Float = 16.0
+            let desc = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .bgra8Unorm,
+                width: 16,
+                height: 16,
+                mipmapped: false
+            )
+            desc.usage = [.shaderRead, .shaderWrite]
+            let dummySrc = device.makeTexture(descriptor: desc)
+            let dummyDst = device.makeTexture(descriptor: desc)
+            let cb = commandQueue?.makeCommandBuffer()
+
             for step in 1...10 {
                 let p = Float(step) / 10.0
                 let sigma = blurRadius * Float(scale) * p
                 let key = Int((sigma * 10).rounded())
-                if self.blurKernels[key] == nil {
-                    self.blurKernels[key] = MPSImageGaussianBlur(device: device, sigma: sigma)
+                let blur: MPSImageGaussianBlur
+                if let cached = self.blurKernels[key] {
+                    blur = cached
+                } else {
+                    blur = MPSImageGaussianBlur(device: device, sigma: sigma)
+                    self.blurKernels[key] = blur
+                }
+                if let dummySrc, let dummyDst, let cb {
+                    blur.encode(commandBuffer: cb, sourceTexture: dummySrc, destinationTexture: dummyDst)
                 }
             }
+            cb?.commit()
         }
     }
 
@@ -266,7 +285,7 @@ final class FolderDepthBackdropView: NSView {
         _ = ensureTexture(device: device, pixelWidth: pixelWidth, pixelHeight: pixelHeight)
         metalLayer.device = device
         metalLayer.drawableSize = CGSize(width: pixelWidth, height: pixelHeight)
-        worker.prewarmKernels(device: device, scale: scale)
+        worker.prewarmKernels(device: device, commandQueue: commandQueue, scale: scale)
     }
 
     /// Bakes the sharp root grid once into the offscreen texture.
