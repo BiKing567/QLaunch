@@ -407,6 +407,7 @@ private final class FolderGlassPlateItemView: NSView {
 /// 2. Dragging/reordering is 100% artifact-free with zero ghosting.
 @MainActor
 final class FolderGlassHostView: NSView {
+    var reusableSinglePlateID: String? = nil
     private let hostView = FlippedContainerView()
     private var itemsByID: [String: FolderGlassPlateItemView] = [:]
     private var currentRawSinkTransform: CATransform3D?
@@ -449,6 +450,15 @@ final class FolderGlassHostView: NSView {
         CATransaction.commit()
     }
 
+    func prewarmPlate(id: String) {
+        if itemsByID[id] == nil {
+            let item = FolderGlassPlateItemView(frame: .zero)
+            item.isHidden = true
+            hostView.addSubview(item)
+            itemsByID[id] = item
+        }
+    }
+
     func update(plates: [FolderPlateModel], removeUnused: Bool = true) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -458,14 +468,15 @@ final class FolderGlassHostView: NSView {
             guard plate.rect.width >= 1, plate.rect.height >= 1, plate.alpha > 0.005 else {
                 continue
             }
-            activeIDs.insert(plate.id)
+            let plateID = reusableSinglePlateID ?? plate.id
+            activeIDs.insert(plateID)
             let item: FolderGlassPlateItemView
-            if let existing = itemsByID[plate.id] {
+            if let existing = itemsByID[plateID] {
                 item = existing
             } else {
                 item = FolderGlassPlateItemView(frame: plate.rect)
                 hostView.addSubview(item)
-                itemsByID[plate.id] = item
+                itemsByID[plateID] = item
             }
 
             // If an item is being actively dragged, bring it to the front so it floats above stationary folders

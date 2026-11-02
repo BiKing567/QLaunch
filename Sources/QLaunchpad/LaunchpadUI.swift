@@ -386,6 +386,8 @@ final class LaunchpadContainerView: NSView {
         fullScreenDimView.isHidden = true
         backgroundFolderHostView = FolderGlassHostView()
         foregroundFolderHostView = FolderGlassHostView()
+        foregroundFolderHostView.reusableSinglePlateID = "opened-folder"
+        foregroundFolderHostView.prewarmPlate(id: "opened-folder")
         dragFolderHostView = FolderGlassHostView()
         metalView = LaunchpadMetalView(store: store)
         overlayView = PassthroughHostingView(rootView: LaunchpadOverlayView(store: store))
@@ -404,9 +406,9 @@ final class LaunchpadContainerView: NSView {
         addSubview(folderTitleView)
         metalView.onUpdateFolderPlates = { [weak self] plates, backdropAlpha in
             guard let self else { return }
-            let fgPlates = plates.filter { $0.id.hasPrefix("opened-folder-") }
-            let dragPlates = plates.filter { !$0.id.hasPrefix("opened-folder-") && $0.isIsolated }
-            let bgPlates = plates.filter { !$0.id.hasPrefix("opened-folder-") && !$0.isIsolated }
+            let fgPlates = plates.filter { $0.id.hasPrefix("opened-folder") }
+            let dragPlates = plates.filter { !$0.id.hasPrefix("opened-folder") && $0.isIsolated }
+            let bgPlates = plates.filter { !$0.id.hasPrefix("opened-folder") && !$0.isIsolated }
             let retainsDepthPlates = IconRenderQuality.current == .quality
                 && self.backdropView.isReady && !self.backdropView.isHidden
                 && (self.store.openedFolderID != nil || self.metalView.isFolderTransitionActive)
@@ -485,6 +487,7 @@ final class LaunchpadContainerView: NSView {
             self.backdropView.dismiss()
             self.backgroundFolderHostView.resetSinkTransform()
             self.backgroundFolderHostView.setAllPlatesHidden(false)
+            self.foregroundFolderHostView.setAllPlatesHidden(true)
         }
         metalView.onFolderTransitionEnd = { [weak self] generation in
             guard let self else { return }
@@ -494,7 +497,7 @@ final class LaunchpadContainerView: NSView {
                 self.backdropView.dismiss()
                 self.backgroundFolderHostView.resetSinkTransform()
                 self.backgroundFolderHostView.setAllPlatesHidden(false)
-                self.foregroundFolderHostView.removeAllPlates()
+                self.foregroundFolderHostView.setAllPlatesHidden(true)
                 self.dragFolderHostView.removeAllPlates()
             }
         }
@@ -579,7 +582,7 @@ final class LaunchpadContainerView: NSView {
             if !showing {
                 backgroundView.alphaValue = 0
                 backgroundFolderHostView.removeAllPlates()
-                foregroundFolderHostView.removeAllPlates()
+                foregroundFolderHostView.setAllPlatesHidden(true)
                 dragFolderHostView.removeAllPlates()
                 backgroundFolderHostView.resetSinkTransform()
                 backdropView.dismiss()
@@ -609,7 +612,7 @@ final class LaunchpadContainerView: NSView {
                 backdropView.animator().alphaValue = 0
                 backgroundFolderHostView.animator().alphaValue = 0
             }
-            foregroundFolderHostView.removeAllPlates()
+            foregroundFolderHostView.setAllPlatesHidden(true)
             dragFolderHostView.removeAllPlates()
             fullScreenDimView.alphaValue = 0
             fullScreenDimView.isHidden = true
@@ -622,6 +625,7 @@ final class LaunchpadContainerView: NSView {
         backgroundFolderHostView.clearCache()
         foregroundFolderHostView.removeAllPlates()
         foregroundFolderHostView.clearCache()
+        foregroundFolderHostView.prewarmPlate(id: "opened-folder")
         dragFolderHostView.removeAllPlates()
         dragFolderHostView.clearCache()
         backgroundFolderHostView.resetSinkTransform()
@@ -634,6 +638,7 @@ final class LaunchpadContainerView: NSView {
         backgroundFolderHostView.clearCache()
         foregroundFolderHostView.removeAllPlates()
         foregroundFolderHostView.clearCache()
+        foregroundFolderHostView.prewarmPlate(id: "opened-folder")
         dragFolderHostView.removeAllPlates()
         dragFolderHostView.clearCache()
         backgroundFolderHostView.resetSinkTransform()
@@ -794,7 +799,7 @@ final class LaunchpadContainerView: NSView {
         backgroundFolderHostView.layer?.removeAllAnimations()
         backgroundFolderHostView.alphaValue = 1
         backgroundFolderHostView.removeAllPlates()
-        foregroundFolderHostView.removeAllPlates()
+        foregroundFolderHostView.setAllPlatesHidden(true)
         dragFolderHostView.removeAllPlates()
         backgroundFolderHostView.resetSinkTransform()
         setPresentationScale(1)
