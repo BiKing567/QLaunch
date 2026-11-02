@@ -474,6 +474,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         var targetProgress: CGFloat
         var progress: CGFloat
         var hasDrawnSettledFrame: Bool = false
+        var destinationLayout: (centers: [CGPoint], iconSize: CGFloat, cardMetrics: FolderCardMetrics)? = nil
     }
 
     private struct FolderSourceSnapshot {
@@ -3032,10 +3033,26 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         )
     }
 
+    private struct CachedFolderDestinationLayout {
+        var boundsSize: CGSize
+        var safeInsets: LaunchpadSafeInsets
+        var itemCount: Int
+        var pageOffset: Double
+        var layout: (centers: [CGPoint], iconSize: CGFloat, cardMetrics: FolderCardMetrics)
+    }
+    private var cachedFolderDestinationLayout: CachedFolderDestinationLayout?
+
     private func folderOpenDestinationLayout(
         itemCount: Int,
         pageOffset: Double = 0
     ) -> (centers: [CGPoint], iconSize: CGFloat, cardMetrics: FolderCardMetrics) {
+        if let cached = cachedFolderDestinationLayout,
+           cached.boundsSize == bounds.size,
+           cached.safeInsets == store.safeInsets,
+           cached.itemCount == itemCount,
+           cached.pageOffset == pageOffset {
+            return cached.layout
+        }
         let cardMetrics = FolderCardMetrics(
             boundsSize: bounds.size,
             safeInsets: store.safeInsets,
@@ -3044,7 +3061,15 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let centers = (0..<itemCount).map {
             cardMetrics.iconCenter(globalIndex: Double($0), pageOffset: pageOffset)
         }
-        return (centers, cardMetrics.iconSize, cardMetrics)
+        let layout = (centers, cardMetrics.iconSize, cardMetrics)
+        cachedFolderDestinationLayout = CachedFolderDestinationLayout(
+            boundsSize: bounds.size,
+            safeInsets: store.safeInsets,
+            itemCount: itemCount,
+            pageOffset: pageOffset,
+            layout: layout
+        )
+        return layout
     }
 
     private func buildFolderTransition(
@@ -3107,10 +3132,17 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             )
         }
 
-        let destination = folderOpenDestinationLayout(
-            itemCount: transition.folderItems.count,
-            pageOffset: transition.folderPageOffset
-        )
+        let destination: (centers: [CGPoint], iconSize: CGFloat, cardMetrics: FolderCardMetrics)
+        if let cached = transition.destinationLayout {
+            destination = cached
+        } else {
+            let layout = folderOpenDestinationLayout(
+                itemCount: transition.folderItems.count,
+                pageOffset: transition.folderPageOffset
+            )
+            folderTransition?.destinationLayout = layout
+            destination = layout
+        }
         let cardMetrics = destination.cardMetrics
         let padSize = transition.sourceSize * 0.8125
         let sourcePadRect = CGRect(
@@ -3238,13 +3270,27 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             for index in pageStartIndex..<pageEndIndex {
                 let item = transition.folderItems[index]
                 guard case .app(let app) = item else { continue }
+                let isPreviewIcon = (activePage == 0 && index < FolderPreviewLayout.capacity)
+
+                // Tail-end culling: non-preview icons fade out quickly when collapsing
+                // and should not draw once clustered near the collapsed center.
+                let iconAlpha: CGFloat
+                if isPreviewIcon {
+                    iconAlpha = 1.0
+                } else {
+                    let fadeThreshold: CGFloat = 0.20
+                    if local <= fadeThreshold {
+                        continue
+                    }
+                    iconAlpha = min(1.0, (local - fadeThreshold) / (1.0 - fadeThreshold))
+                }
+
                 let destCenter = destination.centers.indices.contains(index)
                     ? destination.centers[index]
                     : CGPoint(x: midX, y: midY)
                 let fromCenter: CGPoint
                 let fromSize: CGFloat
-                let fromAlpha: Float
-                if activePage == 0 && index < FolderPreviewLayout.capacity {
+                if isPreviewIcon {
                     fromCenter = FolderPreviewLayout.miniCenter(
                         index: index,
                         folderCenter: transition.sourceCenter,
@@ -3252,18 +3298,15 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                         yIncreasesDown: true
                     )
                     fromSize = miniSize
-                    fromAlpha = 1
                 } else {
                     fromCenter = transition.sourceCenter
                     fromSize = destination.iconSize * 0.18
-                    fromAlpha = 0
                 }
                 let center = folderMix(fromCenter, destCenter, local)
                 let size = folderMix(fromSize, destination.iconSize, local)
-                let iconAlpha = folderMix(CGFloat(fromAlpha), 1, local)
                 let texture = iconTextures.cachedTexture(for: app)
                 let drawnAlpha = alphaScale * Float(iconAlpha)
-                if let texture, drawnAlpha > 0.002 {
+                if let texture, drawnAlpha > 0.01 {
                     iconDrawTextures.append(texture)
                     iconSprites.append(
                         .icon(
@@ -5214,10 +5257,15 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         // 1. In-flight folder transition (opening or closing)
         if let transition = folderTransition {
             let local = min(max(transition.progress, 0), 1)
-            let destination = folderOpenDestinationLayout(
-                itemCount: transition.folderItems.count,
-                pageOffset: transition.folderPageOffset
-            )
+            let destination: (centers: [CGPoint], iconSize: CGFloat, cardMetrics: FolderCardMetrics)
+            if let cached = transition.destinationLayout {
+                destination = cached
+            } else {
+                destination = folderOpenDestinationLayout(
+                    itemCount: transition.folderItems.count,
+                    pageOffset: transition.folderPageOffset
+                )
+            }
 
             let miniSize = FolderPreviewLayout.miniSize(in: transition.sourceSize)
             var bestFolderItem: (item: LaunchpadItem, distance: CGFloat)?
@@ -5229,6 +5277,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
             if pageStartIndex < pageEndIndex {
                 for index in pageStartIndex..<pageEndIndex {
+                    let isPreviewIcon = (activePage == 0 && index < FolderPreviewLayout.capacity)
+                    if !isPreviewIcon, local <= 0.20 {
+                        continue
+                    }
                     let item = transition.folderItems[index]
                     let destCenter = destination.centers.indices.contains(index)
                         ? destination.centers[index]
