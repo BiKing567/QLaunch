@@ -420,6 +420,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     var onFolderTransitionEnd: ((UInt64) -> Void)?
     var onFolderDepthBackdropDismiss: (() -> Void)?
     var isDepthBackdropActive: (() -> Bool)?
+    var isDepthBackdropBaking: (() -> Bool)?
     private(set) var folderTransitionGeneration: UInt64 = 0
     private var pendingFolderTransitionGeneration: UInt64 = 0
     private var pendingFolderTransitionEnd = false
@@ -2854,7 +2855,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
               IconRenderQuality.current == .quality,
               let folderID = store.openedFolderID,
               !store.isSearching,
-              folderTransition == nil else {
+              folderTransition == nil,
+              isDepthBackdropBaking?() != true else {
             return
         }
         let rootItems = store.displayItems
@@ -3360,7 +3362,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         noteDisplayChangeIfNeeded()
         synchronizeCanvasStateIfNeeded(itemCount: displayedItems.count)
 
-        if store.openedFolderID != nil, !store.isSearching, folderTransition == nil, IconRenderQuality.current == .quality, isDepthBackdropActive?() != true {
+        if store.openedFolderID != nil, !store.isSearching, folderTransition == nil, IconRenderQuality.current == .quality, isDepthBackdropActive?() != true, isDepthBackdropBaking?() != true {
             syncFolderDepthBackdropIfNeeded()
         }
 

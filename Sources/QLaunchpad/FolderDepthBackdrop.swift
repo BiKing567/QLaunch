@@ -33,12 +33,17 @@ private final class BackdropBlurWorker: @unchecked Sendable {
         rawTex: MTLTexture,
         metalLayer: CAMetalLayer,
         device: MTLDevice,
-        commandQueue: MTLCommandQueue
+        commandQueue: MTLCommandQueue,
+        onSubmission: (@Sendable (UInt64, Bool) -> Void)? = nil
     ) {
         queue.async {
-            guard generation == self.activeGeneration else { return }
+            guard generation == self.activeGeneration else {
+                onSubmission?(generation, false)
+                return
+            }
             if self.isBlurInFlight {
                 self.pendingProgress = progress
+                onSubmission?(generation, false)
                 return
             }
             self.isBlurInFlight = true
@@ -49,7 +54,8 @@ private final class BackdropBlurWorker: @unchecked Sendable {
                 rawTex: rawTex,
                 metalLayer: metalLayer,
                 device: device,
-                commandQueue: commandQueue
+                commandQueue: commandQueue,
+                onSubmission: onSubmission
             )
         }
     }
@@ -61,14 +67,19 @@ private final class BackdropBlurWorker: @unchecked Sendable {
         rawTex: MTLTexture,
         metalLayer: CAMetalLayer,
         device: MTLDevice,
-        commandQueue: MTLCommandQueue
+        commandQueue: MTLCommandQueue,
+        onSubmission: (@Sendable (UInt64, Bool) -> Void)? = nil
     ) {
-        guard generation == self.activeGeneration else { return }
+        guard generation == self.activeGeneration else {
+            onSubmission?(generation, false)
+            return
+        }
 
         guard let drawable = metalLayer.nextDrawable(),
               let commandBuffer = commandQueue.makeCommandBuffer() else {
             isBlurInFlight = false
             pendingProgress = nil
+            onSubmission?(generation, false)
             return
         }
 
@@ -124,6 +135,7 @@ private final class BackdropBlurWorker: @unchecked Sendable {
             }
         }
         commandBuffer.commit()
+        onSubmission?(generation, true)
     }
 }
 
@@ -147,7 +159,10 @@ final class FolderDepthBackdropView: NSView {
     private var cachedPixelSize: CGSize = .zero
     private var currentScale: CGFloat = 2.0
 
+    var onReadyChange: (@MainActor (Bool) -> Void)?
     private(set) var isReady = false
+    private(set) var isBaking = false
+    private(set) var bakeFailed = false
 
     private let worker = BackdropBlurWorker()
     private var generation: UInt64 = 0
@@ -250,10 +265,22 @@ final class FolderDepthBackdropView: NSView {
             pixelWidth: pixelWidth,
             pixelHeight: pixelHeight
         ) else {
+            isReady = false
+            isHidden = true
+            isBaking = false
+            bakeFailed = true
+            onReadyChange?(false)
             return
         }
 
-        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+            isReady = false
+            isHidden = true
+            isBaking = false
+            bakeFailed = true
+            onReadyChange?(false)
+            return
+        }
 
         // Render the root grid (excluding the opening folder) into rawTex
         renderPass(commandBuffer, rawTex)
@@ -272,8 +299,10 @@ final class FolderDepthBackdropView: NSView {
         metalLayer.position = CGPoint(x: targetBounds.midX, y: targetBounds.midY)
         CATransaction.commit()
 
-        isReady = true
-        isHidden = false
+        isReady = false
+        isHidden = true
+        isBaking = true
+        bakeFailed = false
 
         worker.schedule(
             progress: 0.0,
@@ -282,7 +311,25 @@ final class FolderDepthBackdropView: NSView {
             rawTex: rawTex,
             metalLayer: metalLayer,
             device: device,
-            commandQueue: commandQueue
+            commandQueue: commandQueue,
+            onSubmission: { [weak self] gen, success in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    guard gen == self.generation else { return }
+                    self.isBaking = false
+                    if success {
+                        self.isReady = true
+                        self.isHidden = false
+                        self.bakeFailed = false
+                        self.onReadyChange?(true)
+                    } else {
+                        self.isReady = false
+                        self.isHidden = true
+                        self.bakeFailed = true
+                        self.onReadyChange?(false)
+                    }
+                }
+            }
         )
     }
 
@@ -301,7 +348,7 @@ final class FolderDepthBackdropView: NSView {
 
     /// Updates the depth backdrop animation progress (0 = fully closed/resting root, 1 = fully open folder).
     func updateProgress(_ progress: CGFloat) {
-        guard !isHidden else { return }
+        guard isReady || isBaking else { return }
 
         let local = min(max(progress, 0), 1)
 
@@ -333,9 +380,12 @@ final class FolderDepthBackdropView: NSView {
         CATransaction.setDisableActions(true)
         isHidden = true
         isReady = false
+        isBaking = false
+        bakeFailed = false
         containerLayer.transform = CATransform3DIdentity
         containerLayer.opacity = 1.0
         CATransaction.commit()
+        onReadyChange?(false)
     }
 
     /// Releases cached textures on memory pressure or when quality changes.
@@ -346,5 +396,8 @@ final class FolderDepthBackdropView: NSView {
         cachedPixelSize = .zero
         rawTexture = nil
         isReady = false
+        isBaking = false
+        bakeFailed = false
+        onReadyChange?(false)
     }
 }

@@ -469,6 +469,13 @@ final class LaunchpadContainerView: NSView {
             guard let self else { return false }
             return self.backdropView.isReady && !self.backdropView.isHidden
         }
+        metalView.isDepthBackdropBaking = { [weak self] in
+            guard let self else { return false }
+            return self.backdropView.isBaking || self.backdropView.bakeFailed
+        }
+        backdropView.onReadyChange = { [weak self] _ in
+            self?.metalView.needsDisplay = true
+        }
         metalView.onFolderDepthBackdropDismiss = { [weak self] in
             guard let self else { return }
             self.backdropView.dismiss()
