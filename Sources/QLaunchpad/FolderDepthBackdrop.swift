@@ -26,6 +26,20 @@ private final class BackdropBlurWorker: @unchecked Sendable {
         }
     }
 
+    func prewarmKernels(device: MTLDevice, scale: CGFloat) {
+        queue.async {
+            let blurRadius: Float = 16.0
+            for step in 1...10 {
+                let p = Float(step) / 10.0
+                let sigma = blurRadius * Float(scale) * p
+                let key = Int((sigma * 10).rounded())
+                if self.blurKernels[key] == nil {
+                    self.blurKernels[key] = MPSImageGaussianBlur(device: device, sigma: sigma)
+                }
+            }
+        }
+    }
+
     func schedule(
         progress: Float,
         generation: UInt64,
@@ -115,6 +129,7 @@ private final class BackdropBlurWorker: @unchecked Sendable {
 
         commandBuffer.present(drawable)
         commandBuffer.addCompletedHandler { [weak self] _ in
+            onSubmission?(generation, true)
             guard let self else { return }
             self.queue.async {
                 guard generation == self.activeGeneration else { return }
@@ -135,7 +150,6 @@ private final class BackdropBlurWorker: @unchecked Sendable {
             }
         }
         commandBuffer.commit()
-        onSubmission?(generation, true)
     }
 }
 
@@ -240,6 +254,19 @@ final class FolderDepthBackdropView: NSView {
 
         rawTexture = tex
         return tex
+    }
+
+    /// Pre-allocates textures and prewarms Gaussian blur shaders ahead of time.
+    func prewarm(device: MTLDevice, commandQueue: MTLCommandQueue, boundsSize: CGSize, scale: CGFloat) {
+        self.device = device
+        self.commandQueue = commandQueue
+        self.currentScale = scale
+        let pixelWidth = max(1, Int((boundsSize.width * scale).rounded()))
+        let pixelHeight = max(1, Int((boundsSize.height * scale).rounded()))
+        _ = ensureTexture(device: device, pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+        metalLayer.device = device
+        metalLayer.drawableSize = CGSize(width: pixelWidth, height: pixelHeight)
+        worker.prewarmKernels(device: device, scale: scale)
     }
 
     /// Bakes the sharp root grid once into the offscreen texture.

@@ -471,7 +471,11 @@ final class LaunchpadContainerView: NSView {
         }
         metalView.isDepthBackdropBaking = { [weak self] in
             guard let self else { return false }
-            return self.backdropView.isBaking || self.backdropView.bakeFailed
+            return self.backdropView.isBaking
+        }
+        metalView.isDepthBackdropFailed = { [weak self] in
+            guard let self else { return false }
+            return self.backdropView.bakeFailed
         }
         backdropView.onReadyChange = { [weak self] _ in
             self?.metalView.needsDisplay = true
@@ -674,6 +678,11 @@ final class LaunchpadContainerView: NSView {
         dragFolderHostView.frame = bounds
         overlayView.frame = bounds
         folderTitleView.frame = bounds
+
+        if let dev = metalView.device, bounds.width > 0, bounds.height > 0 {
+            let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+            backdropView.prewarm(device: dev, commandQueue: metalView.commandQueue, boundsSize: bounds.size, scale: scale)
+        }
     }
 
     override var acceptsFirstResponder: Bool { true }

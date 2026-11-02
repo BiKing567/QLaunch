@@ -421,6 +421,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     var onFolderDepthBackdropDismiss: (() -> Void)?
     var isDepthBackdropActive: (() -> Bool)?
     var isDepthBackdropBaking: (() -> Bool)?
+    var isDepthBackdropFailed: (() -> Bool)?
     private(set) var folderTransitionGeneration: UInt64 = 0
     private var pendingFolderTransitionGeneration: UInt64 = 0
     private var pendingFolderTransitionEnd = false
@@ -2793,6 +2794,22 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
     private func tickFolderTransition(now: CFTimeInterval) {
         guard var transition = folderTransition else { return }
+
+        // Lock-step: when opening with quality depth backdrop, hold progress at 0.0
+        // until the backdrop's first frame is genuinely ready and presented.
+        // This ensures the animation starts strictly from progress 0 with the backdrop
+        // active, eliminating mid-flight handoff jumps between fallback and backdrop.
+        if transition.direction == .opening,
+           IconRenderQuality.current == .quality,
+           isDepthBackdropActive?() != true,
+           isDepthBackdropBaking?() == true {
+            transition.startTime = 0
+            transition.progress = 0
+            folderTransition = transition
+            startDisplayLink()
+            return
+        }
+
         if transition.startTime <= 0 {
             transition.startTime = now
         }
@@ -2857,7 +2874,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
               let folderID = store.openedFolderID,
               !store.isSearching,
               folderTransition == nil,
-              isDepthBackdropBaking?() != true else {
+              isDepthBackdropBaking?() != true,
+              isDepthBackdropFailed?() != true else {
             return
         }
         let rootItems = store.displayItems
@@ -3405,7 +3423,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         noteDisplayChangeIfNeeded()
         synchronizeCanvasStateIfNeeded(itemCount: displayedItems.count)
 
-        if store.openedFolderID != nil, !store.isSearching, folderTransition == nil, IconRenderQuality.current == .quality, isDepthBackdropActive?() != true, isDepthBackdropBaking?() != true {
+        if store.openedFolderID != nil, !store.isSearching, folderTransition == nil, IconRenderQuality.current == .quality, isDepthBackdropActive?() != true, isDepthBackdropBaking?() != true, isDepthBackdropFailed?() != true {
             syncFolderDepthBackdropIfNeeded()
         }
 
