@@ -456,8 +456,6 @@ final class LaunchpadContainerView: NSView {
                 if !bgPlates.isEmpty {
                     self.backgroundFolderHostView.update(plates: bgPlates, removeUnused: true)
                     self.backgroundFolderHostView.setPlateHidden(true, for: folderID)
-                    let sink = FolderDepthBackdropView.sinkTransform(progress: 1.0)
-                    self.backgroundFolderHostView.applySinkTransform(sink.transform, progress: 1.0)
                 }
             }
         }
