@@ -413,8 +413,6 @@ final class LaunchpadContainerView: NSView {
             let retainsDepthPlates = IconRenderQuality.current == .quality
                 && self.backdropView.isReady && !self.backdropView.isHidden
                 && (self.store.openedFolderID != nil || self.metalView.isFolderTransitionActive)
-            let isEnteredFolder = self.store.openedFolderID != nil || self.metalView.isFolderTransitionActive
-            self.backgroundFolderHostView.setMaterialStyle(isEnteredFolder ? .regular : .glass)
             let shouldRemoveUnused = !retainsDepthPlates
             if !bgPlates.isEmpty || shouldRemoveUnused {
                 self.backgroundFolderHostView.update(plates: bgPlates, removeUnused: shouldRemoveUnused)
@@ -469,9 +467,6 @@ final class LaunchpadContainerView: NSView {
         }
         metalView.onFolderTransitionProgress = { [weak self] progress in
             guard let self else { return }
-            if self.store.openedFolderID != nil || self.metalView.isFolderTransitionActive {
-                self.backgroundFolderHostView.setMaterialStyle(.regular)
-            }
             self.backdropView.updateProgress(progress)
             let sink = FolderDepthBackdropView.sinkTransform(progress: progress)
             self.backgroundFolderHostView.applySinkTransform(sink.transform, progress: progress)
@@ -491,7 +486,6 @@ final class LaunchpadContainerView: NSView {
         backdropView.onReadyChange = { [weak self] isReady in
             guard let self else { return }
             if isReady {
-                self.backgroundFolderHostView.setMaterialStyle(.regular)
                 if let pending = self.pendingBackdropPlates {
                     self.backgroundFolderHostView.update(plates: pending.plates, removeUnused: true)
                     self.backgroundFolderHostView.setPlateHidden(true, for: pending.folderID)
@@ -508,7 +502,6 @@ final class LaunchpadContainerView: NSView {
             self.backdropView.dismiss()
             self.backgroundFolderHostView.resetSinkTransform()
             self.backgroundFolderHostView.setAllPlatesHidden(false)
-            self.backgroundFolderHostView.setMaterialStyle(.glass)
             self.foregroundFolderHostView.setAllPlatesHidden(true)
         }
         metalView.onFolderTransitionEnd = { [weak self] generation in
@@ -520,7 +513,6 @@ final class LaunchpadContainerView: NSView {
                 self.backdropView.dismiss()
                 self.backgroundFolderHostView.resetSinkTransform()
                 self.backgroundFolderHostView.setAllPlatesHidden(false)
-                self.backgroundFolderHostView.setMaterialStyle(.glass)
                 self.foregroundFolderHostView.setAllPlatesHidden(true)
                 self.dragFolderHostView.removeAllPlates()
             }
