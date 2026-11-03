@@ -143,6 +143,7 @@ private final class FolderGlassPlateItemView: NSView {
     private var glassEffectView: NSView?
     private var visualEffectView: NSVisualEffectView?
     private var currentMaterialStyle: FolderPlateMaterialStyle = .glass
+    private let sunkContainerView = FlippedContainerView()
     private let contentView = FlippedContainerView()
     private var previewLayers: [CALayer] = []
     private var currentDisplayMemberIDs: [String] = []
@@ -158,7 +159,7 @@ private final class FolderGlassPlateItemView: NSView {
     private var lastIncomingDropAppID: String? = nil
     private var lastBlurRadius: CGFloat = -1
     private var lastTransitionProgress: CGFloat = -1
-    private static let handoffProgressThreshold: CGFloat = 0.18
+    private static let handoffProgressThreshold: CGFloat = 0.70
 
     private static let filterName = "plateBlur"
     private var blurFilter: CIFilter?
@@ -186,11 +187,11 @@ private final class FolderGlassPlateItemView: NSView {
         wantsLayer = true
         layer?.masksToBounds = false
 
-        contentView.frame = bounds
-        contentView.wantsLayer = true
-        contentView.layer?.masksToBounds = false
-        contentView.autoresizingMask = [.width, .height]
-        addSubview(contentView)
+        sunkContainerView.frame = bounds
+        sunkContainerView.wantsLayer = true
+        sunkContainerView.layer?.masksToBounds = false
+        sunkContainerView.autoresizingMask = [.width, .height]
+        addSubview(sunkContainerView)
 
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView(frame: bounds)
@@ -200,7 +201,7 @@ private final class FolderGlassPlateItemView: NSView {
             }
             glass.autoresizingMask = [.width, .height]
             glass.isHidden = (materialStyle == .regular)
-            addSubview(glass, positioned: .below, relativeTo: contentView)
+            addSubview(glass, positioned: .below, relativeTo: sunkContainerView)
             glassEffectView = glass
         }
 
@@ -212,9 +213,15 @@ private final class FolderGlassPlateItemView: NSView {
         visual.layer?.cornerCurve = .continuous
         visual.layer?.masksToBounds = true
         visual.isHidden = (materialStyle == .glass && glassEffectView != nil)
-        addSubview(visual, positioned: .below, relativeTo: contentView)
+        sunkContainerView.addSubview(visual)
         visualEffectView = visual
         updateFallbackAppearance()
+
+        contentView.frame = bounds
+        contentView.wantsLayer = true
+        contentView.layer?.masksToBounds = false
+        contentView.autoresizingMask = [.width, .height]
+        sunkContainerView.addSubview(contentView, positioned: .above, relativeTo: visual)
 
         // Pre-create 9 reusable CALayers for the 3×3 grid
         for _ in 0..<FolderPreviewLayout.capacity {
@@ -261,6 +268,7 @@ private final class FolderGlassPlateItemView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         glassEffectView?.frame = bounds
+        sunkContainerView.frame = bounds
         visualEffectView?.frame = bounds
         contentView.frame = bounds
         lastBoundsSize = bounds.size
@@ -301,6 +309,7 @@ private final class FolderGlassPlateItemView: NSView {
         let currentBounds = bounds
         if currentBounds.size != lastBoundsSize {
             glassEffectView?.frame = currentBounds
+            sunkContainerView.frame = currentBounds
             visualEffectView?.frame = currentBounds
             contentView.frame = currentBounds
             lastBoundsSize = currentBounds.size
@@ -450,16 +459,11 @@ private final class FolderGlassPlateItemView: NSView {
             }
         }
 
-        // 2. Performance boundary:
-        // Native glass MUST NEVER bear Gaussian blur.
-        // Gaussian blur only ramps up for local > handoffThreshold where glass is 100% hidden.
-        let blurRadius: CGFloat
-        if local > Self.handoffProgressThreshold {
-            let blurProgress = (local - Self.handoffProgressThreshold) / (1.0 - Self.handoffProgressThreshold)
-            blurRadius = 16.0 * min(max(blurProgress, 0), 1)
-        } else {
-            blurRadius = 0.0
-        }
+        // 2. Performance boundary & Continuous Blur:
+        // Native glass is an isolated sibling of sunkContainerView and never bears any CIFilter.
+        // sunkContainerView (containing visualEffectView and preview thumbnails) blurs smoothly
+        // matching the background depth backdrop.
+        let blurRadius = 16.0 * local
         applyBlurRadius(blurRadius)
 
         CATransaction.commit()
@@ -471,22 +475,23 @@ private final class FolderGlassPlateItemView: NSView {
         }
         lastBlurRadius = blurRadius
 
+        let targetLayer = sunkContainerView.layer
         if blurRadius > 0.05 {
-            if layer?.filters == nil || layer?.filters?.isEmpty == true {
+            if targetLayer?.filters == nil || targetLayer?.filters?.isEmpty == true {
                 let filter = blurFilter ?? CIFilter(name: "CIGaussianBlur")
                 blurFilter = filter
                 filter?.name = Self.filterName
                 filter?.setValue(blurRadius, forKey: kCIInputRadiusKey)
                 if let filter {
-                    layer?.filters = [filter]
+                    targetLayer?.filters = [filter]
                 }
             } else {
-                layer?.setValue(blurRadius, forKeyPath: "filters.\(Self.filterName).inputRadius")
+                targetLayer?.setValue(blurRadius, forKeyPath: "filters.\(Self.filterName).inputRadius")
             }
         } else {
-            if layer?.filters != nil {
-                layer?.setValue(0.0, forKeyPath: "filters.\(Self.filterName).inputRadius")
-                layer?.filters = nil
+            if targetLayer?.filters != nil {
+                targetLayer?.setValue(0.0, forKeyPath: "filters.\(Self.filterName).inputRadius")
+                targetLayer?.filters = nil
             }
         }
     }
