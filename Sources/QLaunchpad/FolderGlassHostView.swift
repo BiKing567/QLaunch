@@ -159,7 +159,7 @@ private final class FolderGlassPlateItemView: NSView {
     private var lastIncomingDropAppID: String? = nil
     private var lastBlurRadius: CGFloat = -1
     private var lastTransitionProgress: CGFloat = -1
-    private static let handoffProgressThreshold: CGFloat = 0.70
+    private var lastMaterialProgress: CGFloat = -1
 
     private static let filterName = "plateBlur"
     private var blurFilter: CIFilter?
@@ -176,6 +176,7 @@ private final class FolderGlassPlateItemView: NSView {
         lastIncomingDropAppID = nil
         lastBlurRadius = -1
         lastTransitionProgress = -1
+        lastMaterialProgress = -1
     }
 
     override var isFlipped: Bool { true }
@@ -253,7 +254,10 @@ private final class FolderGlassPlateItemView: NSView {
         CATransaction.setDisableActions(true)
         switch style {
         case .glass:
-            updateTransitionProgress(lastTransitionProgress >= 0 ? lastTransitionProgress : 0)
+            updateTransitionProgress(
+                progress: lastTransitionProgress >= 0 ? lastTransitionProgress : 0,
+                materialProgress: lastMaterialProgress >= 0 ? lastMaterialProgress : 0
+            )
         case .regular:
             glassEffectView?.alphaValue = 0.0
             glassEffectView?.isHidden = true
@@ -286,11 +290,11 @@ private final class FolderGlassPlateItemView: NSView {
             let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             visual.material = .fullScreenUI
             if isDark {
-                visual.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.06).cgColor
-                visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.20).cgColor
+                visual.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.05).cgColor
+                visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.18).cgColor
             } else {
-                visual.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.32).cgColor
-                visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.50).cgColor
+                visual.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.18).cgColor
+                visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.35).cgColor
             }
             visual.layer?.borderWidth = 0.5
         }
@@ -411,20 +415,22 @@ private final class FolderGlassPlateItemView: NSView {
         }
     }
 
-    /// Updates material cross-fade and Gaussian blur based on folder transition progress (0 = resting desktop, 1 = fully open).
-    func updateTransitionProgress(_ progress: CGFloat) {
-        let local = min(max(progress, 0), 1)
-        if abs(local - lastTransitionProgress) < 0.001 {
+    /// Updates material cross-fade (driven by materialProgress in [0, 1]) and Gaussian blur (driven by progress in [0, 1]).
+    func updateTransitionProgress(progress: CGFloat, materialProgress: CGFloat) {
+        let localProgress = min(max(progress, 0), 1)
+        let localMaterial = min(max(materialProgress, 0), 1)
+        if abs(localProgress - lastTransitionProgress) < 0.001 && abs(localMaterial - lastMaterialProgress) < 0.001 {
             return
         }
-        lastTransitionProgress = local
+        lastTransitionProgress = localProgress
+        lastMaterialProgress = localMaterial
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        // 1. Cross-fade baseplates in the handoff segment [0, handoffThreshold].
-        // Thumbnails in contentView remain single copy untouched.
-        if local <= 0.0001 {
+        // 1. Cross-fade baseplates strictly driven by materialProgress (0 = 100% glass, 1 = 100% lightweight plate).
+        // Overlap duration is limited to <= 80ms by the animation clock.
+        if localMaterial <= 0.0001 {
             // Resting desktop state: 100% native glass, lightweight plate hidden
             if glassEffectView != nil {
                 glassEffectView?.alphaValue = 1.0
@@ -435,16 +441,15 @@ private final class FolderGlassPlateItemView: NSView {
                 visualEffectView?.alphaValue = 1.0
                 visualEffectView?.isHidden = false
             }
-        } else if local >= Self.handoffProgressThreshold {
+        } else if localMaterial >= 0.9999 {
             // Sunk / open phase: 100% lightweight plate, native glass completely hidden
             glassEffectView?.alphaValue = 0.0
             glassEffectView?.isHidden = true
             visualEffectView?.alphaValue = 1.0
             visualEffectView?.isHidden = false
         } else {
-            // Inside handoff segment: smooth Hermite cross-fade between glass and lightweight plate.
-            let t = local / Self.handoffProgressThreshold
-            let smoothT = t * t * (3.0 - 2.0 * t)
+            // Inside handoff: smooth Hermite cross-fade between glass and lightweight plate.
+            let smoothT = localMaterial * localMaterial * (3.0 - 2.0 * localMaterial)
             let visualAlpha = smoothT
             let glassAlpha = 1.0 - smoothT
 
@@ -459,11 +464,8 @@ private final class FolderGlassPlateItemView: NSView {
             }
         }
 
-        // 2. Performance boundary & Continuous Blur:
-        // Native glass is an isolated sibling of sunkContainerView and never bears any CIFilter.
-        // sunkContainerView (containing visualEffectView and preview thumbnails) blurs smoothly
-        // matching the background depth backdrop.
-        let blurRadius = 16.0 * local
+        // 2. Continuous depth blur driven by spatial progress
+        let blurRadius = 16.0 * localProgress
         applyBlurRadius(blurRadius)
 
         CATransaction.commit()
@@ -519,6 +521,7 @@ final class FolderGlassHostView: NSView {
     private var itemsByID: [String: FolderGlassPlateItemView] = [:]
     private var currentRawSinkTransform: CATransform3D?
     private var currentTransitionProgress: CGFloat = 0
+    private var currentMaterialProgress: CGFloat = 0
 
     func setMaterialStyle(_ style: FolderPlateMaterialStyle) {
         currentMaterialStyle = style
@@ -566,7 +569,7 @@ final class FolderGlassHostView: NSView {
         if itemsByID[id] == nil {
             let item = FolderGlassPlateItemView(frame: .zero, materialStyle: currentMaterialStyle)
             item.isHidden = true
-            item.updateTransitionProgress(currentTransitionProgress)
+            item.updateTransitionProgress(progress: currentTransitionProgress, materialProgress: currentMaterialProgress)
             hostView.addSubview(item)
             itemsByID[id] = item
         }
@@ -592,7 +595,7 @@ final class FolderGlassHostView: NSView {
                 hostView.addSubview(item)
                 itemsByID[plateID] = item
             }
-            item.updateTransitionProgress(currentTransitionProgress)
+            item.updateTransitionProgress(progress: currentTransitionProgress, materialProgress: currentMaterialProgress)
 
             // If an item is being actively dragged, bring it to the front so it floats above stationary folders
             if plate.isIsolated && item.superview === hostView {
@@ -638,14 +641,15 @@ final class FolderGlassHostView: NSView {
     }
 
     /// Applies the shared depth backdrop sink transform (scale and translateY) and drives material cross-fade / blur.
-    func applySinkTransform(_ transform: CATransform3D, progress: CGFloat) {
+    func applySinkTransform(_ transform: CATransform3D, progress: CGFloat, materialProgress: CGFloat) {
         currentRawSinkTransform = transform
         currentTransitionProgress = progress
+        currentMaterialProgress = materialProgress
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         hostView.layer?.sublayerTransform = centeredTransform(for: transform, in: bounds)
         for item in itemsByID.values {
-            item.updateTransitionProgress(progress)
+            item.updateTransitionProgress(progress: progress, materialProgress: materialProgress)
         }
         CATransaction.commit()
     }
@@ -654,13 +658,14 @@ final class FolderGlassHostView: NSView {
     func resetSinkTransform() {
         currentRawSinkTransform = nil
         currentTransitionProgress = 0
+        currentMaterialProgress = 0
         currentMaterialStyle = .glass
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         hostView.layer?.sublayerTransform = CATransform3DIdentity
         for item in itemsByID.values {
             item.setMaterialStyle(.glass)
-            item.updateTransitionProgress(0)
+            item.updateTransitionProgress(progress: 0, materialProgress: 0)
         }
         CATransaction.commit()
     }
@@ -669,13 +674,14 @@ final class FolderGlassHostView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for (_, item) in itemsByID {
-            item.updateTransitionProgress(0)
+            item.updateTransitionProgress(progress: 0, materialProgress: 0)
             item.resetCachedState()
             item.removeFromSuperview()
         }
         itemsByID.removeAll()
         currentRawSinkTransform = nil
         currentTransitionProgress = 0
+        currentMaterialProgress = 0
         hostView.layer?.sublayerTransform = CATransform3DIdentity
         CATransaction.commit()
     }

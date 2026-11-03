@@ -465,11 +465,15 @@ final class LaunchpadContainerView: NSView {
                 }
             }
         }
-        metalView.onFolderTransitionProgress = { [weak self] progress in
+        metalView.onFolderTransitionProgress = { [weak self] progress, materialProgress in
             guard let self else { return }
             self.backdropView.updateProgress(progress)
             let sink = FolderDepthBackdropView.sinkTransform(progress: progress)
-            self.backgroundFolderHostView.applySinkTransform(sink.transform, progress: progress)
+            self.backgroundFolderHostView.applySinkTransform(
+                sink.transform,
+                progress: progress,
+                materialProgress: materialProgress
+            )
         }
         metalView.isDepthBackdropActive = { [weak self] in
             guard let self else { return false }

@@ -416,7 +416,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         _ canvasPan: CGPoint,
         _ canvasAdaptive: Bool
     ) -> Void)?
-    var onFolderTransitionProgress: ((CGFloat) -> Void)?
+    var onFolderTransitionProgress: ((CGFloat, CGFloat) -> Void)?
     var onFolderTransitionWillSettle: ((UInt64) -> Void)?
     var onFolderTransitionEnd: ((UInt64) -> Void)?
     var onFolderDepthBackdropDismiss: (() -> Void)?
@@ -475,6 +475,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         var startProgress: CGFloat
         var targetProgress: CGFloat
         var progress: CGFloat
+        var startMaterialProgress: CGFloat = 0
+        var currentMaterialProgress: CGFloat = 0
         var hasDrawnSettledFrame: Bool = false
         var destinationLayout: (centers: [CGPoint], iconSize: CGFloat, cardMetrics: FolderCardMetrics)? = nil
     }
@@ -505,6 +507,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private var lastFolderSource: FolderSourceSnapshot?
     private let folderOpenDuration: CFTimeInterval = 0.46
     private let folderCloseDuration: CFTimeInterval = 0.38
+    private let materialHandoffDuration: CFTimeInterval = 0.08
 
     private struct PendingFolderOpen {
         let folderID: String
@@ -2747,7 +2750,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             duration: folderOpenDuration,
             startProgress: 0,
             targetProgress: 1,
-            progress: 0
+            progress: 0,
+            startMaterialProgress: 0,
+            currentMaterialProgress: 0
         )
         folderTransitionGeneration &+= 1
         prepareFolderTransitionResources(items: target)
@@ -2810,7 +2815,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             duration: folderCloseDuration,
             startProgress: 1,
             targetProgress: 0,
-            progress: 1
+            progress: 1,
+            startMaterialProgress: 1,
+            currentMaterialProgress: 1
         )
         folderTransitionGeneration &+= 1
         prepareFolderTransitionResources(items: target)
@@ -2831,6 +2838,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let currentP = transition.progress
         transition.startProgress = currentP
         transition.targetProgress = direction == .opening ? 1 : 0
+        transition.startMaterialProgress = transition.currentMaterialProgress
 
         let totalDistance = abs(transition.targetProgress - transition.startProgress)
         let baseDuration = direction == .opening ? folderOpenDuration : folderCloseDuration
@@ -2861,15 +2869,42 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         if transition.startTime <= 0 {
             transition.startTime = now
         }
-        let raw = CGFloat((now - transition.startTime) / max(transition.duration, 0.001))
+        let elapsed = max(0, now - transition.startTime)
+        let raw = CGFloat(elapsed / max(transition.duration, 0.001))
         let clamped = min(max(raw, 0), 1)
         let eased = folderOpenEase(clamped)
         transition.progress = transition.startProgress + (transition.targetProgress - transition.startProgress) * eased
+
+        // Compute material crossfade progress (0 = 100% glass, 1 = 100% lightweight plate)
+        // Hand-off duration is strictly limited to at most 80ms:
+        // - Opening: completes in the first 80ms, after which glass is hidden.
+        // - Closing: glass remains hidden until the final 80ms before touchdown.
+        // - Reversal: starts smoothly from startMaterialProgress without jumps.
+        if transition.direction == .opening {
+            let distance = max(0.0001, 1.0 - transition.startMaterialProgress)
+            let handoffTime = max(0.001, Double(distance) * materialHandoffDuration)
+            let t = min(1.0, elapsed / handoffTime)
+            let smoothT = t * t * (3.0 - 2.0 * t)
+            transition.currentMaterialProgress = transition.startMaterialProgress + distance * CGFloat(smoothT)
+        } else {
+            let distance = max(0.0001, transition.startMaterialProgress)
+            let handoffTime = max(0.001, Double(distance) * materialHandoffDuration)
+            let handoffStartTime = max(0, transition.duration - handoffTime)
+            if elapsed < handoffStartTime {
+                transition.currentMaterialProgress = transition.startMaterialProgress
+            } else {
+                let t = min(1.0, (elapsed - handoffStartTime) / handoffTime)
+                let smoothT = t * t * (3.0 - 2.0 * t)
+                transition.currentMaterialProgress = transition.startMaterialProgress * CGFloat(1.0 - smoothT)
+            }
+        }
+
         if IconRenderQuality.current == .quality {
-            onFolderTransitionProgress?(transition.progress)
+            onFolderTransitionProgress?(transition.progress, transition.currentMaterialProgress)
         }
         if raw >= 1 {
             transition.progress = transition.targetProgress
+            transition.currentMaterialProgress = transition.direction == .opening ? 1 : 0
             // Draw one settled morph frame that matches the destination grid,
             // then swap on the next tick. Switching on this frame made icons
             // flash as they jumped from the interpolator onto buildGrid.
@@ -2943,7 +2978,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             pan,
             adaptive
         )
-        onFolderTransitionProgress?(1.0)
+        onFolderTransitionProgress?(1.0, 1.0)
         needsDisplay = true
         startDisplayLink()
     }
