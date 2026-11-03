@@ -508,6 +508,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private let folderOpenDuration: CFTimeInterval = 0.46
     private let folderCloseDuration: CFTimeInterval = 0.38
     private let materialHandoffDuration: CFTimeInterval = 0.08
+    private let closingHandoffEndLead: CFTimeInterval = 0.12
 
     private struct PendingFolderOpen {
         let folderID: String
@@ -2876,26 +2877,25 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         transition.progress = transition.startProgress + (transition.targetProgress - transition.startProgress) * eased
 
         // Compute material crossfade progress (0 = 100% glass, 1 = 100% lightweight plate)
-        // Hand-off duration is strictly limited to at most 80ms:
-        // - Opening: completes in the first 80ms, after which glass is hidden.
-        // - Closing: glass remains hidden until the final 80ms before touchdown.
+        // Hand-off duration is strictly limited to 80ms:
+        // - Opening: completes linearly in the first 80ms, after which glass is hidden.
+        // - Closing: starts at 180ms and completes at 260ms (leaving 120ms lead time before touchdown).
         // - Reversal: starts smoothly from startMaterialProgress without jumps.
+        // Single Hermite easing is applied on the view layer.
         if transition.direction == .opening {
             let distance = max(0.0001, 1.0 - transition.startMaterialProgress)
             let handoffTime = max(0.001, Double(distance) * materialHandoffDuration)
             let t = min(1.0, elapsed / handoffTime)
-            let smoothT = t * t * (3.0 - 2.0 * t)
-            transition.currentMaterialProgress = transition.startMaterialProgress + distance * CGFloat(smoothT)
+            transition.currentMaterialProgress = transition.startMaterialProgress + distance * CGFloat(t)
         } else {
             let distance = max(0.0001, transition.startMaterialProgress)
             let handoffTime = max(0.001, Double(distance) * materialHandoffDuration)
-            let handoffStartTime = max(0, transition.duration - handoffTime)
+            let handoffStartTime = max(0, transition.duration - closingHandoffEndLead - handoffTime)
             if elapsed < handoffStartTime {
                 transition.currentMaterialProgress = transition.startMaterialProgress
             } else {
                 let t = min(1.0, (elapsed - handoffStartTime) / handoffTime)
-                let smoothT = t * t * (3.0 - 2.0 * t)
-                transition.currentMaterialProgress = transition.startMaterialProgress * CGFloat(1.0 - smoothT)
+                transition.currentMaterialProgress = transition.startMaterialProgress * CGFloat(1.0 - t)
             }
         }
 
