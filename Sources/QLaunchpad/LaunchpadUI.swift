@@ -501,8 +501,17 @@ final class LaunchpadContainerView: NSView {
             self.pendingBackdropPlates = nil
             self.backdropView.dismiss()
             self.backgroundFolderHostView.resetSinkTransform()
-            self.backgroundFolderHostView.setAllPlatesHidden(false)
             self.foregroundFolderHostView.setAllPlatesHidden(true)
+        }
+        metalView.onFolderTransitionWillSettle = { [weak self] generation in
+            guard let self else { return }
+            if self.store.openedFolderID == nil {
+                self.pendingBackdropPlates = nil
+                self.backdropView.hideVisuals()
+                self.backgroundFolderHostView.resetSinkTransform()
+                self.foregroundFolderHostView.setAllPlatesHidden(true)
+                self.dragFolderHostView.removeAllPlates()
+            }
         }
         metalView.onFolderTransitionEnd = { [weak self] generation in
             guard let self else { return }
@@ -511,8 +520,6 @@ final class LaunchpadContainerView: NSView {
             if self.store.openedFolderID == nil {
                 self.pendingBackdropPlates = nil
                 self.backdropView.dismiss()
-                self.backgroundFolderHostView.resetSinkTransform()
-                self.backgroundFolderHostView.setAllPlatesHidden(false)
                 self.foregroundFolderHostView.setAllPlatesHidden(true)
                 self.dragFolderHostView.removeAllPlates()
             }

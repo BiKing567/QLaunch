@@ -417,6 +417,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         _ canvasAdaptive: Bool
     ) -> Void)?
     var onFolderTransitionProgress: ((CGFloat) -> Void)?
+    var onFolderTransitionWillSettle: ((UInt64) -> Void)?
     var onFolderTransitionEnd: ((UInt64) -> Void)?
     var onFolderDepthBackdropDismiss: (() -> Void)?
     var isDepthBackdropActive: (() -> Bool)?
@@ -3721,7 +3722,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 folderPlates: &folderPlates
             )
         }
-        if isSynchronizedTransition {
+        let isSettlingDesktop = pendingFolderTransitionEnd && (store.openedFolderID == nil)
+        if isSettlingDesktop {
+            onFolderTransitionWillSettle?(pendingFolderTransitionGeneration)
+        }
+        let isSynchronized = isSynchronizedTransition || isSettlingDesktop
+        if isSynchronized {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
         }
@@ -3738,7 +3744,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDescriptor) else {
             frameSlot.availability.signal()
-            if isSynchronizedTransition {
+            if isSynchronized {
                 CATransaction.commit()
             }
             return
@@ -3857,7 +3863,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 }
             }
         }
-        if isSynchronizedTransition {
+        if isSynchronized {
             commandBuffer.commit()
             commandBuffer.waitUntilScheduled()
             drawable.present()

@@ -418,6 +418,16 @@ final class FolderDepthBackdropView: NSView {
         CATransaction.commit()
     }
 
+    /// Synchronously hides the backdrop layers in the current transaction.
+    func hideVisuals() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        isHidden = true
+        containerLayer.transform = CATransform3DIdentity
+        containerLayer.opacity = 1.0
+        CATransaction.commit()
+    }
+
     /// Dismisses the backdrop when the folder is fully closed.
     func dismiss() {
         generation &+= 1
