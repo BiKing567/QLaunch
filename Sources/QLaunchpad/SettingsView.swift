@@ -1359,7 +1359,11 @@ private struct AboutSettingsView: View {
                     Spacer(minLength: 12)
 
                     Button(L10n.tr("about.checkUpdates")) {
-                        updater.checkForUpdates()
+                        if NSEvent.modifierFlags.contains(.option) {
+                            updater.simulateUpdateAvailableForTesting()
+                        } else {
+                            updater.checkForUpdates()
+                        }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)

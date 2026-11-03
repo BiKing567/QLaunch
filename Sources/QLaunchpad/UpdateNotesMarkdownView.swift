@@ -82,7 +82,7 @@ struct UpdateNotesMarkdownView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
         }
-        .frame(width: 450, height: 250)
+        .frame(minWidth: 360, maxWidth: .infinity, minHeight: 160, maxHeight: .infinity)
         .background(Color(NSColor.controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
