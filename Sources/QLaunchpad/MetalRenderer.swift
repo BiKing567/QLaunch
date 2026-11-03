@@ -3723,13 +3723,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             )
         }
         let isSettlingDesktop = pendingFolderTransitionEnd && (store.openedFolderID == nil)
-        if isSettlingDesktop {
-            onFolderTransitionWillSettle?(pendingFolderTransitionGeneration)
-        }
         let isSynchronized = isSynchronizedTransition || isSettlingDesktop
         if isSynchronized {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
+        }
+        if isSettlingDesktop {
+            onFolderTransitionWillSettle?(pendingFolderTransitionGeneration)
         }
         onUpdateFolderPlates?(folderPlates, backdropAlpha)
         onUpdateFolderTitleTransition?(currentFolderTitleState)
@@ -4244,10 +4244,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         rpd.colorAttachments[0].storeAction = .store
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: rpd) else { return folderPlates }
+        let qualityMode: Float = destinationTexture.pixelFormat == .rgba16Float ? 1.0 : 0.0
         var uniforms = FrameUniforms(
             viewport: SIMD2(Float(bounds.width), Float(bounds.height)),
             drawable: SIMD2(Float(destinationTexture.width), Float(destinationTexture.height)),
-            mode: SIMD2(0, 0)
+            mode: SIMD2(qualityMode, 0)
         )
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<FrameUniforms>.stride, index: 1)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<FrameUniforms>.stride, index: 1)

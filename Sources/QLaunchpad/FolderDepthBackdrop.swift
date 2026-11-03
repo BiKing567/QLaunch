@@ -26,11 +26,16 @@ private final class BackdropBlurWorker: @unchecked Sendable {
         }
     }
 
-    func prewarmKernels(device: MTLDevice, commandQueue: MTLCommandQueue? = nil, scale: CGFloat) {
+    func prewarmKernels(
+        device: MTLDevice,
+        commandQueue: MTLCommandQueue? = nil,
+        scale: CGFloat,
+        pixelFormat: MTLPixelFormat = .rgba16Float
+    ) {
         queue.async {
             let blurRadius: Float = 16.0
             let desc = MTLTextureDescriptor.texture2DDescriptor(
-                pixelFormat: .bgra8Unorm,
+                pixelFormat: pixelFormat,
                 width: 16,
                 height: 16,
                 mipmapped: false
@@ -203,6 +208,31 @@ final class FolderDepthBackdropView: NSView {
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+    private func currentQualityUsesUnorm8() -> Bool {
+        let raw = UserDefaults.standard.string(forKey: "iconRenderQuality")
+        return raw != "quality"
+    }
+
+    private func targetPixelFormat() -> MTLPixelFormat {
+        currentQualityUsesUnorm8() ? .bgra8Unorm : .rgba16Float
+    }
+
+    private func targetColorSpace() -> CGColorSpace? {
+        CGColorSpace(
+            name: currentQualityUsesUnorm8()
+                ? CGColorSpace.displayP3
+                : CGColorSpace.extendedLinearDisplayP3
+        )
+    }
+
+    private func applyLayerConfiguration() {
+        let format = targetPixelFormat()
+        if metalLayer.pixelFormat != format {
+            metalLayer.pixelFormat = format
+        }
+        metalLayer.colorspace = targetColorSpace()
+    }
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
@@ -212,7 +242,7 @@ final class FolderDepthBackdropView: NSView {
         containerLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
 
         metalLayer.isOpaque = false
-        metalLayer.pixelFormat = .bgra8Unorm
+        applyLayerConfiguration()
         metalLayer.framebufferOnly = false
         metalLayer.presentsWithTransaction = false
         metalLayer.masksToBounds = false
@@ -231,6 +261,7 @@ final class FolderDepthBackdropView: NSView {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        applyLayerConfiguration()
         let savedTransform = containerLayer.transform
         containerLayer.transform = CATransform3DIdentity
         containerLayer.bounds = bounds
@@ -244,14 +275,15 @@ final class FolderDepthBackdropView: NSView {
         CATransaction.commit()
     }
 
-    /// Allocates or reuses the texture matching the exact Retina framebuffer dimensions.
+    /// Allocates or reuses the texture matching the exact Retina framebuffer dimensions and pixel format.
     private func ensureTexture(
         device: MTLDevice,
         pixelWidth: Int,
         pixelHeight: Int
     ) -> MTLTexture? {
+        let format = targetPixelFormat()
         let size = CGSize(width: pixelWidth, height: pixelHeight)
-        if cachedPixelSize == size, let raw = rawTexture {
+        if cachedPixelSize == size, let raw = rawTexture, raw.pixelFormat == format {
             return raw
         }
 
@@ -259,7 +291,7 @@ final class FolderDepthBackdropView: NSView {
         rawTexture = nil
 
         let desc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm,
+            pixelFormat: format,
             width: pixelWidth,
             height: pixelHeight,
             mipmapped: false
@@ -280,12 +312,18 @@ final class FolderDepthBackdropView: NSView {
         self.device = device
         self.commandQueue = commandQueue
         self.currentScale = scale
+        applyLayerConfiguration()
         let pixelWidth = max(1, Int((boundsSize.width * scale).rounded()))
         let pixelHeight = max(1, Int((boundsSize.height * scale).rounded()))
         _ = ensureTexture(device: device, pixelWidth: pixelWidth, pixelHeight: pixelHeight)
         metalLayer.device = device
         metalLayer.drawableSize = CGSize(width: pixelWidth, height: pixelHeight)
-        worker.prewarmKernels(device: device, commandQueue: commandQueue, scale: scale)
+        worker.prewarmKernels(
+            device: device,
+            commandQueue: commandQueue,
+            scale: scale,
+            pixelFormat: targetPixelFormat()
+        )
     }
 
     /// Bakes the sharp root grid once into the offscreen texture.
@@ -299,6 +337,7 @@ final class FolderDepthBackdropView: NSView {
         self.device = device
         self.commandQueue = commandQueue
         self.currentScale = scale
+        applyLayerConfiguration()
         generation &+= 1
         let currentGen = generation
         worker.reset(generation: currentGen)
