@@ -267,7 +267,7 @@ private final class FolderGlassPlateItemView: NSView {
             glassEffectView?.isHidden = true
             visualEffectView?.alphaValue = 1.0
             visualEffectView?.isHidden = false
-            sunkContainerView.layer?.shadowOpacity = 0.11
+            sunkContainerView.layer?.shadowOpacity = 0.05
         }
         CATransaction.commit()
     }
@@ -295,11 +295,11 @@ private final class FolderGlassPlateItemView: NSView {
             let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             visual.material = .hudWindow
             if isDark {
-                visual.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.04).cgColor
-                visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.11).cgColor
+                visual.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.015).cgColor
+                visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.05).cgColor
             } else {
-                visual.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.10).cgColor
-                visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.19).cgColor
+                visual.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.05).cgColor
+                visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.09).cgColor
             }
             visual.layer?.borderWidth = 0.5
         }
@@ -453,7 +453,7 @@ private final class FolderGlassPlateItemView: NSView {
             } else {
                 visualEffectView?.alphaValue = 1.0
                 visualEffectView?.isHidden = false
-                sunkContainerView.layer?.shadowOpacity = 0.11
+                sunkContainerView.layer?.shadowOpacity = 0.05
             }
         } else if localMaterial >= 0.9999 {
             // Sunk / open phase: 100% lightweight plate, native glass completely hidden
@@ -461,7 +461,7 @@ private final class FolderGlassPlateItemView: NSView {
             glassEffectView?.isHidden = true
             visualEffectView?.alphaValue = 1.0
             visualEffectView?.isHidden = false
-            sunkContainerView.layer?.shadowOpacity = 0.11
+            sunkContainerView.layer?.shadowOpacity = 0.05
         } else {
             // Inside handoff: single smooth Hermite cross-fade between glass and lightweight plate.
             let smoothT = localMaterial * localMaterial * (3.0 - 2.0 * localMaterial)
@@ -473,11 +473,11 @@ private final class FolderGlassPlateItemView: NSView {
                 glassEffectView?.isHidden = false
                 visualEffectView?.alphaValue = visualAlpha
                 visualEffectView?.isHidden = false
-                sunkContainerView.layer?.shadowOpacity = Float(smoothT) * 0.11
+                sunkContainerView.layer?.shadowOpacity = Float(smoothT) * 0.05
             } else {
                 visualEffectView?.alphaValue = 1.0
                 visualEffectView?.isHidden = false
-                sunkContainerView.layer?.shadowOpacity = 0.11
+                sunkContainerView.layer?.shadowOpacity = 0.05
             }
         }
 
