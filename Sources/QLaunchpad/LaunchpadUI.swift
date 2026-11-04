@@ -369,7 +369,7 @@ final class LaunchpadContainerView: NSView {
     private let metalView: LaunchpadMetalView
     private let overlayView: PassthroughHostingView<LaunchpadOverlayView>
     private let folderTitleView: FolderTitleView
-    private var pendingBackdropPlates: (folderID: String, generation: UInt64, plates: [FolderPlateModel])?
+    private var pendingBackdropPlates: (folderID: String, plates: [FolderPlateModel])?
     private var cancellables = Set<AnyCancellable>()
 
     var metal: LaunchpadMetalView { metalView }
@@ -412,7 +412,7 @@ final class LaunchpadContainerView: NSView {
             let bgPlates = plates.filter { !$0.id.hasPrefix("opened-folder") && !$0.isIsolated }
 
             if let pending = self.pendingBackdropPlates,
-               pending.generation == self.metalView.folderTransitionGeneration,
+               pending.folderID == self.metalView.activeFolderTransitionID,
                !fgPlates.isEmpty,
                self.metalView.isFolderTransitionActive {
                 self.backgroundFolderHostView.update(plates: pending.plates, removeUnused: true)
@@ -488,7 +488,7 @@ final class LaunchpadContainerView: NSView {
                         self.backgroundFolderHostView.setPlateHidden(true, for: folderID)
                     }
                 } else {
-                    self.pendingBackdropPlates = (folderID: folderID, generation: self.metalView.folderTransitionGeneration, plates: bgPlates)
+                    self.pendingBackdropPlates = (folderID: folderID, plates: bgPlates)
                 }
             }
         }
