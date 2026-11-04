@@ -447,7 +447,16 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     var isDepthBackdropActive: (() -> Bool)?
     var isDepthBackdropBaking: (() -> Bool)?
     var isDepthBackdropFailed: (() -> Bool)?
+    var areFolderPreviewsReady: ((String) -> Bool)?
     private(set) var folderTransitionGeneration: UInt64 = 0
+
+    var activeFolderTransitionID: String? {
+        folderTransition?.folderID
+    }
+
+    var activeFolderTransitionRetainedPreviews: [String: CGImage]? {
+        folderTransition?.retainedPreviewImagesByAppID
+    }
     private var pendingFolderTransitionGeneration: UInt64 = 0
     private var pendingFolderTransitionEnd = false
     private var standardPinchInteractiveDismissActive = false
@@ -504,6 +513,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         var hasDrawnSettledFrame: Bool = false
         var destinationLayout: (centers: [CGPoint], iconSize: CGFloat, cardMetrics: FolderCardMetrics)? = nil
         var retainedPreviewImages: [CGImage] = []
+        var retainedPreviewImagesByAppID: [String: CGImage] = [:]
     }
 
     private struct FolderSourceSnapshot {
@@ -2926,12 +2936,17 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         folderTransitionGeneration &+= 1
         prepareFolderTransitionResources(items: target)
         var retainedImages: [CGImage] = []
+        var retainedMap: [String: CGImage] = [:]
+        let appName = effectiveAppearance.name.rawValue
         for item in displayedItems.prefix(FolderPreviewLayout.capacity) {
-            if case .app(let app) = item, let img = AppIconImageProvider.shared.cachedCGImage(for: app) {
+            if case .app(let app) = item,
+               let img = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appName, allowFallback: true) {
                 retainedImages.append(img)
+                retainedMap[app.id] = img
             }
         }
         folderTransition?.retainedPreviewImages = retainedImages
+        folderTransition?.retainedPreviewImagesByAppID = retainedMap
         store.setFolderTransitionActive(true)
         if IconRenderQuality.current == .quality,
            isDepthBackdropActive?() != true,
@@ -2998,12 +3013,17 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         folderTransitionGeneration &+= 1
         prepareFolderTransitionResources(items: target)
         var retainedImages: [CGImage] = []
+        var retainedMap: [String: CGImage] = [:]
+        let appName = effectiveAppearance.name.rawValue
         for item in displayedItems.prefix(FolderPreviewLayout.capacity) {
-            if case .app(let app) = item, let img = AppIconImageProvider.shared.cachedCGImage(for: app) {
+            if case .app(let app) = item,
+               let img = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appName, allowFallback: true) {
                 retainedImages.append(img)
+                retainedMap[app.id] = img
             }
         }
         folderTransition?.retainedPreviewImages = retainedImages
+        folderTransition?.retainedPreviewImagesByAppID = retainedMap
         store.setFolderTransitionActive(true)
         startDisplayLink()
         needsDisplay = true
@@ -3056,9 +3076,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             AppIconImageProvider.shared.prepare(app: app)
         }
         if var transition = folderTransition {
+            let appName = effectiveAppearance.name.rawValue
             for app in previewApps {
-                if let img = AppIconImageProvider.shared.cachedCGImage(for: app) {
+                if let img = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appName, allowFallback: true) {
                     transition.retainedPreviewImages.append(img)
+                    transition.retainedPreviewImagesByAppID[app.id] = img
                 }
             }
             folderTransition = transition
@@ -3124,8 +3146,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             // then swap on the next tick. Switching on this frame made icons
             // flash as they jumped from the interpolator onto buildGrid.
             if transition.hasDrawnSettledFrame {
-                finishFolderTransition()
-                return
+                let nativeReady = transition.direction == .closing
+                    ? (areFolderPreviewsReady?(transition.folderID) ?? true)
+                    : true
+                if nativeReady {
+                    finishFolderTransition()
+                    return
+                }
             }
             transition.hasDrawnSettledFrame = true
         }
@@ -3613,10 +3640,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 let isPreviewIcon = (activePage == 0 && index < FolderPreviewLayout.capacity)
 
                 if isPreviewIcon && isAtSourceRest {
-                    // At resting source position (local == 0), the folder plate's native
-                    // CALayer preview layers render the 9 mini-icons, matching the desktop
-                    // exactly in image source, bilinear sampling, pixel snapping, and shadow.
-                    continue
+                    let nativeReady = areFolderPreviewsReady?(transition.folderID) ?? true
+                    if nativeReady {
+                        // At resting source position (local == 0), the folder plate's native
+                        // CALayer preview layers render the 9 mini-icons, matching the desktop
+                        // exactly in image source, bilinear sampling, pixel snapping, and shadow.
+                        continue
+                    }
                 }
 
                 // Tail-end culling: non-preview icons fade out quickly when collapsing

@@ -369,7 +369,7 @@ final class LaunchpadContainerView: NSView {
     private let metalView: LaunchpadMetalView
     private let overlayView: PassthroughHostingView<LaunchpadOverlayView>
     private let folderTitleView: FolderTitleView
-    private var pendingBackdropPlates: (folderID: String, plates: [FolderPlateModel])?
+    private var pendingBackdropPlates: (folderID: String, generation: UInt64, plates: [FolderPlateModel])?
     private var cancellables = Set<AnyCancellable>()
 
     var metal: LaunchpadMetalView { metalView }
@@ -410,6 +410,16 @@ final class LaunchpadContainerView: NSView {
             let fgPlates = plates.filter { $0.id.hasPrefix("opened-folder") }
             let dragPlates = plates.filter { !$0.id.hasPrefix("opened-folder") && $0.isIsolated }
             let bgPlates = plates.filter { !$0.id.hasPrefix("opened-folder") && !$0.isIsolated }
+
+            if let pending = self.pendingBackdropPlates,
+               pending.generation == self.metalView.folderTransitionGeneration,
+               !fgPlates.isEmpty,
+               self.metalView.isFolderTransitionActive {
+                self.backgroundFolderHostView.update(plates: pending.plates, removeUnused: true)
+                self.backgroundFolderHostView.setPlateHidden(true, for: pending.folderID)
+                self.pendingBackdropPlates = nil
+            }
+
             let retainsDepthPlates = IconRenderQuality.current == .quality
                 && self.backdropView.isReady && !self.backdropView.isHidden
                 && (self.store.openedFolderID != nil || self.metalView.isFolderTransitionActive)
@@ -417,7 +427,18 @@ final class LaunchpadContainerView: NSView {
             if !bgPlates.isEmpty || shouldRemoveUnused {
                 self.backgroundFolderHostView.update(plates: bgPlates, removeUnused: shouldRemoveUnused)
             }
-            self.foregroundFolderHostView.update(plates: fgPlates)
+
+            var fgSeedImages: [String: [String: CGImage]] = [:]
+            if self.metalView.isFolderTransitionActive,
+               let sourceID = self.metalView.activeFolderTransitionID {
+                var seedImages: [String: CGImage] = self.metalView.activeFolderTransitionRetainedPreviews ?? [:]
+                let sourcePreviews = self.backgroundFolderHostView.previewImages(for: sourceID)
+                seedImages.merge(sourcePreviews) { current, _ in current }
+                if !seedImages.isEmpty {
+                    fgSeedImages["opened-folder-" + sourceID] = seedImages
+                }
+            }
+            self.foregroundFolderHostView.update(plates: fgPlates, seedImagesByID: fgSeedImages)
             self.dragFolderHostView.update(plates: dragPlates, removeUnused: true)
 
             CATransaction.begin()
@@ -431,6 +452,11 @@ final class LaunchpadContainerView: NSView {
                 self.fullScreenDimView.isHidden = true
             }
             CATransaction.commit()
+        }
+        metalView.areFolderPreviewsReady = { [weak self] folderID in
+            guard let self else { return false }
+            return self.foregroundFolderHostView.hasReadyPreviews(for: "opened-folder-" + folderID)
+                || self.backgroundFolderHostView.hasReadyPreviews(for: folderID)
         }
         metalView.onUpdateFolderTitleTransition = { [weak self] state in
             self?.folderTitleView.update(state: state)
@@ -462,7 +488,7 @@ final class LaunchpadContainerView: NSView {
                         self.backgroundFolderHostView.setPlateHidden(true, for: folderID)
                     }
                 } else {
-                    self.pendingBackdropPlates = (folderID: folderID, plates: bgPlates)
+                    self.pendingBackdropPlates = (folderID: folderID, generation: self.metalView.folderTransitionGeneration, plates: bgPlates)
                 }
             }
         }
@@ -490,13 +516,7 @@ final class LaunchpadContainerView: NSView {
         }
         backdropView.onReadyChange = { [weak self] isReady in
             guard let self else { return }
-            if isReady {
-                if let pending = self.pendingBackdropPlates {
-                    self.backgroundFolderHostView.update(plates: pending.plates, removeUnused: true)
-                    self.backgroundFolderHostView.setPlateHidden(true, for: pending.folderID)
-                    self.pendingBackdropPlates = nil
-                }
-            } else if !isReady {
+            if !isReady {
                 self.pendingBackdropPlates = nil
             }
             self.metalView.handleBackdropReady(isReady: isReady)

@@ -347,6 +347,28 @@ private final class FolderGlassPlateItemView: NSView {
         lastMaterialProgress = -1
     }
 
+    func previewImages() -> [String: CGImage] {
+        var result: [String: CGImage] = [:]
+        for (i, id) in currentDisplayMemberIDs.enumerated() {
+            guard i < previewLayers.count else { break }
+            if let image = previewLayers[i].contents {
+                result[id] = (image as! CGImage)
+            }
+        }
+        return result
+    }
+
+    var hasReadyPreviews: Bool {
+        guard currentPreviewVisible, !currentDisplayMemberIDs.isEmpty else { return false }
+        for i in 0..<currentDisplayMemberIDs.count {
+            guard i < previewLayers.count else { return false }
+            if previewLayers[i].contents == nil || previewLayers[i].isHidden {
+                return false
+            }
+        }
+        return true
+    }
+
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -504,7 +526,8 @@ private final class FolderGlassPlateItemView: NSView {
         members: [AppInfo],
         previewVisible: Bool,
         iconSize: CGFloat,
-        incomingDropAppID: String?
+        incomingDropAppID: String?,
+        seedImages: [String: CGImage]? = nil
     ) {
         currentMembers = members
         currentPreviewVisible = previewVisible
@@ -630,6 +653,9 @@ private final class FolderGlassPlateItemView: NSView {
 
                 if let cgImage = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appearanceName, allowFallback: true) {
                     layer.contents = cgImage
+                    layer.isHidden = false
+                } else if let seed = seedImages?[app.id] {
+                    layer.contents = seed
                     layer.isHidden = false
                 } else {
                     if !canRetainExistingImage {
@@ -937,7 +963,19 @@ final class FolderGlassHostView: NSView {
         }
     }
 
-    func update(plates: [FolderPlateModel], removeUnused: Bool = true) {
+    func previewImages(for id: String) -> [String: CGImage] {
+        itemsByID[id]?.previewImages() ?? [:]
+    }
+
+    func hasReadyPreviews(for id: String) -> Bool {
+        itemsByID[id]?.hasReadyPreviews ?? false
+    }
+
+    func update(
+        plates: [FolderPlateModel],
+        removeUnused: Bool = true,
+        seedImagesByID: [String: [String: CGImage]]? = nil
+    ) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
@@ -965,6 +1003,7 @@ final class FolderGlassHostView: NSView {
             }
 
             let cornerRadius = plate.customCornerRadius ?? (plate.rect.width * 0.225)
+            let seedImages = seedImagesByID?[plateID]
             item.update(
                 rect: plate.rect,
                 cornerRadius: cornerRadius,
@@ -972,7 +1011,8 @@ final class FolderGlassHostView: NSView {
                 members: plate.members,
                 previewVisible: plate.previewVisible,
                 iconSize: plate.iconSize,
-                incomingDropAppID: plate.incomingDropAppID
+                incomingDropAppID: plate.incomingDropAppID,
+                seedImages: seedImages
             )
             item.isHidden = false
         }
