@@ -832,7 +832,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         // sample(): quality = rgba16Float linear; performance = rgba8Unorm_srgb
         // (hardware decodes to the same linear light domain).
         float4 c;
-        if (u.mode.x > 0.5) {
+        if (in.kind > 2.5) {
+            // Kind 3: Mini-icon thumbnail / pixel-aligned preview icon.
+            // Direct bilinear sampling matches CALayer preview rendering.
+            c = atlas.sample(samp, in.uv);
+        } else if (u.mode.x > 0.5) {
             // Quality: 4x linear float16 + 4×4 separable binomial in screen space.
             const float offsets[4] = { -0.75, -0.25, 0.25, 0.75 };
             const float weights[4] = { 1.0, 3.0, 3.0, 1.0 };
@@ -2849,6 +2853,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     private func prepareFolderTransitionResources(items: [LaunchpadItem]) {
+        let previewApps = items.prefix(FolderPreviewLayout.capacity).compactMap { item -> AppInfo? in
+            if case .app(let app) = item { return app }
+            return nil
+        }
+        AppIconImageProvider.shared.prepare(apps: previewApps)
+
         guard IconRenderQuality.current.usesLazyTextureLoading else { return }
         resourcePrewarmSignature = nil
         lastTextureWindowPage = -1
@@ -3261,13 +3271,30 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let currentCardRect = folderMix(sourcePadRect, targetPadRect, local)
         let currentCornerRadius = folderMix(sourceCornerRadius, targetCornerRadius, local)
 
+        let sourcePageFade: Float
+        if GridLayoutPreset.current.isInfiniteCanvas {
+            sourcePageFade = 1.0
+        } else {
+            sourcePageFade = Float(max(
+                0,
+                min(1, 1.15 - abs(transition.sourceCenter.x - midX) / max(bounds.width, 1))
+            ))
+        }
+        let currentFolderFade = Float(1.0 - local) * sourcePageFade + Float(local) * 1.0
+
+        let isAtSourceRest = (local < 0.001)
+        let previewMembers = transition.folderItems.prefix(FolderPreviewLayout.capacity).compactMap { item -> AppInfo? in
+            if case .app(let app) = item { return app }
+            return nil
+        }
+
         folderPlates.append(
             FolderPlateModel(
                 id: "opened-folder-" + transition.folderID,
                 rect: currentCardRect,
-                alpha: alphaScale,
-                members: [],
-                previewVisible: false,
+                alpha: alphaScale * currentFolderFade,
+                members: previewMembers,
+                previewVisible: isAtSourceRest,
                 iconSize: 0,
                 customCornerRadius: currentCornerRadius
             )
@@ -3297,9 +3324,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             crossfadeT = (local - 0.40) / 0.20
         }
 
-        let baseTitleAlpha: Float = showLabels
+        let baseTitleAlpha: Float = (showLabels
             ? alphaScale * 0.95
-            : alphaScale * Float(local) * 0.95
+            : alphaScale * Float(local) * 0.95) * currentFolderFade
 
         let sourceLabelCenter: CGPoint
         if let label = textAtlas.layouts[transition.folderID],
@@ -3375,6 +3402,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 guard case .app(let app) = item else { continue }
                 let isPreviewIcon = (activePage == 0 && index < FolderPreviewLayout.capacity)
 
+                if isPreviewIcon && isAtSourceRest {
+                    // At resting source position (local == 0), the folder plate's native
+                    // CALayer preview layers render the 9 mini-icons, matching the desktop
+                    // exactly in image source, bilinear sampling, pixel snapping, and shadow.
+                    continue
+                }
+
                 // Tail-end culling: non-preview icons fade out quickly when collapsing
                 // and should not draw once clustered near the collapsed center.
                 let iconAlpha: CGFloat
@@ -3394,13 +3428,18 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 let fromCenter: CGPoint
                 let fromSize: CGFloat
                 if isPreviewIcon {
-                    fromCenter = FolderPreviewLayout.miniCenter(
+                    let rawCenter = FolderPreviewLayout.miniCenter(
                         index: index,
                         folderCenter: transition.sourceCenter,
                         folderSize: transition.sourceSize,
                         yIncreasesDown: true
                     )
-                    fromSize = miniSize
+                    let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+                    let originX = ((rawCenter.x - miniSize * 0.5) * scale).rounded() / scale
+                    let originY = ((rawCenter.y - miniSize * 0.5) * scale).rounded() / scale
+                    let snappedSize = (miniSize * scale).rounded() / scale
+                    fromCenter = CGPoint(x: originX + snappedSize * 0.5, y: originY + snappedSize * 0.5)
+                    fromSize = snappedSize
                 } else {
                     fromCenter = transition.sourceCenter
                     fromSize = destination.iconSize * 0.18
@@ -3408,16 +3447,17 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 let center = folderMix(fromCenter, destCenter, local)
                 let size = folderMix(fromSize, destination.iconSize, local)
                 let texture = iconTextures.cachedTexture(for: app)
-                let drawnAlpha = alphaScale * Float(iconAlpha)
+                let iconAlphaScale: Float = isPreviewIcon ? currentFolderFade : 1.0
+                let drawnAlpha = alphaScale * Float(iconAlpha) * iconAlphaScale
                 if let texture, drawnAlpha > 0.01 {
                     iconDrawTextures.append(texture)
+                    let iconKind: Float = (isPreviewIcon && local < 0.35) ? 3 : 1
+                    let snapToPixels = isPreviewIcon && local < 0.1
                     iconSprites.append(
-                        .icon(
-                            center: center,
-                            size: size,
-                            uv: fullUV,
-                            alpha: drawnAlpha,
-                            pressed: false
+                        SpriteInstance(
+                            centerSize: SIMD4(Float(center.x), Float(center.y), Float(size), Float(size)),
+                            uvRect: fullUV,
+                            kindAlpha: SIMD4(iconKind, drawnAlpha, snapToPixels ? 1 : 0, 0)
                         )
                     )
                 }
@@ -4591,7 +4631,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                         let outsideDist = max(0, max(cardMetrics.cardRect.minX - finalCenter.x, finalCenter.x - cardMetrics.cardRect.maxX))
                         pageFade = Float(max(0, 1.0 - outsideDist / 60.0))
                     }
-                } else if infiniteCanvas || viewTransitionActive {
+                } else if infiniteCanvas || contentTransitionPhase != .idle {
                     pageFade = 1
                 } else {
                     pageFade = Float(max(
