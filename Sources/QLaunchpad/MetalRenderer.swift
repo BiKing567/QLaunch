@@ -4251,9 +4251,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                   let passDescriptor = currentRenderPassDescriptor else { return nil }
             return (drawable, passDescriptor)
         }
-        // First frame: retain synchronous handoff with MTKView's currentDrawable,
-        // and immediately initiate prefetch for the subsequent animation frame.
-        guard hasDrawnFolderFrame else {
+        // Performance and low-memory keep the existing first-frame handoff.
+        if !hasDrawnFolderFrame && IconRenderQuality.current != .quality {
             folderDrawableProvider.prefetch(from: surface, ready: { [weak self] in
                 guard let self,
                       self.store.isPresented,
@@ -4272,7 +4271,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                   self.store.isPresented,
                   self.window?.isVisible == true,
                   self.isFolderTransitionActive,
-                  self.hasDrawnFolderFrame else { return }
+                  (IconRenderQuality.current == .quality || self.hasDrawnFolderFrame) else { return }
             self.needsDisplay = true
             self.startDisplayLink()
         }) else { return nil }

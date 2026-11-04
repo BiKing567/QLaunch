@@ -436,6 +436,7 @@ final class LaunchpadContainerView: NSView {
                 seedImages.merge(sourcePreviews) { current, _ in current }
                 if !seedImages.isEmpty {
                     fgSeedImages["opened-folder-" + sourceID] = seedImages
+                    fgSeedImages["opened-folder"] = seedImages
                 }
             }
             self.foregroundFolderHostView.update(plates: fgPlates, seedImagesByID: fgSeedImages)

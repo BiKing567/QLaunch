@@ -964,11 +964,11 @@ final class FolderGlassHostView: NSView {
     }
 
     func previewImages(for id: String) -> [String: CGImage] {
-        itemsByID[id]?.previewImages() ?? [:]
+        itemsByID[reusableSinglePlateID ?? id]?.previewImages() ?? itemsByID[id]?.previewImages() ?? [:]
     }
 
     func hasReadyPreviews(for id: String) -> Bool {
-        itemsByID[id]?.hasReadyPreviews ?? false
+        itemsByID[reusableSinglePlateID ?? id]?.hasReadyPreviews ?? itemsByID[id]?.hasReadyPreviews ?? false
     }
 
     func update(
@@ -1003,7 +1003,7 @@ final class FolderGlassHostView: NSView {
             }
 
             let cornerRadius = plate.customCornerRadius ?? (plate.rect.width * 0.225)
-            let seedImages = seedImagesByID?[plateID]
+            let seedImages = seedImagesByID?[plateID] ?? seedImagesByID?[plate.id]
             item.update(
                 rect: plate.rect,
                 cornerRadius: cornerRadius,
