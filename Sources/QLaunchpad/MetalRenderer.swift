@@ -250,11 +250,33 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private var isFirstFrameCompletionScheduled = false
     private var lastEffectiveAppearanceName: NSAppearance.Name?
     private var pendingAppearanceChange: NSAppearance?
+    private struct AppearanceCrossfade {
+        let fromAppearance: NSAppearance
+        let toAppearance: NSAppearance
+        let startTime: CFTimeInterval
+        let duration: CFTimeInterval
+        let fromProgress: CGFloat
+        let generation: UInt64
+    }
+    private var activeAppearanceCrossfade: AppearanceCrossfade?
+    private var pendingTargetAppearance: NSAppearance?
+    private var pendingAppearanceGeneration: UInt64 = 0
+    private var appearancePrepDeadline: CFTimeInterval = 0
+    private(set) var appearanceCrossfadeProgress: CGFloat = 0
+    private let appearanceCrossfadeDuration: CFTimeInterval = 0.18
+
+    var isAppearanceCrossfadeActive: Bool {
+        activeAppearanceCrossfade != nil
+    }
+
+    var onAppearanceCrossfadeProgress: ((CGFloat, NSAppearance, NSAppearance) -> Void)?
+    var onAppearanceCrossfadeCompleted: ((NSAppearance) -> Void)?
 
     private let inFlightFrameCount = 3
     private let inFlightFrames: [FrameResources]
     private var nextFrameIndex = 0
     private var iconDrawTextures: [MTLTexture] = []
+    private var iconDrawNextTextures: [MTLTexture] = []
     private var iconSprites: [SpriteInstance] = []
     private var labelsBySheet: [[SpriteInstance]] = []
     private var textSprites: [SpriteInstance] = []
@@ -660,35 +682,121 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     func handleEffectiveAppearanceChange(_ appearance: NSAppearance) {
-        guard appearance.name != lastEffectiveAppearanceName else { return }
         if isFolderTransitionActive {
             pendingAppearanceChange = appearance
             return
         }
-        lastEffectiveAppearanceName = appearance.name
-        pendingAppearanceChange = nil
-        iconTextures.setAppearance(appearance)
-        AppIconImageProvider.shared.setAppearance(appearance)
-        resourcePrewarmSignature = nil
 
-        if store.isPresented {
-            scheduleLazyResourcePrewarming(
-                around: max(0, Int(store.pageOffset.rounded())),
-                prune: true
-            )
-            if IconRenderQuality.current == .quality,
-               let folderID = store.openedFolderID {
-                onFolderTransitionBakeBackdrop?(
-                    folderID,
-                    folderTransitionGeneration,
-                    displayedItems,
-                    currentPageOffset,
-                    canvasScale,
-                    canvasPan,
-                    canvasStateUsesAdaptiveLayout
+        // If window is not presented / hidden, immediately commit without crossfade
+        guard store.isPresented, window?.isVisible == true, store.presentationProgress > 0.9 else {
+            lastEffectiveAppearanceName = appearance.name
+            pendingAppearanceChange = nil
+            pendingTargetAppearance = nil
+            activeAppearanceCrossfade = nil
+            appearanceCrossfadeProgress = 0
+            iconTextures.setAppearance(appearance)
+            AppIconImageProvider.shared.setAppearance(appearance)
+            onAppearanceCrossfadeCompleted?(appearance)
+            resourcePrewarmSignature = nil
+            return
+        }
+
+        if appearance.name == lastEffectiveAppearanceName && activeAppearanceCrossfade == nil && pendingTargetAppearance == nil {
+            return
+        }
+
+        // Continuous reverse switch check
+        if let crossfade = activeAppearanceCrossfade {
+            if appearance.name == crossfade.fromAppearance.name {
+                let currentP = appearanceCrossfadeProgress
+                pendingAppearanceGeneration &+= 1
+                activeAppearanceCrossfade = AppearanceCrossfade(
+                    fromAppearance: crossfade.toAppearance,
+                    toAppearance: crossfade.fromAppearance,
+                    startTime: CACurrentMediaTime(),
+                    duration: appearanceCrossfadeDuration * Double(max(0.05, currentP)),
+                    fromProgress: 1.0 - currentP,
+                    generation: pendingAppearanceGeneration
                 )
+                pendingTargetAppearance = nil
+                startDisplayLink()
+                return
             }
-            needsDisplay = true
+        }
+
+        // Start preparing target appearance
+        pendingAppearanceGeneration &+= 1
+        pendingTargetAppearance = appearance
+        appearancePrepDeadline = CACurrentMediaTime() + 0.35
+        iconTextures.setTargetAppearance(appearance, generation: pendingAppearanceGeneration)
+        AppIconImageProvider.shared.setTargetAppearance(appearance, generation: pendingAppearanceGeneration)
+
+        // Prewarm visible batch
+        prewarmVisibleBatchForTargetAppearance(appearance, generation: pendingAppearanceGeneration)
+
+        // Check if ready to start crossfade
+        checkAndStartAppearanceCrossfadeIfNeeded(now: CACurrentMediaTime())
+    }
+
+    private func currentVisibleAppInfos() -> (apps: [AppInfo], folderPreviewApps: [AppInfo]) {
+        var visibleApps: [AppInfo] = []
+        var folderApps: [AppInfo] = []
+        if let openedID = store.openedFolderID, let folder = store.folder(withID: openedID) {
+            for appID in folder.appIDs {
+                if let app = store.app(withID: appID) {
+                    visibleApps.append(app)
+                }
+            }
+        } else {
+            let activeItems = displayedItems.isEmpty ? store.activeDisplayItems : displayedItems
+            let capacity = max(1, store.pageCapacity)
+            let currentPage = max(0, Int(store.pageOffset.rounded()))
+            let startIndex = currentPage * capacity
+            let endIndex = min(activeItems.count, startIndex + capacity)
+            if startIndex < endIndex {
+                for item in activeItems[startIndex..<endIndex] {
+                    switch item {
+                    case .app(let app):
+                        visibleApps.append(app)
+                    case .folder(let folder):
+                        let members = folder.appIDs.prefix(FolderPreviewLayout.capacity).compactMap { store.app(withID: $0) }
+                        folderApps.append(contentsOf: members)
+                    }
+                }
+            }
+        }
+        return (visibleApps, folderApps)
+    }
+
+    private func prewarmVisibleBatchForTargetAppearance(_ appearance: NSAppearance, generation: UInt64) {
+        let (apps, folderApps) = currentVisibleAppInfos()
+        for app in apps {
+            iconTextures.prepareAsync(app: app, appearance: appearance, generation: generation)
+        }
+        AppIconImageProvider.shared.prepare(apps: folderApps, appearance: appearance, generation: generation)
+        startDisplayLink()
+    }
+
+    private func checkAndStartAppearanceCrossfadeIfNeeded(now: CFTimeInterval) {
+        guard let target = pendingTargetAppearance else { return }
+        let (apps, folderApps) = currentVisibleAppInfos()
+        let targetName = target.name.rawValue
+        let appsReady = apps.allSatisfy { iconTextures.hasCachedTexture(for: $0, appearanceName: targetName) }
+        let foldersReady = folderApps.allSatisfy { AppIconImageProvider.shared.hasCachedCGImage(for: $0, appearanceName: targetName) }
+        let timedOut = now >= appearancePrepDeadline
+
+        if (appsReady && foldersReady) || timedOut {
+            let fromApp = NSAppearance(named: lastEffectiveAppearanceName ?? .aqua) ?? effectiveAppearance
+            activeAppearanceCrossfade = AppearanceCrossfade(
+                fromAppearance: fromApp,
+                toAppearance: target,
+                startTime: now,
+                duration: appearanceCrossfadeDuration,
+                fromProgress: 0.0,
+                generation: pendingAppearanceGeneration
+            )
+            pendingTargetAppearance = nil
+            startDisplayLink()
         }
     }
 
@@ -852,9 +960,53 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         return o;
     }
 
+    float4 ql_sample_icon_texture(
+        texture2d<float> tex,
+        sampler samp,
+        float2 uv,
+        float kind,
+        float modeQuality
+    ) {
+        if (kind > 2.5) {
+            return tex.sample(samp, uv);
+        } else if (modeQuality > 0.5) {
+            const float offsets[4] = { -0.75, -0.25, 0.25, 0.75 };
+            const float weights[4] = { 1.0, 3.0, 3.0, 1.0 };
+            float2 pixelDx = dfdx(uv);
+            float2 pixelDy = dfdy(uv);
+            float4 c = float4(0.0);
+            for (uint y = 0; y < 4; ++y) {
+                for (uint x = 0; x < 4; ++x) {
+                    float2 sampleUV = uv
+                        + pixelDx * offsets[x]
+                        + pixelDy * offsets[y];
+                    c += tex.sample(samp, sampleUV) * weights[x] * weights[y];
+                }
+            }
+            return c * (1.0 / 64.0);
+        } else {
+            float2 texSize = float2(tex.get_width(), tex.get_height());
+            float2 uvDx = dfdx(uv);
+            float2 uvDy = dfdy(uv);
+            float footprint = max(length(uvDx * texSize), length(uvDy * texSize));
+            if (footprint <= 1.4) {
+                return tex.sample(samp, uv);
+            } else {
+                const float o = 0.3;
+                return (
+                    tex.sample(samp, uv + uvDx * (-o) + uvDy * (-o))
+                  + tex.sample(samp, uv + uvDx * ( o) + uvDy * (-o))
+                  + tex.sample(samp, uv + uvDx * (-o) + uvDy * ( o))
+                  + tex.sample(samp, uv + uvDx * ( o) + uvDy * ( o))
+                ) * 0.25;
+            }
+        }
+    }
+
     fragment float4 ql_icon_fragment(
         VertexOut in [[stage_in]],
         texture2d<float> atlas [[texture(0)]],
+        texture2d<float> atlasNext [[texture(1)]],
         sampler samp [[sampler(0)]],
         constant Uniforms &u [[buffer(1)]])
     {
@@ -871,46 +1023,18 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         // sample(): quality = rgba16Float linear; performance = rgba8Unorm_srgb
         // (hardware decodes to the same linear light domain).
+        // u.mode.y is crossfade progress (0 = 100% atlas, 1 = 100% atlasNext).
         float4 c;
-        if (in.kind > 2.5) {
-            // Kind 3: Mini-icon thumbnail / pixel-aligned preview icon.
-            // Direct bilinear sampling matches CALayer preview rendering.
-            c = atlas.sample(samp, in.uv);
-        } else if (u.mode.x > 0.5) {
-            // Quality: 4x linear float16 + 4×4 separable binomial in screen space.
-            const float offsets[4] = { -0.75, -0.25, 0.25, 0.75 };
-            const float weights[4] = { 1.0, 3.0, 3.0, 1.0 };
-            float2 pixelDx = dfdx(in.uv);
-            float2 pixelDy = dfdy(in.uv);
-            c = float4(0.0);
-            for (uint y = 0; y < 4; ++y) {
-                for (uint x = 0; x < 4; ++x) {
-                    float2 sampleUV = in.uv
-                        + pixelDx * offsets[x]
-                        + pixelDy * offsets[y];
-                    c += atlas.sample(samp, sampleUV) * weights[x] * weights[y];
-                }
-            }
-            c *= (1.0 / 64.0);
+        if (u.mode.y > 0.0001 && u.mode.y < 0.9999) {
+            float4 c0 = ql_sample_icon_texture(atlas, samp, in.uv, in.kind, u.mode.x);
+            float4 c1 = ql_sample_icon_texture(atlasNext, samp, in.uv, in.kind, u.mode.x);
+            c = mix(c0, c1, u.mode.y);
+        } else if (u.mode.y >= 0.9999) {
+            c = ql_sample_icon_texture(atlasNext, samp, in.uv, in.kind, u.mode.x);
         } else {
-            // Performance: 2x sRGB 8-bit — hardware bilinear in decoded linear light.
-            // Multi-tap when clearly minifying (entrance scale / zoom).
-            float2 texSize = float2(atlas.get_width(), atlas.get_height());
-            float2 uvDx = dfdx(in.uv);
-            float2 uvDy = dfdy(in.uv);
-            float footprint = max(length(uvDx * texSize), length(uvDy * texSize));
-            if (footprint <= 1.4) {
-                c = atlas.sample(samp, in.uv);
-            } else {
-                const float o = 0.3;
-                c = (
-                    atlas.sample(samp, in.uv + uvDx * (-o) + uvDy * (-o))
-                  + atlas.sample(samp, in.uv + uvDx * ( o) + uvDy * (-o))
-                  + atlas.sample(samp, in.uv + uvDx * (-o) + uvDy * ( o))
-                  + atlas.sample(samp, in.uv + uvDx * ( o) + uvDy * ( o))
-                ) * 0.25;
-            }
+            c = ql_sample_icon_texture(atlas, samp, in.uv, in.kind, u.mode.x);
         }
+
         float pressed = (in.kind > 1.5 && in.kind < 2.5) ? 0.4 : 1.0;
         // Pressed brightness is a real premultiplied opacity, not an RGB-only
         // darkening. Keeping RGB and alpha on the same curve prevents a launched
@@ -951,6 +1075,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             && !animatingPresentation
             && contentTransitionPhase == .idle
             && !isFolderTransitionActive
+            && !isAppearanceCrossfadeActive
+            && pendingTargetAppearance == nil
             && !isReorderAnimationActive
             && !dragInteractionActive
             && dragReleaseAnimation == nil
@@ -1503,8 +1629,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
     @objc private func iconTexturesUpdated() {
         guard !isHoldingPresentationPrime else { return }
+        if pendingTargetAppearance != nil {
+            checkAndStartAppearanceCrossfadeIfNeeded(now: CACurrentMediaTime())
+        }
         // Background bakes finished — paint without doing work on this path.
-        if store.openedFolderID != nil, IconRenderQuality.current == .quality, folderTransition == nil {
+        if store.openedFolderID != nil, IconRenderQuality.current == .quality, folderTransition == nil, !isAppearanceCrossfadeActive, pendingTargetAppearance == nil {
             syncFolderDepthBackdropIfNeeded()
         }
         needsDisplay = true
@@ -3237,6 +3366,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         midX: CGFloat,
         midY: CGFloat,
         iconDrawTextures: inout [MTLTexture],
+        iconDrawNextTextures: inout [MTLTexture],
         iconSprites: inout [SpriteInstance],
         labelsBySheet: inout [[SpriteInstance]],
         folderPlates: inout [FolderPlateModel]
@@ -3283,6 +3413,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 midX: midX,
                 midY: midY,
                 iconDrawTextures: &iconDrawTextures,
+                iconDrawNextTextures: &iconDrawNextTextures,
                 iconSprites: &iconSprites,
                 labelsBySheet: &labelsBySheet,
                 folderPlates: &folderPlates,
@@ -3496,6 +3627,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 let drawnAlpha = alphaScale * Float(iconAlpha) * iconAlphaScale
                 if let texture, drawnAlpha > 0.01 {
                     iconDrawTextures.append(texture)
+                    iconDrawNextTextures.append(texture)
                     let iconKind: Float = (isPreviewIcon && local < 0.35) ? 3 : 1
                     let snapToPixels = isPreviewIcon && local < 0.1
                     iconSprites.append(
@@ -3547,6 +3679,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     let drawnAlpha = alphaScale * previewProgress
                     if let texture = iconTextures.cachedTexture(for: app), drawnAlpha > 0.002 {
                         iconDrawTextures.append(texture)
+                        iconDrawNextTextures.append(texture)
                         iconSprites.append(
                             .icon(
                                 center: miniCenter,
@@ -3672,6 +3805,41 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let now = CACurrentMediaTime()
         let dt = min(max(now - lastFrameTime, 1.0 / 240.0), 1.0 / 30.0)
         lastFrameTime = now
+
+        if pendingTargetAppearance != nil {
+            checkAndStartAppearanceCrossfadeIfNeeded(now: now)
+        }
+        if let crossfade = activeAppearanceCrossfade {
+            let elapsed = now - crossfade.startTime
+            let rawT = min(1.0, max(0.0, elapsed / crossfade.duration))
+            appearanceCrossfadeProgress = crossfade.fromProgress + (1.0 - crossfade.fromProgress) * CGFloat(rawT)
+            onAppearanceCrossfadeProgress?(appearanceCrossfadeProgress, crossfade.fromAppearance, crossfade.toAppearance)
+            if rawT >= 1.0 {
+                appearanceCrossfadeProgress = 1.0
+                activeAppearanceCrossfade = nil
+                lastEffectiveAppearanceName = crossfade.toAppearance.name
+                iconTextures.commitAppearanceChange(crossfade.toAppearance)
+                AppIconImageProvider.shared.commitAppearanceChange(crossfade.toAppearance)
+                onAppearanceCrossfadeCompleted?(crossfade.toAppearance)
+                if IconRenderQuality.current == .quality, let folderID = store.openedFolderID {
+                    onFolderTransitionBakeBackdrop?(
+                        folderID,
+                        folderTransitionGeneration,
+                        displayedItems,
+                        currentPageOffset,
+                        canvasScale,
+                        canvasPan,
+                        canvasStateUsesAdaptiveLayout
+                    )
+                }
+                scheduleLazyResourcePrewarming(
+                    around: max(0, Int(store.pageOffset.rounded())),
+                    prune: true
+                )
+                appearanceCrossfadeProgress = 0.0
+            }
+        }
+
         tickContentTransition(now: now)
         tickFolderTransition(now: now)
         tickDragVisualAnimations(now: now, dt: dt)
@@ -3795,12 +3963,14 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         // Reuse CPU scratch capacity and only replace GPU storage when a slot must
         // grow. Typical frames perform no heap or Metal buffer allocation here.
         iconDrawTextures.removeAll(keepingCapacity: true)
+        iconDrawNextTextures.removeAll(keepingCapacity: true)
         iconSprites.removeAll(keepingCapacity: true)
         if iconSprites.capacity == 0 {
             let maximumVisibleSprites = GridLayoutPreset.current.isInfiniteCanvas
                 ? displayedItems.count * 2 + 1
                 : GridMetrics.pageCapacity * 3 + 1
             iconDrawTextures.reserveCapacity(maximumVisibleSprites)
+            iconDrawNextTextures.reserveCapacity(maximumVisibleSprites)
             iconSprites.reserveCapacity(maximumVisibleSprites)
             textSprites.reserveCapacity(maximumVisibleSprites)
         }
@@ -3823,6 +3993,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 midX: midX,
                 midY: midY,
                 iconDrawTextures: &iconDrawTextures,
+                iconDrawNextTextures: &iconDrawNextTextures,
                 iconSprites: &iconSprites,
                 labelsBySheet: &labelsBySheet,
                 folderPlates: &folderPlates
@@ -3837,6 +4008,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 midX: midX,
                 midY: midY,
                 iconDrawTextures: &iconDrawTextures,
+                iconDrawNextTextures: &iconDrawNextTextures,
                 iconSprites: &iconSprites,
                 labelsBySheet: &labelsBySheet,
                 folderPlates: &folderPlates
@@ -3859,7 +4031,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         var uniforms = FrameUniforms(
             viewport: SIMD2(Float(bounds.width), Float(bounds.height)),
             drawable: SIMD2(Float(drawableSize.width), Float(drawableSize.height)),
-            mode: SIMD2(IconRenderQuality.current.shaderQualityMode, 0)
+            mode: SIMD2(IconRenderQuality.current.shaderQualityMode, Float(appearanceCrossfadeProgress))
         )
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passDescriptor) else {
@@ -3907,12 +4079,14 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             }
             for index in 0..<regularCount {
                 let texture = iconDrawTextures[index]
+                let nextTexture = iconDrawNextTextures.indices.contains(index) ? iconDrawNextTextures[index] : texture
                 encoder.setVertexBuffer(
                     iconBuffer,
                     offset: index * MemoryLayout<SpriteInstance>.stride,
                     index: 0
                 )
                 encoder.setFragmentTexture(texture, index: 0)
+                encoder.setFragmentTexture(nextTexture, index: 1)
                 encoder.drawPrimitives(
                     type: .triangle,
                     vertexStart: 0,
@@ -3926,12 +4100,14 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 }
                 for index in regularCount..<iconSprites.count {
                     let texture = iconDrawTextures[index]
+                    let nextTexture = iconDrawNextTextures.indices.contains(index) ? iconDrawNextTextures[index] : texture
                     encoder.setVertexBuffer(
                         iconBuffer,
                         offset: index * MemoryLayout<SpriteInstance>.stride,
                         index: 0
                     )
                     encoder.setFragmentTexture(texture, index: 0)
+                    encoder.setFragmentTexture(nextTexture, index: 1)
                     encoder.drawPrimitives(
                         type: .triangle,
                         vertexStart: 0,
@@ -4281,7 +4457,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         now: CFTimeInterval
     ) -> Float {
         guard IconRenderQuality.current.usesLazyTextureLoading else { return 1 }
-        if isFolderTransitionActive {
+        if isFolderTransitionActive || isAppearanceCrossfadeActive || pendingTargetAppearance != nil {
             return hasTexture ? 1 : 0
         }
         if suppressLazyIconReveal || store.isApplyingRenderQuality {
@@ -4309,12 +4485,17 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
     /// - Parameter allowCreate: `false` during interactive frames so paging never
     ///   stalls on CG→Metal uploads (those run on the icon bake queue).
-    private func iconTexture(for item: LaunchpadItem, allowCreate: Bool = false) -> MTLTexture? {
+    private func iconTexture(
+        for item: LaunchpadItem,
+        appearanceName: String? = nil,
+        allowFallback: Bool = true,
+        allowCreate: Bool = false
+    ) -> MTLTexture? {
         switch item {
         case .app(let app):
             return allowCreate
                 ? iconTextures.texture(for: app, allowCreate: true)
-                : iconTextures.cachedTexture(for: app)
+                : iconTextures.cachedTexture(for: app, appearanceName: appearanceName, allowFallback: allowFallback)
         case .folder:
             return nil
         }
@@ -4359,6 +4540,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
 
         var iconDrawTextures: [MTLTexture] = []
+        var iconDrawNextTextures: [MTLTexture] = []
         var iconSprites: [SpriteInstance] = []
         var labelsBySheet: [[SpriteInstance]] = []
         while labelsBySheet.count < textAtlas.sheets.count {
@@ -4378,6 +4560,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             midX: midX,
             midY: midY,
             iconDrawTextures: &iconDrawTextures,
+            iconDrawNextTextures: &iconDrawNextTextures,
             iconSprites: &iconSprites,
             labelsBySheet: &labelsBySheet,
             folderPlates: &folderPlates,
@@ -4406,8 +4589,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         encoder.setFragmentSamplerState(iconSampler, index: 0)
         for i in iconSprites.indices {
             var sprite = iconSprites[i]
+            let tex = iconDrawTextures[i]
+            let nextTex = iconDrawNextTextures.indices.contains(i) ? iconDrawNextTextures[i] : tex
             encoder.setVertexBytes(&sprite, length: MemoryLayout<SpriteInstance>.stride, index: 0)
-            encoder.setFragmentTexture(iconDrawTextures[i], index: 0)
+            encoder.setFragmentTexture(tex, index: 0)
+            encoder.setFragmentTexture(nextTex, index: 1)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: 1)
         }
 
@@ -4438,6 +4624,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         midX: CGFloat,
         midY: CGFloat,
         iconDrawTextures: inout [MTLTexture],
+        iconDrawNextTextures: inout [MTLTexture],
         iconSprites: inout [SpriteInstance],
         labelsBySheet: inout [[SpriteInstance]],
         folderPlates: inout [FolderPlateModel],
@@ -4522,12 +4709,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let showLabels = UserDefaults.standard.object(forKey: "showLabels") as? Bool ?? true
         // Full-image UV for per-icon textures.
         let fullUV = SIMD4<Float>(0, 0, 1, 1)
-        var draggedIconDraw: (texture: MTLTexture, sprite: SpriteInstance)?
+        var draggedIconDraw: (texture: MTLTexture, nextTexture: MTLTexture, sprite: SpriteInstance)?
         let pileAnchorID = draggedAppID ?? dragReleaseAnimation?.itemID
         let pileLayerIDs = Array(items.compactMap { item -> String? in
             selectedItemIDs.contains(item.id) && item.id != pileAnchorID ? item.id : nil
         }.prefix(3))
-        var pileIconDraws: [(layer: Int, texture: MTLTexture, sprite: SpriteInstance)] = []
+        var pileIconDraws: [(layer: Int, texture: MTLTexture, nextTexture: MTLTexture, sprite: SpriteInstance)] = []
 
         for page in first...last {
             let start = page * cap
@@ -4690,7 +4877,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 // Resolve the transparent presentation frame too, but never
                 // rasterize or upload a cache miss from the draw path. The
                 // resident/page-window prewarmer fills the same cache off-main.
-                let texture = iconTexture(for: item, allowCreate: false)
+                let crossfadeTargetName = activeAppearanceCrossfade?.toAppearance.name.rawValue ?? pendingTargetAppearance?.name.rawValue
+                let texture = iconTexture(for: item, allowFallback: true, allowCreate: false)
+                let nextTexture: MTLTexture? = if let crossfadeTargetName {
+                    iconTexture(for: item, appearanceName: crossfadeTargetName, allowFallback: false, allowCreate: false) ?? texture
+                } else {
+                    texture
+                }
                 guard alpha > 0.002 else { continue }
                 // Folder previews are rendered by FolderGlassHostView,
                 // so folders always count as ready for lazy reveal.
@@ -4789,9 +4982,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                    !isDragged,
                    (isSelectedAtRest || isKeyboardFocused) {
                     let focusTexture = texture ?? fallbackTexture
+                    let nextFocusTexture = nextTexture ?? focusTexture
                     // Insert at the front so the focus plate is encoded before
                     // every icon and can never cover a neighbouring sprite.
                     iconDrawTextures.insert(focusTexture, at: 0)
+                    iconDrawNextTextures.insert(nextFocusTexture, at: 0)
                     iconSprites.insert(
                         .focus(center: c, size: iconSize * 1.06, alpha: drawnAlpha),
                         at: 0
@@ -4815,6 +5010,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                         pileIconDraws.append((
                             layer,
                             texture,
+                            nextTexture ?? texture,
                             .icon(center: stackCenter,
                                   size: iconSize * (1 - 0.045 * CGFloat(layer + 1) * progress),
                                   uv: fullUV,
@@ -4833,9 +5029,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     if isDragged || isReturning {
                         // Draw the dragged item last so it remains visible when
                         // the pointer is over another icon.
-                        draggedIconDraw = (texture, iconSprite)
+                        draggedIconDraw = (texture, nextTexture ?? texture, iconSprite)
                     } else {
                         iconDrawTextures.append(texture)
+                        iconDrawNextTextures.append(nextTexture ?? texture)
                         iconSprites.append(iconSprite)
                     }
                 }
@@ -4879,10 +5076,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         activeFolderCardMetricsForScissor = isOpenedFolder ? activeCardMetrics : nil
         for layer in pileIconDraws.sorted(by: { $0.layer > $1.layer }) {
             iconDrawTextures.append(layer.texture)
+            iconDrawNextTextures.append(layer.nextTexture)
             iconSprites.append(layer.sprite)
         }
         if let draggedIconDraw {
             iconDrawTextures.append(draggedIconDraw.texture)
+            iconDrawNextTextures.append(draggedIconDraw.nextTexture)
             iconSprites.append(draggedIconDraw.sprite)
         }
         return isOpenedFolder ? (0.28 * alphaScale) : 0

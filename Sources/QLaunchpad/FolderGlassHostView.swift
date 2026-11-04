@@ -42,11 +42,14 @@ struct FolderPlateModel: Equatable, Sendable {
 final class AppIconImageProvider: @unchecked Sendable {
     static let shared = AppIconImageProvider()
     private let cache = NSCache<NSString, CGImage>()
+    private var cachedKeys = Set<String>()
     private let queue = DispatchQueue(label: "com.qzrzz.qlaunchpad.preview-load", qos: .userInitiated)
     private let lock = NSLock()
     private var inflightCallbacks: [String: [@MainActor (CGImage?) -> Void]] = [:]
     private var currentAppearanceName: String = (NSApp.effectiveAppearance.name).rawValue
     private var currentAppearance: NSAppearance = NSApp.effectiveAppearance
+    private var targetAppearanceName: String?
+    private var targetAppearance: NSAppearance?
     private var appearanceGeneration: UInt64 = 0
 
     private init() {
@@ -64,8 +67,35 @@ final class AppIconImageProvider: @unchecked Sendable {
         }
         currentAppearanceName = name
         currentAppearance = appearance
+        targetAppearanceName = nil
+        targetAppearance = nil
         appearanceGeneration &+= 1
-        cache.removeAllObjects()
+        inflightCallbacks.removeAll()
+        lock.unlock()
+    }
+
+    func setTargetAppearance(_ appearance: NSAppearance, generation: UInt64) {
+        let name = appearance.name.rawValue
+        lock.lock()
+        targetAppearanceName = name
+        targetAppearance = appearance
+        appearanceGeneration = generation
+        inflightCallbacks.removeAll()
+        lock.unlock()
+    }
+
+    func commitAppearanceChange(_ appearance: NSAppearance) {
+        let name = appearance.name.rawValue
+        lock.lock()
+        currentAppearanceName = name
+        currentAppearance = appearance
+        targetAppearanceName = nil
+        targetAppearance = nil
+        let toRemove = cachedKeys.filter { !$0.hasSuffix("|\(name)") }
+        for k in toRemove {
+            cache.removeObject(forKey: k as NSString)
+            cachedKeys.remove(k)
+        }
         inflightCallbacks.removeAll()
         lock.unlock()
     }
@@ -74,18 +104,30 @@ final class AppIconImageProvider: @unchecked Sendable {
         "\(app.url.path)|\(appearanceName)" as NSString
     }
 
-    func hasCachedCGImage(for app: AppInfo) -> Bool {
-        lock.lock()
-        let key = cacheKey(for: app, appearanceName: currentAppearanceName)
-        lock.unlock()
-        return cache.object(forKey: key) != nil
+    func hasCachedCGImage(for app: AppInfo, appearanceName: String? = nil) -> Bool {
+        cachedCGImage(for: app, appearanceName: appearanceName, allowFallback: false) != nil
     }
 
-    func cachedCGImage(for app: AppInfo) -> CGImage? {
+    func cachedCGImage(
+        for app: AppInfo,
+        appearanceName: String? = nil,
+        allowFallback: Bool = true
+    ) -> CGImage? {
         lock.lock()
-        let key = cacheKey(for: app, appearanceName: currentAppearanceName)
-        lock.unlock()
-        return cache.object(forKey: key)
+        defer { lock.unlock() }
+        let name = appearanceName ?? currentAppearanceName
+        let key = cacheKey(for: app, appearanceName: name)
+        if let exact = cache.object(forKey: key) {
+            return exact
+        }
+        guard allowFallback else { return nil }
+        let prefix = "\(app.url.path)|"
+        for k in cachedKeys {
+            if k.hasPrefix(prefix), let img = cache.object(forKey: k as NSString) {
+                return img
+            }
+        }
+        return nil
     }
 
     /// Returns cached image if available. If missing, only creates synchronously
@@ -109,21 +151,29 @@ final class AppIconImageProvider: @unchecked Sendable {
         cgImage(for: app, allowCreate: true)
     }
 
-    func prepare(apps: [AppInfo]) {
+    func prepare(
+        apps: [AppInfo],
+        appearance: NSAppearance? = nil,
+        generation: UInt64? = nil
+    ) {
         for app in apps {
-            autoreleasepool {
-                _ = prepare(app: app)
-            }
+            loadAsync(for: app, appearance: appearance, generation: generation) { _ in }
         }
     }
 
-    func loadAsync(for app: AppInfo, completion: @escaping @MainActor (CGImage?) -> Void) {
+    func loadAsync(
+        for app: AppInfo,
+        appearance: NSAppearance? = nil,
+        generation: UInt64? = nil,
+        completion: @escaping @MainActor (CGImage?) -> Void
+    ) {
         let path = app.url.path
         lock.lock()
-        let key = cacheKey(for: app, appearanceName: currentAppearanceName)
-        let reqKey = "\(path)|\(currentAppearanceName)"
-        let reqGen = appearanceGeneration
-        let reqAppearance = currentAppearance
+        let targetApp = appearance ?? targetAppearance ?? currentAppearance
+        let targetName = targetApp.name.rawValue
+        let key = cacheKey(for: app, appearanceName: targetName)
+        let reqKey = "\(path)|\(targetName)"
+        let reqGen = generation ?? appearanceGeneration
         if let cached = cache.object(forKey: key) {
             lock.unlock()
             DispatchQueue.main.async {
@@ -155,7 +205,7 @@ final class AppIconImageProvider: @unchecked Sendable {
             if let cached = self.cache.object(forKey: key) {
                 cgImage = cached
             } else {
-                cgImage = self.createAndCacheImage(for: app, key: key, appearance: reqAppearance, generation: reqGen)
+                cgImage = self.createAndCacheImage(for: app, key: key, appearance: targetApp, generation: reqGen)
             }
 
             self.lock.lock()
@@ -197,13 +247,15 @@ final class AppIconImageProvider: @unchecked Sendable {
         }
         let cost = cg.bytesPerRow * cg.height
         cache.setObject(cg, forKey: key, cost: cost)
+        cachedKeys.insert(key as String)
         lock.unlock()
         return cg
     }
 
     func clear() {
-        cache.removeAllObjects()
         lock.lock()
+        cache.removeAllObjects()
+        cachedKeys.removeAll()
         inflightCallbacks.removeAll()
         appearanceGeneration &+= 1
         lock.unlock()
@@ -234,6 +286,7 @@ private final class FolderGlassPlateItemView: NSView {
     private let sunkContainerView = FlippedContainerView()
     private let contentView = FlippedContainerView()
     private var previewLayers: [CALayer] = []
+    private var crossfadePreviewLayers: [CALayer] = []
     private var currentDisplayMemberIDs: [String] = []
 
     private var lastBoundsSize: CGSize = .zero
@@ -322,7 +375,7 @@ private final class FolderGlassPlateItemView: NSView {
         contentView.autoresizingMask = [.width, .height]
         sunkContainerView.addSubview(contentView, positioned: .above, relativeTo: visual)
 
-        // Pre-create 9 reusable CALayers for the 3×3 grid
+        // Pre-create 9 reusable CALayers for the 3×3 grid plus 9 crossfade overlay layers
         for _ in 0..<FolderPreviewLayout.capacity {
             let layer = CALayer()
             layer.contentsGravity = .resizeAspect
@@ -334,6 +387,18 @@ private final class FolderGlassPlateItemView: NSView {
             layer.isHidden = true
             contentView.layer?.addSublayer(layer)
             previewLayers.append(layer)
+
+            let crossLayer = CALayer()
+            crossLayer.contentsGravity = .resizeAspect
+            crossLayer.masksToBounds = false
+            crossLayer.shadowColor = NSColor.black.withAlphaComponent(0.24).cgColor
+            crossLayer.shadowOpacity = 1.0
+            crossLayer.shadowOffset = CGSize(width: 0, height: 1)
+            crossLayer.shadowRadius = 1.5
+            crossLayer.isHidden = true
+            crossLayer.opacity = 0.0
+            contentView.layer?.addSublayer(crossLayer)
+            crossfadePreviewLayers.append(crossLayer)
         }
     }
 
@@ -381,18 +446,7 @@ private final class FolderGlassPlateItemView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         updateFallbackAppearance()
-        lastAppearanceName = nil
-        if currentPreviewVisible, !currentMembers.isEmpty {
-            update(
-                rect: frame,
-                cornerRadius: lastCornerRadius,
-                alpha: lastAlpha,
-                members: currentMembers,
-                previewVisible: currentPreviewVisible,
-                iconSize: currentIconSize,
-                incomingDropAppID: currentIncomingDropAppID
-            )
-        }
+        // Appearance crossfade is coordinated uniformly via updateAppearanceCrossfade / commitAppearanceCrossfade
     }
 
     private func updateFallbackAppearance() {
@@ -501,6 +555,9 @@ private final class FolderGlassPlateItemView: NSView {
                 // Ghost icon elimination: hide mini icon if this app is actively being dragged over the folder
                 if let incomingDropAppID, app.id == incomingDropAppID {
                     layer.isHidden = true
+                    if index < crossfadePreviewLayers.count {
+                        crossfadePreviewLayers[index].isHidden = true
+                    }
                     continue
                 }
 
@@ -521,12 +578,10 @@ private final class FolderGlassPlateItemView: NSView {
                 layer.shadowOffset = CGSize(width: 0, height: 1.0 * (side / 128.0))
                 layer.shadowRadius = 1.5 * (side / 128.0)
 
-                if let cgImage = AppIconImageProvider.shared.cachedCGImage(for: app) {
+                if let cgImage = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appearanceName, allowFallback: true) {
                     layer.contents = cgImage
                     layer.isHidden = false
                 } else {
-                    layer.contents = nil
-                    layer.isHidden = true
                     AppIconImageProvider.shared.loadAsync(for: app) { [weak self, weak layer] cgImage in
                         guard let self, let layer, let cgImage else { return }
                         guard self.currentDisplayMemberIDs.indices.contains(index),
@@ -537,8 +592,86 @@ private final class FolderGlassPlateItemView: NSView {
                 }
             } else {
                 layer.isHidden = true
+                if index < crossfadePreviewLayers.count {
+                    crossfadePreviewLayers[index].isHidden = true
+                }
             }
         }
+    }
+
+    func updateAppearanceCrossfade(
+        progress: CGFloat,
+        fromAppearance: NSAppearance,
+        toAppearance: NSAppearance
+    ) {
+        guard currentPreviewVisible, !currentMembers.isEmpty else { return }
+        let displayMembers = Array(currentMembers.prefix(FolderPreviewLayout.capacity))
+        let toName = toAppearance.name.rawValue
+        let fromName = fromAppearance.name.rawValue
+        let p = Float(min(1.0, max(0.0, progress)))
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        for (index, layer) in previewLayers.enumerated() {
+            guard index < displayMembers.count, index < crossfadePreviewLayers.count else {
+                continue
+            }
+            let app = displayMembers[index]
+            if let incoming = currentIncomingDropAppID, app.id == incoming {
+                layer.isHidden = true
+                crossfadePreviewLayers[index].isHidden = true
+                continue
+            }
+            let crossLayer = crossfadePreviewLayers[index]
+            crossLayer.frame = layer.frame
+            crossLayer.contentsScale = layer.contentsScale
+            crossLayer.shadowOffset = layer.shadowOffset
+            crossLayer.shadowRadius = layer.shadowRadius
+
+            let newImg = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: toName, allowFallback: false)
+                ?? AppIconImageProvider.shared.cachedCGImage(for: app)
+            let oldImg = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: fromName, allowFallback: false)
+                ?? AppIconImageProvider.shared.cachedCGImage(for: app, allowFallback: true)
+
+            if let oldImg {
+                layer.contents = oldImg
+                layer.isHidden = false
+                layer.opacity = 1.0 - p
+            }
+            if let newImg {
+                crossLayer.contents = newImg
+                crossLayer.isHidden = false
+                crossLayer.opacity = p
+            } else {
+                crossLayer.isHidden = true
+            }
+        }
+        CATransaction.commit()
+    }
+
+    func commitAppearanceCrossfade(toAppearance: NSAppearance) {
+        let toName = toAppearance.name.rawValue
+        lastAppearanceName = toName
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let displayMembers = Array(currentMembers.prefix(FolderPreviewLayout.capacity))
+        for (index, layer) in previewLayers.enumerated() {
+            if index < displayMembers.count {
+                let app = displayMembers[index]
+                if let newImg = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: toName, allowFallback: true) {
+                    layer.contents = newImg
+                }
+                layer.opacity = 1.0
+            }
+            if index < crossfadePreviewLayers.count {
+                let crossLayer = crossfadePreviewLayers[index]
+                crossLayer.contents = nil
+                crossLayer.opacity = 0.0
+                crossLayer.isHidden = true
+            }
+        }
+        CATransaction.commit()
     }
 
     /// Updates material cross-fade (driven by materialProgress in [0, 1]) and Gaussian blur (driven by progress in [0, 1]).
@@ -822,6 +955,26 @@ final class FolderGlassHostView: NSView {
         AppIconImageProvider.shared.setAppearance(effectiveAppearance)
         for item in itemsByID.values {
             item.viewDidChangeEffectiveAppearance()
+        }
+    }
+
+    func updateAppearanceCrossfade(
+        progress: CGFloat,
+        fromAppearance: NSAppearance,
+        toAppearance: NSAppearance
+    ) {
+        for item in itemsByID.values {
+            item.updateAppearanceCrossfade(
+                progress: progress,
+                fromAppearance: fromAppearance,
+                toAppearance: toAppearance
+            )
+        }
+    }
+
+    func commitAppearanceCrossfade(toAppearance: NSAppearance) {
+        for item in itemsByID.values {
+            item.commitAppearanceCrossfade(toAppearance: toAppearance)
         }
     }
 

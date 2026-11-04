@@ -528,6 +528,30 @@ final class LaunchpadContainerView: NSView {
                 self.dragFolderHostView.removeAllPlates()
             }
         }
+        metalView.onAppearanceCrossfadeProgress = { [weak self] progress, fromApp, toApp in
+            guard let self else { return }
+            self.backgroundFolderHostView.updateAppearanceCrossfade(
+                progress: progress,
+                fromAppearance: fromApp,
+                toAppearance: toApp
+            )
+            self.foregroundFolderHostView.updateAppearanceCrossfade(
+                progress: progress,
+                fromAppearance: fromApp,
+                toAppearance: toApp
+            )
+            self.dragFolderHostView.updateAppearanceCrossfade(
+                progress: progress,
+                fromAppearance: fromApp,
+                toAppearance: toApp
+            )
+        }
+        metalView.onAppearanceCrossfadeCompleted = { [weak self] toApp in
+            guard let self else { return }
+            self.backgroundFolderHostView.commitAppearanceCrossfade(toAppearance: toApp)
+            self.foregroundFolderHostView.commitAppearanceCrossfade(toAppearance: toApp)
+            self.dragFolderHostView.commitAppearanceCrossfade(toAppearance: toApp)
+        }
         metalView.onInteractiveDismissProgress = { [weak self] progress in
             self?.onInteractiveDismissProgress?(progress)
         }

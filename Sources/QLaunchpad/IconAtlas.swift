@@ -49,6 +49,8 @@ final class IconTextureStore: @unchecked Sendable {
     private var cachedQualityRaw = IconRenderQuality.current.rawValue
     private var currentAppearanceName = (NSApp.effectiveAppearance.name).rawValue
     private var currentAppearance: NSAppearance = NSApp.effectiveAppearance
+    private var targetAppearanceName: String?
+    private var targetAppearance: NSAppearance?
     private var appearanceGeneration: UInt64 = 0
 
     private static let linearDisplayP3 = CGColorSpace(
@@ -84,7 +86,7 @@ final class IconTextureStore: @unchecked Sendable {
         cacheLock.unlock()
     }
 
-    /// Drop cached textures and in-flight bakes when system effective appearance flips.
+    /// Update appearance immediately without crossfade (used when window is hidden or for initial setup).
     func setAppearance(_ appearance: NSAppearance) {
         let name = appearance.name.rawValue
         cacheLock.lock()
@@ -94,9 +96,34 @@ final class IconTextureStore: @unchecked Sendable {
         }
         currentAppearanceName = name
         currentAppearance = appearance
+        targetAppearanceName = nil
+        targetAppearance = nil
         appearanceGeneration &+= 1
-        cache.removeAll(keepingCapacity: true)
         inflightBakes.removeAll(keepingCapacity: true)
+        cacheLock.unlock()
+    }
+
+    /// Prepare a target appearance for crossfade. Keeps existing textures intact for fallback.
+    func setTargetAppearance(_ appearance: NSAppearance, generation: UInt64) {
+        let name = appearance.name.rawValue
+        cacheLock.lock()
+        targetAppearanceName = name
+        targetAppearance = appearance
+        appearanceGeneration = generation
+        inflightBakes.removeAll(keepingCapacity: true)
+        cacheLock.unlock()
+    }
+
+    /// Commit the appearance change when crossfade completes. Prunes old appearance textures.
+    func commitAppearanceChange(_ appearance: NSAppearance) {
+        let name = appearance.name.rawValue
+        cacheLock.lock()
+        currentAppearanceName = name
+        currentAppearance = appearance
+        targetAppearanceName = nil
+        targetAppearance = nil
+        cache = cache.filter { $0.key.appearanceName == name }
+        inflightBakes = inflightBakes.filter { $0.appearanceName == name }
         cacheLock.unlock()
     }
 
@@ -157,16 +184,54 @@ final class IconTextureStore: @unchecked Sendable {
 
     /// Cache-only lookup for the Metal draw loop. Resource prewarming owns all
     /// production so rendering never starts a second CoreGraphics worker.
-    func cachedTexture(for app: AppInfo) -> MTLTexture? {
+    func cachedTexture(
+        for app: AppInfo,
+        appearanceName: String? = nil,
+        allowFallback: Bool = true
+    ) -> MTLTexture? {
         let quality = IconRenderQuality.current
         let requestedPixelSize = GridLayoutPreset.current.iconPixelSize(for: quality)
-        let key = cacheKey(for: app, pixelSize: requestedPixelSize, quality: quality.rawValue)
+        let name = appearanceName ?? currentAppearanceName
+        let key = cacheKey(
+            for: app,
+            pixelSize: requestedPixelSize,
+            quality: quality.rawValue,
+            appearanceName: name
+        )
         cacheLock.lock()
         defer { cacheLock.unlock() }
         guard pixelSize == requestedPixelSize, cachedQualityRaw == quality.rawValue else {
             return nil
         }
-        return cache[key]
+        if let exact = cache[key] {
+            return exact
+        }
+        guard allowFallback else { return nil }
+        for (k, texture) in cache {
+            if k.appID == app.id
+                && k.sourcePath == app.resourceSourcePath
+                && k.pixelSize == requestedPixelSize
+                && k.quality == quality.rawValue {
+                return texture
+            }
+        }
+        return nil
+    }
+
+    func hasCachedTexture(for app: AppInfo, appearanceName: String) -> Bool {
+        cachedTexture(for: app, appearanceName: appearanceName, allowFallback: false) != nil
+    }
+
+    func prepareAsync(app: AppInfo, appearance: NSAppearance, generation: UInt64) {
+        let quality = IconRenderQuality.current
+        let requestedPixelSize = GridLayoutPreset.current.iconPixelSize(for: quality)
+        enqueueBake(
+            app: app,
+            pixelSize: requestedPixelSize,
+            quality: quality,
+            appearance: appearance,
+            generation: generation
+        )
     }
 
     /// - Parameter allowCreate: When `false`, never rasterize on the caller
@@ -245,18 +310,36 @@ final class IconTextureStore: @unchecked Sendable {
         return texture
     }
 
-    private func cacheKey(for app: AppInfo, pixelSize: Int, quality: String) -> CacheKey {
+    private func cacheKey(
+        for app: AppInfo,
+        pixelSize: Int,
+        quality: String,
+        appearanceName: String? = nil
+    ) -> CacheKey {
         CacheKey(
             appID: app.id,
             sourcePath: app.resourceSourcePath,
             pixelSize: pixelSize,
             quality: quality,
-            appearanceName: currentAppearanceName
+            appearanceName: appearanceName ?? currentAppearanceName
         )
     }
 
-    private func enqueueBake(app: AppInfo, pixelSize: Int, quality: IconRenderQuality) {
-        let key = cacheKey(for: app, pixelSize: pixelSize, quality: quality.rawValue)
+    private func enqueueBake(
+        app: AppInfo,
+        pixelSize: Int,
+        quality: IconRenderQuality,
+        appearance: NSAppearance? = nil,
+        generation: UInt64? = nil
+    ) {
+        let bakeApp = appearance ?? targetAppearance ?? currentAppearance
+        let bakeGen = generation ?? appearanceGeneration
+        let key = cacheKey(
+            for: app,
+            pixelSize: pixelSize,
+            quality: quality.rawValue,
+            appearanceName: bakeApp.name.rawValue
+        )
         cacheLock.lock()
         if let allowed = allowedAppIDs, !allowed.contains(app.id) {
             cacheLock.unlock()
@@ -267,14 +350,13 @@ final class IconTextureStore: @unchecked Sendable {
             return
         }
         inflightBakes.insert(key)
-        let bakeGen = appearanceGeneration
-        let bakeApp = currentAppearance
         cacheLock.unlock()
 
         bakeQueue.async { [weak self] in
             guard let self else { return }
             self.cacheLock.lock()
             guard self.appearanceGeneration == bakeGen else {
+                self.inflightBakes.remove(key)
                 self.cacheLock.unlock()
                 return
             }
@@ -332,7 +414,12 @@ final class IconTextureStore: @unchecked Sendable {
             appearance: targetAppearance
         ) else { return nil }
 
-        let key = cacheKey(for: app, pixelSize: requestedPixelSize, quality: quality.rawValue)
+        let key = cacheKey(
+            for: app,
+            pixelSize: requestedPixelSize,
+            quality: quality.rawValue,
+            appearanceName: targetAppearance.name.rawValue
+        )
         cacheLock.lock()
         defer { cacheLock.unlock() }
         if let generation, generation != appearanceGeneration {
