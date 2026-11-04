@@ -330,6 +330,8 @@ private final class FolderGlassPlateItemView: NSView {
     private var blurFilter: CIFilter?
 
     func resetCachedState() {
+        previewRequestGeneration &+= 1
+        currentDisplayMemberIDs = []
         lastBoundsSize = .zero
         lastPreviewBoundsSize = .zero
         lastCornerRadius = -1
@@ -507,8 +509,6 @@ private final class FolderGlassPlateItemView: NSView {
         currentMembers = members
         currentPreviewVisible = previewVisible
         currentIncomingDropAppID = incomingDropAppID
-        previewRequestGeneration &+= 1
-        let requestGen = previewRequestGeneration
 
         frame = rect
         let currentBounds = bounds
@@ -542,6 +542,7 @@ private final class FolderGlassPlateItemView: NSView {
 
         guard previewVisible, !members.isEmpty else {
             if lastPreviewVisible != previewVisible || !lastMemberIDs.isEmpty {
+                previewRequestGeneration &+= 1
                 for layer in previewLayers {
                     layer.isHidden = true
                     layer.contents = nil
@@ -552,6 +553,7 @@ private final class FolderGlassPlateItemView: NSView {
                 }
                 lastPreviewVisible = previewVisible
                 lastMemberIDs = []
+                currentDisplayMemberIDs = []
             }
             return
         }
@@ -572,6 +574,13 @@ private final class FolderGlassPlateItemView: NSView {
         if contentUnchanged {
             return
         }
+
+        previewRequestGeneration &+= 1
+        let requestGen = previewRequestGeneration
+
+        let previousDisplayMemberIDs = currentDisplayMemberIDs
+        let previousAppearanceName = lastAppearanceName
+        let canRetainExistingImages = previousDisplayMemberIDs == memberIDs && previousAppearanceName == appearanceName
 
         lastPreviewBoundsSize = currentBounds.size
         lastMemberIDs = memberIDs
@@ -617,12 +626,16 @@ private final class FolderGlassPlateItemView: NSView {
                 layer.shadowOffset = CGSize(width: 0, height: 1.0 * (side / 128.0))
                 layer.shadowRadius = 1.5 * (side / 128.0)
 
+                let canRetainExistingImage = (canRetainExistingImages || (index < previousDisplayMemberIDs.count && previousDisplayMemberIDs[index] == app.id && previousAppearanceName == appearanceName)) && layer.contents != nil
+
                 if let cgImage = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appearanceName, allowFallback: true) {
                     layer.contents = cgImage
                     layer.isHidden = false
                 } else {
-                    layer.isHidden = true
-                    layer.contents = nil
+                    if !canRetainExistingImage {
+                        layer.isHidden = true
+                        layer.contents = nil
+                    }
                     AppIconImageProvider.shared.loadAsync(for: app) { [weak self, weak layer] cgImage in
                         guard let self, let layer, let cgImage else { return }
                         guard self.previewRequestGeneration == requestGen else { return }
@@ -636,8 +649,10 @@ private final class FolderGlassPlateItemView: NSView {
                 }
             } else {
                 layer.isHidden = true
+                layer.contents = nil
                 if index < crossfadePreviewLayers.count {
                     crossfadePreviewLayers[index].isHidden = true
+                    crossfadePreviewLayers[index].contents = nil
                 }
             }
         }
