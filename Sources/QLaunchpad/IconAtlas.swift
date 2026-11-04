@@ -24,6 +24,7 @@ final class IconTextureStore: @unchecked Sendable {
         let pixelSize: Int
         /// Avoid reusing a texture when quality/format flips at the same size.
         let quality: String
+        let appearanceName: String
     }
 
     private let device: MTLDevice
@@ -46,6 +47,9 @@ final class IconTextureStore: @unchecked Sendable {
         for: IconRenderQuality.current
     )
     private var cachedQualityRaw = IconRenderQuality.current.rawValue
+    private var currentAppearanceName = (NSApp.effectiveAppearance.name).rawValue
+    private var currentAppearance: NSAppearance = NSApp.effectiveAppearance
+    private var appearanceGeneration: UInt64 = 0
 
     private static let linearDisplayP3 = CGColorSpace(
         name: CGColorSpace.extendedLinearDisplayP3
@@ -77,6 +81,22 @@ final class IconTextureStore: @unchecked Sendable {
         pixelSize = requestedPixelSize
         cachedQualityRaw = quality.rawValue
         cache.removeAll(keepingCapacity: true)
+        cacheLock.unlock()
+    }
+
+    /// Drop cached textures and in-flight bakes when system effective appearance flips.
+    func setAppearance(_ appearance: NSAppearance) {
+        let name = appearance.name.rawValue
+        cacheLock.lock()
+        guard name != currentAppearanceName else {
+            cacheLock.unlock()
+            return
+        }
+        currentAppearanceName = name
+        currentAppearance = appearance
+        appearanceGeneration &+= 1
+        cache.removeAll(keepingCapacity: true)
+        inflightBakes.removeAll(keepingCapacity: true)
         cacheLock.unlock()
     }
 
@@ -230,7 +250,8 @@ final class IconTextureStore: @unchecked Sendable {
             appID: app.id,
             sourcePath: app.resourceSourcePath,
             pixelSize: pixelSize,
-            quality: quality
+            quality: quality,
+            appearanceName: currentAppearanceName
         )
     }
 
@@ -246,16 +267,28 @@ final class IconTextureStore: @unchecked Sendable {
             return
         }
         inflightBakes.insert(key)
+        let bakeGen = appearanceGeneration
+        let bakeApp = currentAppearance
         cacheLock.unlock()
 
         bakeQueue.async { [weak self] in
             guard let self else { return }
-            // Re-check allow-list after queueing — page may have moved on.
             self.cacheLock.lock()
+            guard self.appearanceGeneration == bakeGen else {
+                self.cacheLock.unlock()
+                return
+            }
             let stillAllowed = self.allowedAppIDs?.contains(app.id) ?? true
             self.cacheLock.unlock()
+
             if stillAllowed {
-                _ = self.bakeAndStore(app: app, pixelSize: pixelSize, quality: quality)
+                _ = self.bakeAndStore(
+                    app: app,
+                    pixelSize: pixelSize,
+                    quality: quality,
+                    generation: bakeGen,
+                    appearance: bakeApp
+                )
             }
             self.cacheLock.lock()
             self.inflightBakes.remove(key)
@@ -287,17 +320,24 @@ final class IconTextureStore: @unchecked Sendable {
     private func bakeAndStore(
         app: AppInfo,
         pixelSize requestedPixelSize: Int,
-        quality: IconRenderQuality
+        quality: IconRenderQuality,
+        generation: UInt64? = nil,
+        appearance: NSAppearance? = nil
     ) -> MTLTexture? {
+        let targetAppearance = appearance ?? currentAppearance
         guard let texture = makeTexture(
             for: app,
             pixelSize: requestedPixelSize,
-            quality: quality
+            quality: quality,
+            appearance: targetAppearance
         ) else { return nil }
 
         let key = cacheKey(for: app, pixelSize: requestedPixelSize, quality: quality.rawValue)
         cacheLock.lock()
         defer { cacheLock.unlock() }
+        if let generation, generation != appearanceGeneration {
+            return nil
+        }
         if pixelSize != requestedPixelSize || cachedQualityRaw != quality.rawValue {
             return nil
         }
@@ -309,13 +349,14 @@ final class IconTextureStore: @unchecked Sendable {
     private func makeTexture(
         for app: AppInfo,
         pixelSize px: Int,
-        quality: IconRenderQuality
+        quality: IconRenderQuality,
+        appearance: NSAppearance
     ) -> MTLTexture? {
         switch quality {
         case .quality:
-            return makeLinearFloat16Texture(for: app, pixelSize: px)
+            return makeLinearFloat16Texture(for: app, pixelSize: px, appearance: appearance)
         case .performance, .lowMemory:
-            return makeLinearUNorm8Texture(for: app, pixelSize: px)
+            return makeLinearUNorm8Texture(for: app, pixelSize: px, appearance: appearance)
         }
     }
 
@@ -350,10 +391,11 @@ final class IconTextureStore: @unchecked Sendable {
 
     private func makeLinearFloat16Texture(
         for app: AppInfo,
-        pixelSize px: Int
+        pixelSize px: Int,
+        appearance: NSAppearance
     ) -> MTLTexture? {
         guard let raster = makeLinearFloat16Context(pixelSize: px) else { return nil }
-        drawIcon(app: app, into: raster.context, pixelSize: px)
+        drawIcon(app: app, into: raster.context, pixelSize: px, appearance: appearance)
 
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba16Float,
@@ -377,14 +419,15 @@ final class IconTextureStore: @unchecked Sendable {
 
     private func makeLinearUNorm8Texture(
         for app: AppInfo,
-        pixelSize px: Int
+        pixelSize px: Int,
+        appearance: NSAppearance
     ) -> MTLTexture? {
         guard let raster = makeLinearFloat16Context(pixelSize: px) else { return nil }
-        drawIcon(app: app, into: raster.context, pixelSize: px)
+        drawIcon(app: app, into: raster.context, pixelSize: px, appearance: appearance)
         return makeSRGBUNorm8Texture(device: device, float16: raster.data, pixelSize: px)
     }
 
-    private func drawIcon(app: AppInfo, into context: CGContext, pixelSize px: Int) {
+    private func drawIcon(app: AppInfo, into context: CGContext, pixelSize px: Int, appearance: NSAppearance) {
         context.clear(CGRect(x: 0, y: 0, width: px, height: px))
         let image = iconCache.image(for: app, size: CGFloat(px))
 
@@ -392,14 +435,16 @@ final class IconTextureStore: @unchecked Sendable {
         let graphics = NSGraphicsContext(cgContext: context, flipped: false)
         NSGraphicsContext.current = graphics
         graphics.imageInterpolation = .high
-        image.draw(
-            in: NSRect(x: 0, y: 0, width: px, height: px),
-            from: .zero,
-            operation: .sourceOver,
-            fraction: 1,
-            respectFlipped: false,
-            hints: [.interpolation: NSImageInterpolation.high]
-        )
+        appearance.performAsCurrentDrawingAppearance {
+            image.draw(
+                in: NSRect(x: 0, y: 0, width: px, height: px),
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1,
+                respectFlipped: false,
+                hints: [.interpolation: NSImageInterpolation.high]
+            )
+        }
         NSGraphicsContext.restoreGraphicsState()
     }
 }

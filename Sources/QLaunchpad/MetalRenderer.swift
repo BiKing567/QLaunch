@@ -248,6 +248,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private var suppressLazyIconReveal = false
     private var firstFrameWaiters: [() -> Void] = []
     private var isFirstFrameCompletionScheduled = false
+    private var lastEffectiveAppearanceName: NSAppearance.Name?
+    private var pendingAppearanceChange: NSAppearance?
 
     private let inFlightFrameCount = 3
     private let inFlightFrames: [FrameResources]
@@ -655,6 +657,44 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
     private var activeIconPipeline: MTLRenderPipelineState {
         IconRenderQuality.current.usesUnorm8Drawable ? iconPipelineUnorm8 : iconPipelineFloat16
+    }
+
+    func handleEffectiveAppearanceChange(_ appearance: NSAppearance) {
+        guard appearance.name != lastEffectiveAppearanceName else { return }
+        if isFolderTransitionActive {
+            pendingAppearanceChange = appearance
+            return
+        }
+        lastEffectiveAppearanceName = appearance.name
+        pendingAppearanceChange = nil
+        iconTextures.setAppearance(appearance)
+        AppIconImageProvider.shared.setAppearance(appearance)
+        resourcePrewarmSignature = nil
+
+        if store.isPresented {
+            scheduleLazyResourcePrewarming(
+                around: max(0, Int(store.pageOffset.rounded())),
+                prune: true
+            )
+            if IconRenderQuality.current == .quality,
+               let folderID = store.openedFolderID {
+                onFolderTransitionBakeBackdrop?(
+                    folderID,
+                    folderTransitionGeneration,
+                    displayedItems,
+                    currentPageOffset,
+                    canvasScale,
+                    canvasPan,
+                    canvasStateUsesAdaptiveLayout
+                )
+            }
+            needsDisplay = true
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        handleEffectiveAppearanceChange(effectiveAppearance)
     }
 
     private var activeTextPipeline: MTLRenderPipelineState {
@@ -1546,6 +1586,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             : note.userInfo?["openingAppID"] as? String
         presentStartTime = CACurrentMediaTime()
         if showing {
+            let activeAppearance = window?.effectiveAppearance ?? effectiveAppearance
+            handleEffectiveAppearanceChange(activeAppearance)
             presentFrom = min(1, max(0, store.presentationProgress))
             presentTo = 1
             // Unpause immediately so resident caches can be used / topped up
@@ -2959,6 +3001,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         if lastDisplaySignature?.matches(store.activeDisplayItems) != true {
             lastDisplaySignature = nil
             noteDisplayChangeIfNeeded()
+        }
+        if let pending = pendingAppearanceChange {
+            handleEffectiveAppearanceChange(pending)
         }
     }
 

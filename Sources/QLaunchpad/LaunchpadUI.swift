@@ -718,6 +718,11 @@ final class LaunchpadContainerView: NSView {
         }
     }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        metalView.handleEffectiveAppearanceChange(effectiveAppearance)
+    }
+
     override var acceptsFirstResponder: Bool { true }
 
     override func becomeFirstResponder() -> Bool { true }

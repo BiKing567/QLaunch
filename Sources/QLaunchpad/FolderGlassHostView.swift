@@ -45,6 +45,9 @@ final class AppIconImageProvider: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.qzrzz.qlaunchpad.preview-load", qos: .userInitiated)
     private let lock = NSLock()
     private var inflightCallbacks: [String: [@MainActor (CGImage?) -> Void]] = [:]
+    private var currentAppearanceName: String = (NSApp.effectiveAppearance.name).rawValue
+    private var currentAppearance: NSAppearance = NSApp.effectiveAppearance
+    private var appearanceGeneration: UInt64 = 0
 
     private init() {
         // Budget: ~120 MB (up to ~120-150 512x512 32-bit images)
@@ -52,13 +55,36 @@ final class AppIconImageProvider: @unchecked Sendable {
         cache.countLimit = 200
     }
 
+    func setAppearance(_ appearance: NSAppearance) {
+        let name = appearance.name.rawValue
+        lock.lock()
+        guard name != currentAppearanceName else {
+            lock.unlock()
+            return
+        }
+        currentAppearanceName = name
+        currentAppearance = appearance
+        appearanceGeneration &+= 1
+        cache.removeAllObjects()
+        inflightCallbacks.removeAll()
+        lock.unlock()
+    }
+
+    private func cacheKey(for app: AppInfo, appearanceName: String) -> NSString {
+        "\(app.url.path)|\(appearanceName)" as NSString
+    }
+
     func hasCachedCGImage(for app: AppInfo) -> Bool {
-        let key = app.url.path as NSString
+        lock.lock()
+        let key = cacheKey(for: app, appearanceName: currentAppearanceName)
+        lock.unlock()
         return cache.object(forKey: key) != nil
     }
 
     func cachedCGImage(for app: AppInfo) -> CGImage? {
-        let key = app.url.path as NSString
+        lock.lock()
+        let key = cacheKey(for: app, appearanceName: currentAppearanceName)
+        lock.unlock()
         return cache.object(forKey: key)
     }
 
@@ -66,21 +92,21 @@ final class AppIconImageProvider: @unchecked Sendable {
     /// if `allowCreate` is true (non-animation contexts). In animation frames,
     /// pass `allowCreate: false` to avoid blocking the main thread.
     func cgImage(for app: AppInfo, allowCreate: Bool = true) -> CGImage? {
-        let key = app.url.path as NSString
+        lock.lock()
+        let key = cacheKey(for: app, appearanceName: currentAppearanceName)
+        let appGen = appearanceGeneration
+        let appAppearance = currentAppearance
+        lock.unlock()
         if let cached = cache.object(forKey: key) {
             return cached
         }
         guard allowCreate else { return nil }
-        return createAndCacheImage(for: app)
+        return createAndCacheImage(for: app, key: key, appearance: appAppearance, generation: appGen)
     }
 
     @discardableResult
     func prepare(app: AppInfo) -> CGImage? {
-        let key = app.url.path as NSString
-        if let cached = cache.object(forKey: key) {
-            return cached
-        }
-        return createAndCacheImage(for: app)
+        cgImage(for: app, allowCreate: true)
     }
 
     func prepare(apps: [AppInfo]) {
@@ -93,35 +119,52 @@ final class AppIconImageProvider: @unchecked Sendable {
 
     func loadAsync(for app: AppInfo, completion: @escaping @MainActor (CGImage?) -> Void) {
         let path = app.url.path
-        let key = path as NSString
+        lock.lock()
+        let key = cacheKey(for: app, appearanceName: currentAppearanceName)
+        let reqKey = "\(path)|\(currentAppearanceName)"
+        let reqGen = appearanceGeneration
+        let reqAppearance = currentAppearance
         if let cached = cache.object(forKey: key) {
+            lock.unlock()
             DispatchQueue.main.async {
                 completion(cached)
             }
             return
         }
 
-        lock.lock()
-        if var callbacks = inflightCallbacks[path] {
+        if var callbacks = inflightCallbacks[reqKey] {
             callbacks.append(completion)
-            inflightCallbacks[path] = callbacks
+            inflightCallbacks[reqKey] = callbacks
             lock.unlock()
             return
         }
-        inflightCallbacks[path] = [completion]
+        inflightCallbacks[reqKey] = [completion]
         lock.unlock()
 
         queue.async { [weak self] in
             guard let self else { return }
+            self.lock.lock()
+            guard self.appearanceGeneration == reqGen else {
+                self.inflightCallbacks.removeValue(forKey: reqKey)
+                self.lock.unlock()
+                return
+            }
+            self.lock.unlock()
+
             let cgImage: CGImage?
             if let cached = self.cache.object(forKey: key) {
                 cgImage = cached
             } else {
-                cgImage = self.createAndCacheImage(for: app)
+                cgImage = self.createAndCacheImage(for: app, key: key, appearance: reqAppearance, generation: reqGen)
             }
 
             self.lock.lock()
-            let pending = self.inflightCallbacks.removeValue(forKey: path) ?? []
+            guard self.appearanceGeneration == reqGen else {
+                self.inflightCallbacks.removeValue(forKey: reqKey)
+                self.lock.unlock()
+                return
+            }
+            let pending = self.inflightCallbacks.removeValue(forKey: reqKey) ?? []
             self.lock.unlock()
 
             DispatchQueue.main.async {
@@ -132,16 +175,29 @@ final class AppIconImageProvider: @unchecked Sendable {
         }
     }
 
-    private func createAndCacheImage(for app: AppInfo) -> CGImage? {
-        let image = NSWorkspace.shared.icon(forFile: app.url.path)
-        // Request 256pt (512px on Retina) to ensure razor-sharp rendering in preview layers
-        image.size = NSSize(width: 256, height: 256)
-        var proposedRect = CGRect(origin: .zero, size: image.size)
-        guard let cg = image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil) else {
+    private func createAndCacheImage(
+        for app: AppInfo,
+        key: NSString,
+        appearance: NSAppearance,
+        generation: UInt64
+    ) -> CGImage? {
+        var cg: CGImage?
+        appearance.performAsCurrentDrawingAppearance {
+            let image = NSWorkspace.shared.icon(forFile: app.url.path)
+            // Request 256pt (512px on Retina) to ensure razor-sharp rendering in preview layers
+            image.size = NSSize(width: 256, height: 256)
+            var proposedRect = CGRect(origin: .zero, size: image.size)
+            cg = image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil)
+        }
+        guard let cg else { return nil }
+        lock.lock()
+        guard appearanceGeneration == generation else {
+            lock.unlock()
             return nil
         }
         let cost = cg.bytesPerRow * cg.height
-        cache.setObject(cg, forKey: app.url.path as NSString, cost: cost)
+        cache.setObject(cg, forKey: key, cost: cost)
+        lock.unlock()
         return cg
     }
 
@@ -149,6 +205,7 @@ final class AppIconImageProvider: @unchecked Sendable {
         cache.removeAllObjects()
         lock.lock()
         inflightCallbacks.removeAll()
+        appearanceGeneration &+= 1
         lock.unlock()
     }
 }
@@ -188,6 +245,11 @@ private final class FolderGlassPlateItemView: NSView {
     private var lastIconSize: CGFloat = -1
     private var lastScale: CGFloat = -1
     private var lastIncomingDropAppID: String? = nil
+    private var lastAppearanceName: String? = nil
+    private var currentMembers: [AppInfo] = []
+    private var currentPreviewVisible: Bool = false
+    private var currentIconSize: CGFloat = -1
+    private var currentIncomingDropAppID: String? = nil
     private var lastBlurRadius: CGFloat = -1
     private var lastTransitionProgress: CGFloat = -1
     private var lastMaterialProgress: CGFloat = -1
@@ -205,6 +267,7 @@ private final class FolderGlassPlateItemView: NSView {
         lastIconSize = -1
         lastScale = -1
         lastIncomingDropAppID = nil
+        lastAppearanceName = nil
         lastBlurRadius = -1
         lastTransitionProgress = -1
         lastMaterialProgress = -1
@@ -318,6 +381,18 @@ private final class FolderGlassPlateItemView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         updateFallbackAppearance()
+        lastAppearanceName = nil
+        if currentPreviewVisible, !currentMembers.isEmpty {
+            update(
+                rect: frame,
+                cornerRadius: lastCornerRadius,
+                alpha: lastAlpha,
+                members: currentMembers,
+                previewVisible: currentPreviewVisible,
+                iconSize: currentIconSize,
+                incomingDropAppID: currentIncomingDropAppID
+            )
+        }
     }
 
     private func updateFallbackAppearance() {
@@ -345,6 +420,11 @@ private final class FolderGlassPlateItemView: NSView {
         iconSize: CGFloat,
         incomingDropAppID: String?
     ) {
+        currentMembers = members
+        currentPreviewVisible = previewVisible
+        currentIconSize = iconSize
+        currentIncomingDropAppID = incomingDropAppID
+
         frame = rect
         let currentBounds = bounds
         if currentBounds.size != lastBoundsSize {
@@ -386,6 +466,7 @@ private final class FolderGlassPlateItemView: NSView {
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
         let displayMembers = Array(members.prefix(FolderPreviewLayout.capacity))
         let memberIDs = displayMembers.map(\.id)
+        let appearanceName = effectiveAppearance.name.rawValue
 
         let contentUnchanged = currentBounds.size == lastPreviewBoundsSize
             && memberIDs == lastMemberIDs
@@ -393,6 +474,7 @@ private final class FolderGlassPlateItemView: NSView {
             && iconSize == lastIconSize
             && scale == lastScale
             && incomingDropAppID == lastIncomingDropAppID
+            && appearanceName == lastAppearanceName
 
         if contentUnchanged {
             return
@@ -404,6 +486,7 @@ private final class FolderGlassPlateItemView: NSView {
         lastIconSize = iconSize
         lastScale = scale
         lastIncomingDropAppID = incomingDropAppID
+        lastAppearanceName = appearanceName
         currentDisplayMemberIDs = memberIDs
 
         let side = min(currentBounds.width, currentBounds.height)
@@ -734,7 +817,18 @@ final class FolderGlassHostView: NSView {
         CATransaction.commit()
     }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        AppIconImageProvider.shared.setAppearance(effectiveAppearance)
+        for item in itemsByID.values {
+            item.viewDidChangeEffectiveAppearance()
+        }
+    }
+
     func clearCache() {
         AppIconImageProvider.shared.clear()
+        for item in itemsByID.values {
+            item.resetCachedState()
+        }
     }
 }
