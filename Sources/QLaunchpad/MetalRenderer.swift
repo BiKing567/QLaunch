@@ -3907,16 +3907,43 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             commandBuffer.present(drawable)
             commandBuffer.commit()
         }
+        let wasFirstFolderFrame = isFolderTransitionActive && !hasDrawnFolderFrame
         hasDrawnFolderFrame = isFolderTransitionActive
         presentsWithTransaction = isFolderTransitionActive
+        if wasFirstFolderFrame, let surface = layer as? CAMetalLayer {
+            folderDrawableProvider.prefetch(from: surface, ready: { [weak self] in
+                guard let self,
+                      self.store.isPresented,
+                      self.window?.isVisible == true,
+                      self.isFolderTransitionActive,
+                      self.hasDrawnFolderFrame else { return }
+                self.needsDisplay = true
+                self.startDisplayLink()
+            })
+        }
         stopDisplayLinkIfIdle()
     }
 
     private func frameTarget() -> (drawable: CAMetalDrawable, passDescriptor: MTLRenderPassDescriptor)? {
-        // Keep the first frame and its native view preparation in one transaction.
-        guard isFolderTransitionActive, hasDrawnFolderFrame,
+        guard isFolderTransitionActive,
               let surface = layer as? CAMetalLayer else {
             folderDrawableProvider.invalidate()
+            guard let drawable = currentDrawable,
+                  let passDescriptor = currentRenderPassDescriptor else { return nil }
+            return (drawable, passDescriptor)
+        }
+        // First frame: retain synchronous handoff with MTKView's currentDrawable,
+        // and immediately initiate prefetch for the subsequent animation frame.
+        guard hasDrawnFolderFrame else {
+            folderDrawableProvider.prefetch(from: surface, ready: { [weak self] in
+                guard let self,
+                      self.store.isPresented,
+                      self.window?.isVisible == true,
+                      self.isFolderTransitionActive,
+                      self.hasDrawnFolderFrame else { return }
+                self.needsDisplay = true
+                self.startDisplayLink()
+            })
             guard let drawable = currentDrawable,
                   let passDescriptor = currentRenderPassDescriptor else { return nil }
             return (drawable, passDescriptor)

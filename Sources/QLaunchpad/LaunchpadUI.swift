@@ -711,7 +711,8 @@ final class LaunchpadContainerView: NSView {
         overlayView.frame = bounds
         folderTitleView.frame = bounds
 
-        if let dev = metalView.device, bounds.width > 0, bounds.height > 0 {
+        if IconRenderQuality.current == .quality,
+           let dev = metalView.device, bounds.width > 0, bounds.height > 0 {
             let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
             backdropView.prewarm(device: dev, commandQueue: metalView.commandQueue, boundsSize: bounds.size, scale: scale)
         }

@@ -52,6 +52,24 @@ final class FolderDrawableProvider {
         return nil
     }
 
+    func prefetch(
+        from layer: CAMetalLayer,
+        ready: (@MainActor () -> Void)? = nil
+    ) {
+        let size = layer.drawableSize
+        let format = layer.pixelFormat
+        let identity = ObjectIdentifier(layer)
+        if identity != expectedLayer || size != expectedSize || format != expectedFormat {
+            invalidate()
+            expectedLayer = identity
+            expectedSize = size
+            expectedFormat = format
+        }
+        guard size.width >= 1, size.height >= 1 else { return }
+        if readyDrawable != nil { return }
+        requestNext(layer: layer, ready: ready)
+    }
+
     private func requestNext(
         layer: CAMetalLayer,
         ready: (@MainActor () -> Void)?

@@ -12,6 +12,13 @@ private final class BackdropBlurWorker: @unchecked Sendable {
     private var blurKernels: [Int: MPSImageGaussianBlur] = [:]
     private var activeGeneration: UInt64 = 0
 
+    private struct PrewarmKey: Equatable {
+        let deviceID: ObjectIdentifier
+        let scale: CGFloat
+        let pixelFormat: MTLPixelFormat
+    }
+    private var lastPrewarmKey: PrewarmKey?
+
     func reset(generation: UInt64) {
         queue.async {
             self.activeGeneration = generation
@@ -23,6 +30,7 @@ private final class BackdropBlurWorker: @unchecked Sendable {
     func purgeKernels() {
         queue.async {
             self.blurKernels.removeAll(keepingCapacity: true)
+            self.lastPrewarmKey = nil
         }
     }
 
@@ -32,7 +40,18 @@ private final class BackdropBlurWorker: @unchecked Sendable {
         scale: CGFloat,
         pixelFormat: MTLPixelFormat = .rgba16Float
     ) {
-        queue.async {
+        let key = PrewarmKey(
+            deviceID: ObjectIdentifier(device),
+            scale: scale,
+            pixelFormat: pixelFormat
+        )
+        queue.async { [weak self] in
+            guard let self else { return }
+            if self.lastPrewarmKey == key && !self.blurKernels.isEmpty {
+                return
+            }
+            self.lastPrewarmKey = key
+
             let blurRadius: Float = 16.0
             let desc = MTLTextureDescriptor.texture2DDescriptor(
                 pixelFormat: pixelFormat,
@@ -205,6 +224,15 @@ final class FolderDepthBackdropView: NSView {
     private let worker = BackdropBlurWorker()
     private var generation: UInt64 = 0
 
+    private struct BackdropPrewarmKey: Equatable {
+        let deviceID: ObjectIdentifier
+        let pixelWidth: Int
+        let pixelHeight: Int
+        let scale: CGFloat
+        let pixelFormat: MTLPixelFormat
+    }
+    private var lastPrewarmKey: BackdropPrewarmKey?
+
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -309,12 +337,25 @@ final class FolderDepthBackdropView: NSView {
 
     /// Pre-allocates textures and prewarms Gaussian blur shaders ahead of time.
     func prewarm(device: MTLDevice, commandQueue: MTLCommandQueue, boundsSize: CGSize, scale: CGFloat) {
+        let pixelWidth = max(1, Int((boundsSize.width * scale).rounded()))
+        let pixelHeight = max(1, Int((boundsSize.height * scale).rounded()))
+        let format = targetPixelFormat()
+        let key = BackdropPrewarmKey(
+            deviceID: ObjectIdentifier(device),
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            scale: scale,
+            pixelFormat: format
+        )
+        if lastPrewarmKey == key, rawTexture != nil {
+            return
+        }
+        lastPrewarmKey = key
+
         self.device = device
         self.commandQueue = commandQueue
         self.currentScale = scale
         applyLayerConfiguration()
-        let pixelWidth = max(1, Int((boundsSize.width * scale).rounded()))
-        let pixelHeight = max(1, Int((boundsSize.height * scale).rounded()))
         _ = ensureTexture(device: device, pixelWidth: pixelWidth, pixelHeight: pixelHeight)
         metalLayer.device = device
         metalLayer.drawableSize = CGSize(width: pixelWidth, height: pixelHeight)
@@ -322,7 +363,7 @@ final class FolderDepthBackdropView: NSView {
             device: device,
             commandQueue: commandQueue,
             scale: scale,
-            pixelFormat: targetPixelFormat()
+            pixelFormat: format
         )
     }
 

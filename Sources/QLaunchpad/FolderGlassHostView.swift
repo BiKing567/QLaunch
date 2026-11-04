@@ -43,7 +43,8 @@ final class AppIconImageProvider: @unchecked Sendable {
     static let shared = AppIconImageProvider()
     private let cache = NSCache<NSString, CGImage>()
     private let queue = DispatchQueue(label: "com.qzrzz.qlaunchpad.preview-load", qos: .userInitiated)
-    private var inflightRequests = Set<String>()
+    private let lock = NSLock()
+    private var inflightCallbacks: [String: [@MainActor (CGImage?) -> Void]] = [:]
 
     private init() {
         // Budget: ~120 MB (up to ~120-150 512x512 32-bit images)
@@ -92,14 +93,41 @@ final class AppIconImageProvider: @unchecked Sendable {
 
     func loadAsync(for app: AppInfo, completion: @escaping @MainActor (CGImage?) -> Void) {
         let path = app.url.path
+        let key = path as NSString
+        if let cached = cache.object(forKey: key) {
+            DispatchQueue.main.async {
+                completion(cached)
+            }
+            return
+        }
+
+        lock.lock()
+        if var callbacks = inflightCallbacks[path] {
+            callbacks.append(completion)
+            inflightCallbacks[path] = callbacks
+            lock.unlock()
+            return
+        }
+        inflightCallbacks[path] = [completion]
+        lock.unlock()
+
         queue.async { [weak self] in
             guard let self else { return }
-            if self.inflightRequests.contains(path) { return }
-            self.inflightRequests.insert(path)
-            let cg = self.createAndCacheImage(for: app)
-            self.inflightRequests.remove(path)
+            let cgImage: CGImage?
+            if let cached = self.cache.object(forKey: key) {
+                cgImage = cached
+            } else {
+                cgImage = self.createAndCacheImage(for: app)
+            }
+
+            self.lock.lock()
+            let pending = self.inflightCallbacks.removeValue(forKey: path) ?? []
+            self.lock.unlock()
+
             DispatchQueue.main.async {
-                completion(cg)
+                for callback in pending {
+                    callback(cgImage)
+                }
             }
         }
     }
@@ -119,6 +147,9 @@ final class AppIconImageProvider: @unchecked Sendable {
 
     func clear() {
         cache.removeAllObjects()
+        lock.lock()
+        inflightCallbacks.removeAll()
+        lock.unlock()
     }
 }
 
