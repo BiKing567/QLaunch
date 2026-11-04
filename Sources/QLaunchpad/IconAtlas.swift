@@ -51,6 +51,7 @@ final class IconTextureStore: @unchecked Sendable {
     private var currentAppearance: NSAppearance = NSApp.effectiveAppearance
     private var targetAppearance: NSAppearance?
     private var appearanceGeneration: UInt64 = 0
+    private var knownApps: [String: AppInfo] = [:]
 
     private static let linearDisplayP3 = CGColorSpace(
         name: CGColorSpace.extendedLinearDisplayP3
@@ -143,6 +144,9 @@ final class IconTextureStore: @unchecked Sendable {
         })
         cacheLock.lock()
         defer { cacheLock.unlock() }
+        for a in apps {
+            knownApps[a.id] = a
+        }
         for key in cache.keys where sourcePaths[key.appID] != key.sourcePath {
             cache.removeValue(forKey: key)
         }
@@ -224,7 +228,16 @@ final class IconTextureStore: @unchecked Sendable {
         cachedTexture(for: app, appearanceName: appearanceName, allowFallback: false) != nil
     }
 
+    func app(forID id: String) -> AppInfo? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return knownApps[id]
+    }
+
     func prepareAsync(app: AppInfo, appearance: NSAppearance, generation: UInt64) {
+        cacheLock.lock()
+        knownApps[app.id] = app
+        cacheLock.unlock()
         let quality = IconRenderQuality.current
         let requestedPixelSize = GridLayoutPreset.current.iconPixelSize(for: quality)
         enqueueBake(
@@ -242,6 +255,9 @@ final class IconTextureStore: @unchecked Sendable {
     /// Bake if missing. If another worker already owns this icon, wait for it
     /// instead of returning a miss and leaving the first page incomplete.
     func ensureTexture(for app: AppInfo) -> MTLTexture? {
+        cacheLock.lock()
+        knownApps[app.id] = app
+        cacheLock.unlock()
         if let cached = cachedTexture(for: app, allowFallback: false) { return cached }
         let quality = IconRenderQuality.current
         let requestedPixelSize = GridLayoutPreset.current.iconPixelSize(for: quality)
@@ -268,6 +284,7 @@ final class IconTextureStore: @unchecked Sendable {
         let quality = IconRenderQuality.current
         let requestedPixelSize = GridLayoutPreset.current.iconPixelSize(for: quality)
         cacheLock.lock()
+        knownApps[app.id] = app
         if pixelSize != requestedPixelSize || cachedQualityRaw != quality.rawValue {
             pixelSize = requestedPixelSize
             cachedQualityRaw = quality.rawValue

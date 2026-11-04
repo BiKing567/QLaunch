@@ -503,6 +503,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         var currentMaterialProgress: CGFloat = 0
         var hasDrawnSettledFrame: Bool = false
         var destinationLayout: (centers: [CGPoint], iconSize: CGFloat, cardMetrics: FolderCardMetrics)? = nil
+        var retainedPreviewImages: [CGImage] = []
     }
 
     private struct FolderSourceSnapshot {
@@ -2924,6 +2925,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         )
         folderTransitionGeneration &+= 1
         prepareFolderTransitionResources(items: target)
+        var retainedImages: [CGImage] = []
+        for item in displayedItems.prefix(FolderPreviewLayout.capacity) {
+            if case .app(let app) = item, let img = AppIconImageProvider.shared.cachedCGImage(for: app) {
+                retainedImages.append(img)
+            }
+        }
+        folderTransition?.retainedPreviewImages = retainedImages
         store.setFolderTransitionActive(true)
         if IconRenderQuality.current == .quality,
            isDepthBackdropActive?() != true,
@@ -2989,6 +2997,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         )
         folderTransitionGeneration &+= 1
         prepareFolderTransitionResources(items: target)
+        var retainedImages: [CGImage] = []
+        for item in displayedItems.prefix(FolderPreviewLayout.capacity) {
+            if case .app(let app) = item, let img = AppIconImageProvider.shared.cachedCGImage(for: app) {
+                retainedImages.append(img)
+            }
+        }
+        folderTransition?.retainedPreviewImages = retainedImages
         store.setFolderTransitionActive(true)
         startDisplayLink()
         needsDisplay = true
@@ -3015,12 +3030,39 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         transition.hasDrawnSettledFrame = false
     }
 
+    private func appInfo(forID id: String) -> AppInfo? {
+        store.app(withID: id) ?? iconTextures.app(forID: id)
+    }
+
     private func prepareFolderTransitionResources(items: [LaunchpadItem]) {
-        let previewApps = items.prefix(FolderPreviewLayout.capacity).compactMap { item -> AppInfo? in
-            if case .app(let app) = item { return app }
-            return nil
+        var previewApps: [AppInfo] = []
+        for item in items.prefix(FolderPreviewLayout.capacity) {
+            switch item {
+            case .app(let app):
+                previewApps.append(app)
+            case .folder(let folder):
+                let folderApps = folder.appIDs.prefix(FolderPreviewLayout.capacity).compactMap { appInfo(forID: $0) }
+                previewApps.append(contentsOf: folderApps)
+            }
         }
-        AppIconImageProvider.shared.prepare(apps: previewApps)
+        if let transition = folderTransition {
+            for item in transition.folderItems.prefix(FolderPreviewLayout.capacity) {
+                if case .app(let app) = item {
+                    previewApps.append(app)
+                }
+            }
+        }
+        for app in previewApps {
+            AppIconImageProvider.shared.prepare(app: app)
+        }
+        if var transition = folderTransition {
+            for app in previewApps {
+                if let img = AppIconImageProvider.shared.cachedCGImage(for: app) {
+                    transition.retainedPreviewImages.append(img)
+                }
+            }
+            folderTransition = transition
+        }
 
         guard IconRenderQuality.current.usesLazyTextureLoading else { return }
         resourcePrewarmSignature = nil
@@ -3456,7 +3498,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             if case .app(let app) = item { return app }
             return nil
         }
-
         folderPlates.append(
             FolderPlateModel(
                 id: "opened-folder-" + transition.folderID,
@@ -3656,7 +3697,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             }
         }
 
-        if activePage > 0 {
+        if activePage > 0 && !isAtSourceRest {
             let previewCount = min(FolderPreviewLayout.capacity, transition.folderItems.count)
             let previewProgress = Float(max(0, min(1, (0.5 - local) / 0.5)))
             if previewProgress > 0.005 {

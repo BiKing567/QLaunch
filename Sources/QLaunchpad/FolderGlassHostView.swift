@@ -321,6 +321,7 @@ private final class FolderGlassPlateItemView: NSView {
     private var currentMembers: [AppInfo] = []
     private var currentPreviewVisible: Bool = false
     private var currentIncomingDropAppID: String? = nil
+    private var previewRequestGeneration: UInt64 = 0
     private var lastBlurRadius: CGFloat = -1
     private var lastTransitionProgress: CGFloat = -1
     private var lastMaterialProgress: CGFloat = -1
@@ -506,6 +507,8 @@ private final class FolderGlassPlateItemView: NSView {
         currentMembers = members
         currentPreviewVisible = previewVisible
         currentIncomingDropAppID = incomingDropAppID
+        previewRequestGeneration &+= 1
+        let requestGen = previewRequestGeneration
 
         frame = rect
         let currentBounds = bounds
@@ -539,7 +542,14 @@ private final class FolderGlassPlateItemView: NSView {
 
         guard previewVisible, !members.isEmpty else {
             if lastPreviewVisible != previewVisible || !lastMemberIDs.isEmpty {
-                for layer in previewLayers { layer.isHidden = true }
+                for layer in previewLayers {
+                    layer.isHidden = true
+                    layer.contents = nil
+                }
+                for layer in crossfadePreviewLayers {
+                    layer.isHidden = true
+                    layer.contents = nil
+                }
                 lastPreviewVisible = previewVisible
                 lastMemberIDs = []
             }
@@ -611,10 +621,15 @@ private final class FolderGlassPlateItemView: NSView {
                     layer.contents = cgImage
                     layer.isHidden = false
                 } else {
+                    layer.isHidden = true
+                    layer.contents = nil
                     AppIconImageProvider.shared.loadAsync(for: app) { [weak self, weak layer] cgImage in
                         guard let self, let layer, let cgImage else { return }
+                        guard self.previewRequestGeneration == requestGen else { return }
+                        guard self.currentPreviewVisible else { return }
                         guard self.currentDisplayMemberIDs.indices.contains(index),
                               self.currentDisplayMemberIDs[index] == app.id else { return }
+                        if let incoming = self.currentIncomingDropAppID, incoming == app.id { return }
                         layer.contents = cgImage
                         layer.isHidden = false
                     }
