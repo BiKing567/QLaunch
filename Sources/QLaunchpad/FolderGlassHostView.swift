@@ -88,10 +88,19 @@ final class AppIconImageProvider: @unchecked Sendable {
         targetAppearance = nil
 
         var readyPaths = Set<String>()
-        for k in cachedKeys where k.hasSuffix("|\(name)") {
-            if let sep = k.lastIndex(of: "|") {
-                readyPaths.insert(String(k[..<sep]))
+        var staleKeys = Set<String>()
+        for k in cachedKeys {
+            let nsKey = k as NSString
+            if cache.object(forKey: nsKey) == nil {
+                staleKeys.insert(k)
+            } else if k.hasSuffix("|\(name)") {
+                if let sep = k.lastIndex(of: "|") {
+                    readyPaths.insert(String(k[..<sep]))
+                }
             }
+        }
+        for k in staleKeys {
+            cachedKeys.remove(k)
         }
 
         let toRemove = cachedKeys.filter { k in
@@ -100,7 +109,7 @@ final class AppIconImageProvider: @unchecked Sendable {
                 let path = String(k[..<sep])
                 return readyPaths.contains(path)
             }
-            return true
+            return false
         }
         for k in toRemove {
             cache.removeObject(forKey: k as NSString)
@@ -619,6 +628,31 @@ private final class FolderGlassPlateItemView: NSView {
         }
     }
 
+    private static func blendCrossfadeImages(old: CGImage, new: CGImage, progress: CGFloat) -> CGImage? {
+        if old === new { return new }
+        let w = max(old.width, new.width)
+        let h = max(old.height, new.height)
+        guard w > 0, h > 0 else { return new }
+        let colorSpace = new.colorSpace ?? old.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        guard let ctx = CGContext(
+            data: nil,
+            width: w,
+            height: h,
+            bitsPerComponent: 8,
+            bytesPerRow: w * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return new }
+
+        let rect = CGRect(x: 0, y: 0, width: w, height: h)
+        ctx.setAlpha(1.0 - progress)
+        ctx.draw(old, in: rect)
+        ctx.setBlendMode(.plusLighter)
+        ctx.setAlpha(progress)
+        ctx.draw(new, in: rect)
+        return ctx.makeImage()
+    }
+
     func updateAppearanceCrossfade(
         progress: CGFloat,
         fromAppearance: NSAppearance,
@@ -644,29 +678,40 @@ private final class FolderGlassPlateItemView: NSView {
                 continue
             }
             let crossLayer = crossfadePreviewLayers[index]
-            crossLayer.frame = layer.frame
-            crossLayer.contentsScale = layer.contentsScale
-            crossLayer.shadowOffset = layer.shadowOffset
-            crossLayer.shadowRadius = layer.shadowRadius
+            crossLayer.isHidden = true
+            crossLayer.contents = nil
+            crossLayer.opacity = 0.0
 
             let newImg = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: toName, allowFallback: false)
                 ?? AppIconImageProvider.shared.cachedCGImage(for: app)
             let oldImg = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: fromName, allowFallback: false)
                 ?? AppIconImageProvider.shared.cachedCGImage(for: app, allowFallback: true)
 
-            if let oldImg {
+            if let oldImg, let newImg {
+                if p <= 0.001 {
+                    layer.contents = oldImg
+                    layer.opacity = 1.0
+                    layer.isHidden = false
+                } else if p >= 0.999 {
+                    layer.contents = newImg
+                    layer.opacity = 1.0
+                    layer.isHidden = false
+                } else {
+                    let blended = Self.blendCrossfadeImages(old: oldImg, new: newImg, progress: CGFloat(p)) ?? newImg
+                    layer.contents = blended
+                    layer.opacity = 1.0
+                    layer.isHidden = false
+                }
+            } else if let oldImg {
                 layer.contents = oldImg
+                layer.opacity = Float(1.0 - p)
                 layer.isHidden = false
-                layer.opacity = 1.0
+            } else if let newImg {
+                layer.contents = newImg
+                layer.opacity = Float(p)
+                layer.isHidden = false
             } else {
                 layer.isHidden = true
-            }
-            if let newImg {
-                crossLayer.contents = newImg
-                crossLayer.isHidden = false
-                crossLayer.opacity = oldImg != nil ? p : 1.0
-            } else {
-                crossLayer.isHidden = true
             }
         }
         CATransaction.commit()

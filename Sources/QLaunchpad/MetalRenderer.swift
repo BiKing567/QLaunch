@@ -705,6 +705,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             return
         }
 
+        if activeAppearanceCrossfade?.toAppearance.name == appearance.name {
+            return
+        }
+
         if pendingTargetAppearance?.name == appearance.name {
             return
         }
@@ -3120,6 +3124,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             noteDisplayChangeIfNeeded()
         }
         if let pending = pendingAppearanceChange {
+            pendingAppearanceChange = nil
             handleEffectiveAppearanceChange(pending)
         }
     }

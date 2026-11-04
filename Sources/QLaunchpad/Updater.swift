@@ -253,7 +253,7 @@ final class Updater: ObservableObject {
             }
         }
 
-        downloader.startDownload(from: downloadURL)
+        downloader.startDownload(from: downloadURL, filename: release.downloadFileName)
     }
 
     private func installAndRelaunch(packageURL: URL, sessionID: UInt) async {
@@ -432,14 +432,50 @@ final class Updater: ObservableObject {
             ])
         }
 
-        // 4. 版本号有效性
+        // 4. 版本号有效性与发布版本匹配
         let candidateShortVersion = plist["CFBundleShortVersionString"] as? String
-        let candidateBuildNumber = plist["CFBundleVersion"] as? String
-        guard (candidateShortVersion != nil && !candidateShortVersion!.isEmpty) ||
-              (candidateBuildNumber != nil && !candidateBuildNumber!.isEmpty) else {
+        guard let candidateVersion = candidateShortVersion?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !candidateVersion.isEmpty else {
             throw NSError(domain: "InAppUpdate", code: 8, userInfo: [
-                NSLocalizedDescriptionKey: "更新包缺少有效的版本信息"
+                NSLocalizedDescriptionKey: "更新包缺少有效的版本信息 (CFBundleShortVersionString)"
             ])
+        }
+
+        func normalizeVersion(_ v: String) -> String {
+            var s = v.trimmingCharacters(in: .whitespacesAndNewlines)
+            if s.hasPrefix("v") || s.hasPrefix("V") {
+                s.removeFirst()
+            }
+            return s
+        }
+
+        let normalizedCandidate = normalizeVersion(candidateVersion)
+
+        if let expected = expectedVersion?.trimmingCharacters(in: .whitespacesAndNewlines), !expected.isEmpty {
+            let normalizedExpected = normalizeVersion(expected)
+            if normalizedCandidate != normalizedExpected {
+                if VersionComparator.isVersion(normalizedExpected, greaterThan: normalizedCandidate) {
+                    throw NSError(domain: "InAppUpdate", code: 8, userInfo: [
+                        NSLocalizedDescriptionKey: "更新包版本低于期望版本 (期望: \(expected), 实际: \(candidateVersion))"
+                    ])
+                }
+                throw NSError(domain: "InAppUpdate", code: 8, userInfo: [
+                    NSLocalizedDescriptionKey: "更新包版本与发布版本不匹配 (期望: \(expected), 实际: \(candidateVersion))"
+                ])
+            }
+        }
+
+        // 校验当前安装版本，防止意外降级
+        let currentInfoPlist = targetAppURL.appendingPathComponent("Contents/Info.plist")
+        if let currentData = try? Data(contentsOf: currentInfoPlist),
+           let currentPlist = (try? PropertyListSerialization.propertyList(from: currentData, format: nil)) as? [String: Any],
+           let currentVer = currentPlist["CFBundleShortVersionString"] as? String {
+            let normalizedCurrent = normalizeVersion(currentVer)
+            if VersionComparator.isVersion(normalizedCurrent, greaterThan: normalizedCandidate) {
+                throw NSError(domain: "InAppUpdate", code: 8, userInfo: [
+                    NSLocalizedDescriptionKey: "更新包版本低于当前安装版本，禁止降级 (当前: \(currentVer), 更新包: \(candidateVersion))"
+                ])
+            }
         }
 
         // 5. 严格代码签名与资源封印校验
@@ -447,6 +483,13 @@ final class Updater: ObservableObject {
 
         // 6. 开发者身份与签名信任链校验
         let candidateSig = try queryCodeSignature(at: stagedAppURL)
+        if let codeIdentifier = candidateSig.identifier, !codeIdentifier.isEmpty {
+            guard expectedBundleIDs.contains(codeIdentifier) else {
+                throw NSError(domain: "InAppUpdate", code: 6, userInfo: [
+                    NSLocalizedDescriptionKey: "更新包签名 Identifier 不匹配 (期望: \(expectedBundleIDs.joined(separator: " 或 ")), 实际: \(codeIdentifier))"
+                ])
+            }
+        }
         let sourceForCurrentSig = Bundle.main.bundleURL.pathExtension == "app"
             ? Bundle.main.bundleURL
             : targetAppURL
@@ -719,12 +762,14 @@ final class Updater: ObservableObject {
 private final class InAppUpdateDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     private var session: URLSession?
     private var downloadTask: URLSessionDownloadTask?
+    private var destinationFilename: String?
 
     var onProgress: ((Double, Int64, Int64) -> Void)?
     var onCompletion: ((Result<URL, Error>) -> Void)?
 
-    func startDownload(from url: URL) {
+    func startDownload(from url: URL, filename: String? = nil) {
         cancel()
+        self.destinationFilename = filename
         let config = URLSessionConfiguration.default
         let session = URLSession(configuration: config, delegate: self, delegateQueue: .main)
         self.session = session
@@ -761,7 +806,7 @@ private final class InAppUpdateDownloader: NSObject, URLSessionDownloadDelegate,
         let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("qlaunch-update-\(UUID().uuidString)", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-            let filename = downloadTask.response?.suggestedFilename ?? "update.dmg"
+            let filename = destinationFilename ?? downloadTask.response?.suggestedFilename ?? "update.dmg"
             let destinationURL = tempDir.appendingPathComponent(filename)
             try FileManager.default.moveItem(at: location, to: destinationURL)
             onCompletion?(.success(destinationURL))

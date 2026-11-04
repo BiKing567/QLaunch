@@ -445,6 +445,7 @@ final class LaunchpadContainerView: NSView {
                 boundsSize: self.bounds.size,
                 scale: scale
             ) { commandBuffer, targetTexture in
+                guard generation == self.metalView.folderTransitionGeneration else { return }
                 let bgPlates = self.metalView.renderBackdropRootGrid(
                     to: targetTexture,
                     commandBuffer: commandBuffer,
@@ -509,6 +510,7 @@ final class LaunchpadContainerView: NSView {
         }
         metalView.onFolderTransitionWillSettle = { [weak self] generation in
             guard let self else { return }
+            guard generation == self.metalView.folderTransitionGeneration else { return }
             if self.store.openedFolderID == nil {
                 self.pendingBackdropPlates = nil
                 self.backdropView.hideVisuals()
@@ -744,7 +746,7 @@ final class LaunchpadContainerView: NSView {
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        metalView.handleEffectiveAppearanceChange(effectiveAppearance)
+        // metalView is a direct subview and receives viewDidChangeEffectiveAppearance() from AppKit.
     }
 
     override var acceptsFirstResponder: Bool { true }
