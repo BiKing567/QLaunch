@@ -705,6 +705,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             return
         }
 
+        if pendingTargetAppearance?.name == appearance.name {
+            return
+        }
+
         // Continuous reverse switch check
         if let crossfade = activeAppearanceCrossfade {
             if appearance.name == crossfade.fromAppearance.name {
@@ -739,33 +743,20 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     private func currentVisibleAppInfos() -> (apps: [AppInfo], folderPreviewApps: [AppInfo]) {
-        var visibleApps: [AppInfo] = []
-        var folderApps: [AppInfo] = []
         if let openedID = store.openedFolderID, let folder = store.folder(withID: openedID) {
+            var visibleApps: [AppInfo] = []
             for appID in folder.appIDs {
                 if let app = store.app(withID: appID) {
                     visibleApps.append(app)
                 }
             }
-        } else {
-            let activeItems = displayedItems.isEmpty ? store.activeDisplayItems : displayedItems
-            let capacity = max(1, store.pageCapacity)
-            let currentPage = max(0, Int(store.pageOffset.rounded()))
-            let startIndex = currentPage * capacity
-            let endIndex = min(activeItems.count, startIndex + capacity)
-            if startIndex < endIndex {
-                for item in activeItems[startIndex..<endIndex] {
-                    switch item {
-                    case .app(let app):
-                        visibleApps.append(app)
-                    case .folder(let folder):
-                        let members = folder.appIDs.prefix(FolderPreviewLayout.capacity).compactMap { store.app(withID: $0) }
-                        folderApps.append(contentsOf: members)
-                    }
-                }
-            }
+            let rootItems = store.displayItems
+            let rootOffset = lastFolderSource?.rootPageOffset ?? Double(store.currentPage)
+            let rootInfos = visiblePageAppInfos(items: rootItems, pageOffset: rootOffset)
+            visibleApps.append(contentsOf: rootInfos.apps)
+            return (visibleApps, rootInfos.folderPreviewApps)
         }
-        return (visibleApps, folderApps)
+        return visiblePageAppInfos()
     }
 
     private func prewarmVisibleBatchForTargetAppearance(_ appearance: NSAppearance, generation: UInt64) {
@@ -2016,48 +2007,42 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         needsDisplay = true
     }
 
-    /// Apps on the page that will actually appear first.
-    private func firstPageApps() -> [AppInfo] {
-        let items = displayedItems.isEmpty ? store.activeDisplayItems : displayedItems
+    private func visiblePageAppInfos(
+        items explicitItems: [LaunchpadItem]? = nil,
+        pageOffset explicitPageOffset: Double? = nil
+    ) -> (apps: [AppInfo], folderPreviewApps: [AppInfo]) {
+        let items = explicitItems ?? (displayedItems.isEmpty ? store.activeDisplayItems : displayedItems)
         let capacity = max(store.pageCapacity, 1)
-        let page = max(0, Int((displayedItems.isEmpty ? store.pageOffset : currentPageOffset).rounded()))
+        let offset = explicitPageOffset ?? (displayedItems.isEmpty ? store.pageOffset : currentPageOffset)
+        let page = max(0, Int(offset.rounded()))
         let start = min(items.count, page * capacity)
         let end = min(items.count, start + capacity)
         guard start < end else {
-            return []
+            return ([], [])
         }
 
         var apps: [AppInfo] = []
+        var folderApps: [AppInfo] = []
         for item in items[start..<end] {
-            if case .app(let app) = item {
+            switch item {
+            case .app(let app):
                 apps.append(app)
+            case .folder(let folder):
+                let members = folder.appIDs.prefix(FolderPreviewLayout.capacity).compactMap { store.app(withID: $0) }
+                folderApps.append(contentsOf: members)
             }
         }
-        return apps
+        return (apps, folderApps)
+    }
+
+    /// Apps on the page that will actually appear first.
+    private func firstPageApps() -> [AppInfo] {
+        visiblePageAppInfos().apps
     }
 
     /// Member apps for folder mini previews on the visible first page.
     private func firstPageFolderPreviewApps() -> [AppInfo] {
-        let items = displayedItems.isEmpty ? store.activeDisplayItems : displayedItems
-        let capacity = max(store.pageCapacity, 1)
-        let page = max(0, Int((displayedItems.isEmpty ? store.pageOffset : currentPageOffset).rounded()))
-        let start = min(items.count, page * capacity)
-        let end = min(items.count, start + capacity)
-        guard start < end else {
-            return []
-        }
-
-        var folderApps: [AppInfo] = []
-        for item in items[start..<end] {
-            if case .folder(let folder) = item {
-                for appID in folder.appIDs.prefix(FolderPreviewLayout.capacity) {
-                    if let app = store.app(withID: appID) {
-                        folderApps.append(app)
-                    }
-                }
-            }
-        }
-        return folderApps
+        visiblePageAppInfos().folderPreviewApps
     }
 
     private func isFirstPageReady() -> Bool {
@@ -2804,6 +2789,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 lastDisplaySignature = signature
                 return true
             } else if nextFolderID == pending.folderID {
+                if signature != pending.signature {
+                    pendingFolderOpen = PendingFolderOpen(folderID: pending.folderID, target: target, signature: signature)
+                }
                 return true
             } else {
                 pendingFolderOpen = nil
@@ -3810,6 +3798,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             checkAndStartAppearanceCrossfadeIfNeeded(now: now)
         }
         if let crossfade = activeAppearanceCrossfade {
+            guard crossfade.generation == pendingAppearanceGeneration else {
+                activeAppearanceCrossfade = nil
+                return
+            }
             let elapsed = now - crossfade.startTime
             let rawT = min(1.0, max(0.0, elapsed / crossfade.duration))
             appearanceCrossfadeProgress = crossfade.fromProgress + (1.0 - crossfade.fromProgress) * CGFloat(rawT)
@@ -3821,17 +3813,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 iconTextures.commitAppearanceChange(crossfade.toAppearance)
                 AppIconImageProvider.shared.commitAppearanceChange(crossfade.toAppearance)
                 onAppearanceCrossfadeCompleted?(crossfade.toAppearance)
-                if IconRenderQuality.current == .quality, let folderID = store.openedFolderID {
-                    onFolderTransitionBakeBackdrop?(
-                        folderID,
-                        folderTransitionGeneration,
-                        displayedItems,
-                        currentPageOffset,
-                        canvasScale,
-                        canvasPan,
-                        canvasStateUsesAdaptiveLayout
-                    )
-                }
+                syncFolderDepthBackdropIfNeeded()
                 scheduleLazyResourcePrewarming(
                     around: max(0, Int(store.pageOffset.rounded())),
                     prune: true
@@ -4877,12 +4859,25 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 // Resolve the transparent presentation frame too, but never
                 // rasterize or upload a cache miss from the draw path. The
                 // resident/page-window prewarmer fills the same cache off-main.
-                let crossfadeTargetName = activeAppearanceCrossfade?.toAppearance.name.rawValue ?? pendingTargetAppearance?.name.rawValue
-                let texture = iconTexture(for: item, allowFallback: true, allowCreate: false)
-                let nextTexture: MTLTexture? = if let crossfadeTargetName {
-                    iconTexture(for: item, appearanceName: crossfadeTargetName, allowFallback: false, allowCreate: false) ?? texture
+                let texture: MTLTexture?
+                let nextTexture: MTLTexture?
+                if let crossfade = activeAppearanceCrossfade {
+                    let fromName = crossfade.fromAppearance.name.rawValue
+                    let toName = crossfade.toAppearance.name.rawValue
+                    let fromTex = iconTexture(for: item, appearanceName: fromName, allowFallback: false, allowCreate: false)
+                        ?? iconTexture(for: item, allowFallback: true, allowCreate: false)
+                    let toTex = iconTexture(for: item, appearanceName: toName, allowFallback: false, allowCreate: false)
+                        ?? fromTex
+                    texture = fromTex
+                    nextTexture = toTex
+                } else if let targetName = pendingTargetAppearance?.name.rawValue {
+                    let baseTex = iconTexture(for: item, allowFallback: true, allowCreate: false)
+                    texture = baseTex
+                    nextTexture = iconTexture(for: item, appearanceName: targetName, allowFallback: false, allowCreate: false) ?? baseTex
                 } else {
-                    texture
+                    let baseTex = iconTexture(for: item, allowFallback: true, allowCreate: false)
+                    texture = baseTex
+                    nextTexture = baseTex
                 }
                 guard alpha > 0.002 else { continue }
                 // Folder previews are rendered by FolderGlassHostView,

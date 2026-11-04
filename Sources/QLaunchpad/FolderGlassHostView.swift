@@ -48,7 +48,6 @@ final class AppIconImageProvider: @unchecked Sendable {
     private var inflightCallbacks: [String: [@MainActor (CGImage?) -> Void]] = [:]
     private var currentAppearanceName: String = (NSApp.effectiveAppearance.name).rawValue
     private var currentAppearance: NSAppearance = NSApp.effectiveAppearance
-    private var targetAppearanceName: String?
     private var targetAppearance: NSAppearance?
     private var appearanceGeneration: UInt64 = 0
 
@@ -67,7 +66,6 @@ final class AppIconImageProvider: @unchecked Sendable {
         }
         currentAppearanceName = name
         currentAppearance = appearance
-        targetAppearanceName = nil
         targetAppearance = nil
         appearanceGeneration &+= 1
         inflightCallbacks.removeAll()
@@ -75,9 +73,7 @@ final class AppIconImageProvider: @unchecked Sendable {
     }
 
     func setTargetAppearance(_ appearance: NSAppearance, generation: UInt64) {
-        let name = appearance.name.rawValue
         lock.lock()
-        targetAppearanceName = name
         targetAppearance = appearance
         appearanceGeneration = generation
         inflightCallbacks.removeAll()
@@ -89,9 +85,23 @@ final class AppIconImageProvider: @unchecked Sendable {
         lock.lock()
         currentAppearanceName = name
         currentAppearance = appearance
-        targetAppearanceName = nil
         targetAppearance = nil
-        let toRemove = cachedKeys.filter { !$0.hasSuffix("|\(name)") }
+
+        var readyPaths = Set<String>()
+        for k in cachedKeys where k.hasSuffix("|\(name)") {
+            if let sep = k.lastIndex(of: "|") {
+                readyPaths.insert(String(k[..<sep]))
+            }
+        }
+
+        let toRemove = cachedKeys.filter { k in
+            guard !k.hasSuffix("|\(name)") else { return false }
+            if let sep = k.lastIndex(of: "|") {
+                let path = String(k[..<sep])
+                return readyPaths.contains(path)
+            }
+            return true
+        }
         for k in toRemove {
             cache.removeObject(forKey: k as NSString)
             cachedKeys.remove(k)
@@ -301,7 +311,6 @@ private final class FolderGlassPlateItemView: NSView {
     private var lastAppearanceName: String? = nil
     private var currentMembers: [AppInfo] = []
     private var currentPreviewVisible: Bool = false
-    private var currentIconSize: CGFloat = -1
     private var currentIncomingDropAppID: String? = nil
     private var lastBlurRadius: CGFloat = -1
     private var lastTransitionProgress: CGFloat = -1
@@ -435,11 +444,22 @@ private final class FolderGlassPlateItemView: NSView {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        glassEffectView?.frame = bounds
-        sunkContainerView.frame = bounds
-        visualEffectView?.frame = bounds
-        contentView.frame = bounds
-        lastBoundsSize = bounds.size
+        let currentBounds = bounds
+        glassEffectView?.frame = currentBounds
+        sunkContainerView.frame = currentBounds
+        visualEffectView?.frame = currentBounds
+        contentView.frame = currentBounds
+        if currentBounds.size != lastBoundsSize {
+            lastBoundsSize = currentBounds.size
+            let radius = lastCornerRadius > 0 ? lastCornerRadius : 24.0
+            let path = CGPath(
+                roundedRect: currentBounds,
+                cornerWidth: radius,
+                cornerHeight: radius,
+                transform: nil
+            )
+            sunkContainerView.layer?.shadowPath = path
+        }
         CATransaction.commit()
     }
 
@@ -476,12 +496,12 @@ private final class FolderGlassPlateItemView: NSView {
     ) {
         currentMembers = members
         currentPreviewVisible = previewVisible
-        currentIconSize = iconSize
         currentIncomingDropAppID = incomingDropAppID
 
         frame = rect
         let currentBounds = bounds
-        if currentBounds.size != lastBoundsSize {
+        let sizeChanged = currentBounds.size != lastBoundsSize
+        if sizeChanged {
             glassEffectView?.frame = currentBounds
             sunkContainerView.frame = currentBounds
             visualEffectView?.frame = currentBounds
@@ -493,7 +513,7 @@ private final class FolderGlassPlateItemView: NSView {
             lastAlpha = alpha
         }
 
-        if cornerRadius != lastCornerRadius || currentBounds.size != lastBoundsSize {
+        if cornerRadius != lastCornerRadius || sizeChanged {
             if #available(macOS 26.0, *), let glass = glassEffectView as? NSGlassEffectView {
                 glass.cornerRadius = cornerRadius
             }
@@ -637,12 +657,14 @@ private final class FolderGlassPlateItemView: NSView {
             if let oldImg {
                 layer.contents = oldImg
                 layer.isHidden = false
-                layer.opacity = 1.0 - p
+                layer.opacity = 1.0
+            } else {
+                layer.isHidden = true
             }
             if let newImg {
                 crossLayer.contents = newImg
                 crossLayer.isHidden = false
-                crossLayer.opacity = p
+                crossLayer.opacity = oldImg != nil ? p : 1.0
             } else {
                 crossLayer.isHidden = true
             }
@@ -663,6 +685,7 @@ private final class FolderGlassPlateItemView: NSView {
                     layer.contents = newImg
                 }
                 layer.opacity = 1.0
+                layer.isHidden = false
             }
             if index < crossfadePreviewLayers.count {
                 let crossLayer = crossfadePreviewLayers[index]
@@ -928,7 +951,6 @@ final class FolderGlassHostView: NSView {
         CATransaction.setDisableActions(true)
         hostView.layer?.sublayerTransform = CATransform3DIdentity
         for item in itemsByID.values {
-            item.setMaterialStyle(.glass)
             item.updateTransitionProgress(progress: 0, materialProgress: 0)
         }
         CATransaction.commit()
