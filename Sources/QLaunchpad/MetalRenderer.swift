@@ -3764,6 +3764,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     // MARK: Draw
 
     func draw(in view: MTKView) {
+        autoreleasepool {
+            renderFrame(in: view)
+        }
+    }
+
+    private func renderFrame(in view: MTKView) {
         // Wallpaper is already up. Do not encode a rest-pose grid until the
         // phase-0 start frame is the one first-frame waiters will reveal.
         if isHoldingPresentationPrime {

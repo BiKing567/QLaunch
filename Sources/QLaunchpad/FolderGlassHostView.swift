@@ -300,7 +300,7 @@ enum FolderPlateMaterialStyle: Sendable {
 /// completely eliminating CPU CoreGraphics bitmap drawing, cache churn, and scale blur.
 private final class FolderGlassPlateItemView: NSView {
     private var glassEffectView: NSView?
-    private var visualEffectView: NSVisualEffectView?
+    private let sunkPlateView = FlippedContainerView()
     private var currentMaterialStyle: FolderPlateMaterialStyle = .glass
     private let sunkContainerView = FlippedContainerView()
     private let contentView = FlippedContainerView()
@@ -398,25 +398,34 @@ private final class FolderGlassPlateItemView: NSView {
             glass.isHidden = (materialStyle == .regular)
             addSubview(glass, positioned: .below, relativeTo: sunkContainerView)
             glassEffectView = glass
+        } else {
+            let visual = NSVisualEffectView(frame: bounds)
+            visual.wantsLayer = true
+            visual.autoresizingMask = [.width, .height]
+            visual.blendingMode = .withinWindow
+            visual.material = .hudWindow
+            visual.state = .active
+            visual.layer?.cornerCurve = .continuous
+            visual.layer?.masksToBounds = true
+            visual.isHidden = (materialStyle == .regular)
+            addSubview(visual, positioned: .below, relativeTo: sunkContainerView)
+            glassEffectView = visual
         }
 
-        let visual = NSVisualEffectView(frame: bounds)
-        visual.wantsLayer = true
-        visual.autoresizingMask = [.width, .height]
-        visual.blendingMode = .withinWindow
-        visual.state = .active
-        visual.layer?.cornerCurve = .continuous
-        visual.layer?.masksToBounds = true
-        visual.isHidden = (materialStyle == .glass && glassEffectView != nil)
-        sunkContainerView.addSubview(visual)
-        visualEffectView = visual
+        sunkPlateView.frame = bounds
+        sunkPlateView.wantsLayer = true
+        sunkPlateView.autoresizingMask = [.width, .height]
+        sunkPlateView.layer?.cornerCurve = .continuous
+        sunkPlateView.layer?.masksToBounds = true
+        sunkPlateView.isHidden = (materialStyle == .glass && glassEffectView != nil)
+        sunkContainerView.addSubview(sunkPlateView)
         updateFallbackAppearance()
 
         contentView.frame = bounds
         contentView.wantsLayer = true
         contentView.layer?.masksToBounds = false
         contentView.autoresizingMask = [.width, .height]
-        sunkContainerView.addSubview(contentView, positioned: .above, relativeTo: visual)
+        sunkContainerView.addSubview(contentView, positioned: .above, relativeTo: sunkPlateView)
 
         // Pre-create 9 reusable CALayers for the 3×3 grid plus 9 crossfade overlay layers
         for _ in 0..<FolderPreviewLayout.capacity {
@@ -467,8 +476,8 @@ private final class FolderGlassPlateItemView: NSView {
         case .regular:
             glassEffectView?.alphaValue = 0.0
             glassEffectView?.isHidden = true
-            visualEffectView?.alphaValue = 1.0
-            visualEffectView?.isHidden = false
+            sunkPlateView.alphaValue = 1.0
+            sunkPlateView.isHidden = false
             sunkContainerView.layer?.shadowOpacity = 0.18
         }
         CATransaction.commit()
@@ -481,7 +490,7 @@ private final class FolderGlassPlateItemView: NSView {
         let currentBounds = bounds
         glassEffectView?.frame = currentBounds
         sunkContainerView.frame = currentBounds
-        visualEffectView?.frame = currentBounds
+        sunkPlateView.frame = currentBounds
         contentView.frame = currentBounds
         if currentBounds.size != lastBoundsSize {
             lastBoundsSize = currentBounds.size
@@ -505,17 +514,27 @@ private final class FolderGlassPlateItemView: NSView {
 
     private func updateFallbackAppearance() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            guard let visual = visualEffectView else { return }
             let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            visual.material = .hudWindow
             if isDark {
-                visual.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.20).cgColor
-                visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.18).cgColor
+                sunkPlateView.layer?.backgroundColor = NSColor(white: 0.34, alpha: 0.55).cgColor
+                sunkPlateView.layer?.borderColor = NSColor(white: 1.0, alpha: 0.18).cgColor
             } else {
-                visual.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.05).cgColor
-                visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.35).cgColor
+                sunkPlateView.layer?.backgroundColor = NSColor(white: 0.80, alpha: 0.28).cgColor
+                sunkPlateView.layer?.borderColor = NSColor(white: 1.0, alpha: 0.35).cgColor
             }
-            visual.layer?.borderWidth = 0.5
+            sunkPlateView.layer?.borderWidth = 0.5
+
+            if let visual = glassEffectView as? NSVisualEffectView {
+                visual.material = .hudWindow
+                if isDark {
+                    visual.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.20).cgColor
+                    visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.18).cgColor
+                } else {
+                    visual.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.05).cgColor
+                    visual.layer?.borderColor = NSColor(white: 1.0, alpha: 0.35).cgColor
+                }
+                visual.layer?.borderWidth = 0.5
+            }
         }
     }
 
@@ -539,7 +558,7 @@ private final class FolderGlassPlateItemView: NSView {
         if sizeChanged {
             glassEffectView?.frame = currentBounds
             sunkContainerView.frame = currentBounds
-            visualEffectView?.frame = currentBounds
+            sunkPlateView.frame = currentBounds
             contentView.frame = currentBounds
             lastBoundsSize = currentBounds.size
         }
@@ -551,8 +570,10 @@ private final class FolderGlassPlateItemView: NSView {
         if cornerRadius != lastCornerRadius || sizeChanged {
             if #available(macOS 26.0, *), let glass = glassEffectView as? NSGlassEffectView {
                 glass.cornerRadius = cornerRadius
+            } else if let visual = glassEffectView as? NSVisualEffectView {
+                visual.layer?.cornerRadius = cornerRadius
             }
-            visualEffectView?.layer?.cornerRadius = cornerRadius
+            sunkPlateView.layer?.cornerRadius = cornerRadius
             let path = CGPath(
                 roundedRect: currentBounds,
                 cornerWidth: cornerRadius,
@@ -811,43 +832,43 @@ private final class FolderGlassPlateItemView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        // 1. Cross-fade baseplates strictly driven by materialProgress (0 = 100% glass, 1 = 100% lightweight plate).
+        // 1. Cross-fade baseplates strictly driven by materialProgress (0 = 100% glass, 1 = 100% static sunk plate).
         // Overlap duration is limited to <= 80ms by the animation clock with a single Hermite ease.
         if localMaterial <= 0.0001 {
-            // Resting desktop state: 100% native glass, lightweight plate hidden
+            // Resting desktop state: 100% native glass, static sunk plate hidden
             if glassEffectView != nil {
                 glassEffectView?.alphaValue = 1.0
                 glassEffectView?.isHidden = false
-                visualEffectView?.alphaValue = 0.0
-                visualEffectView?.isHidden = true
+                sunkPlateView.alphaValue = 0.0
+                sunkPlateView.isHidden = true
                 sunkContainerView.layer?.shadowOpacity = 0.0
             } else {
-                visualEffectView?.alphaValue = 1.0
-                visualEffectView?.isHidden = false
+                sunkPlateView.alphaValue = 1.0
+                sunkPlateView.isHidden = false
                 sunkContainerView.layer?.shadowOpacity = 0.18
             }
         } else if localMaterial >= 0.9999 {
-            // Sunk / open phase: 100% lightweight plate, native glass completely hidden
+            // Sunk / open phase: 100% static sunk plate, native glass completely hidden
             glassEffectView?.alphaValue = 0.0
             glassEffectView?.isHidden = true
-            visualEffectView?.alphaValue = 1.0
-            visualEffectView?.isHidden = false
+            sunkPlateView.alphaValue = 1.0
+            sunkPlateView.isHidden = false
             sunkContainerView.layer?.shadowOpacity = 0.18
         } else {
-            // Inside handoff: single smooth Hermite cross-fade between glass and lightweight plate.
+            // Inside handoff: single smooth Hermite cross-fade between glass and static sunk plate.
             let smoothT = localMaterial * localMaterial * (3.0 - 2.0 * localMaterial)
-            let visualAlpha = smoothT
+            let plateAlpha = smoothT
             let glassAlpha = 1.0 - smoothT
 
             if glassEffectView != nil {
                 glassEffectView?.alphaValue = glassAlpha
                 glassEffectView?.isHidden = false
-                visualEffectView?.alphaValue = visualAlpha
-                visualEffectView?.isHidden = false
+                sunkPlateView.alphaValue = plateAlpha
+                sunkPlateView.isHidden = false
                 sunkContainerView.layer?.shadowOpacity = Float(smoothT) * 0.18
             } else {
-                visualEffectView?.alphaValue = 1.0
-                visualEffectView?.isHidden = false
+                sunkPlateView.alphaValue = 1.0
+                sunkPlateView.isHidden = false
                 sunkContainerView.layer?.shadowOpacity = 0.18
             }
         }
