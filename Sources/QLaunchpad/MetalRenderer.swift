@@ -549,6 +549,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let folderID: String
         let target: [LaunchpadItem]
         let signature: AppListSignature
+        let rootItems: [LaunchpadItem]
+        let rootPageOffset: Double
+        let canvasScale: CGFloat
+        let canvasPan: CGPoint
+        let canvasAdaptive: Bool
+        let source: (center: CGPoint, size: CGFloat)?
     }
     private var pendingFolderOpen: PendingFolderOpen?
 
@@ -560,6 +566,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
     init(store: AppStore) {
         self.store = store
+        self.currentPageOffset = store.pageOffset
+        self.frozenPageOffset = store.pageOffset
         guard let device = MTLCreateSystemDefaultDevice(),
               let commandQueue = device.makeCommandQueue() else {
             fatalError("Metal is required by QLaunch")
@@ -1064,8 +1072,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
     private func startDisplayLink() {
         guard displayLink == nil else { return }
-        let link = displayLink(target: self, selector: #selector(displayLinkFired(_:)))
         let targetScreen = window?.screen ?? NSScreen.main ?? NSScreen.screens.first
+        let link = targetScreen?.displayLink(target: self, selector: #selector(displayLinkFired(_:)))
+            ?? displayLink(target: self, selector: #selector(displayLinkFired(_:)))
         let maxFps = Float(max(60, targetScreen?.maximumFramesPerSecond ?? 60))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: maxFps, preferred: maxFps)
         link.add(to: .main, forMode: .common)
@@ -1081,6 +1090,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             && !animatingPresentation
             && contentTransitionPhase == .idle
             && !isFolderTransitionActive
+            && !isPreparingFolderOpen
             && !isAppearanceCrossfadeActive
             && pendingTargetAppearance == nil
             && !isReorderAnimationActive
@@ -2773,7 +2783,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 }
                 reverseFolderTransition(&active, to: .closing)
                 active.rootItems = target
-                presentsWithTransaction = true
                 folderTransition = active
                 startDisplayLink()
                 needsDisplay = true
@@ -2785,7 +2794,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     return true
                 }
                 reverseFolderTransition(&active, to: .opening)
-                presentsWithTransaction = true
                 folderTransition = active
                 startDisplayLink()
                 needsDisplay = true
@@ -2800,16 +2808,31 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         if let pending = pendingFolderOpen {
             if nextFolderID == nil {
                 pendingFolderOpen = nil
+                currentPageOffset = pending.rootPageOffset
+                frozenPageOffset = pending.rootPageOffset
+                folderDrawableProvider.invalidate()
                 onFolderDepthBackdropDismiss?()
                 lastDisplaySignature = signature
                 return true
             } else if nextFolderID == pending.folderID {
                 if signature != pending.signature {
-                    pendingFolderOpen = PendingFolderOpen(folderID: pending.folderID, target: target, signature: signature)
+                    pendingFolderOpen = PendingFolderOpen(
+                        folderID: pending.folderID,
+                        target: target,
+                        signature: signature,
+                        rootItems: pending.rootItems,
+                        rootPageOffset: pending.rootPageOffset,
+                        canvasScale: pending.canvasScale,
+                        canvasPan: pending.canvasPan,
+                        canvasAdaptive: pending.canvasAdaptive,
+                        source: pending.source
+                    )
                 }
                 return true
             } else {
                 pendingFolderOpen = nil
+                currentPageOffset = pending.rootPageOffset
+                frozenPageOffset = pending.rootPageOffset
             }
         }
 
@@ -2846,53 +2869,107 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         target: [LaunchpadItem],
         signature: AppListSignature
     ) {
-        pendingFolderOpen = PendingFolderOpen(folderID: folderID, target: target, signature: signature)
+        let rootItems = displayedItems
+        let rootPageOffset = currentPageOffset
+        let rootCanvasScale = canvasScale
+        let rootCanvasPan = canvasPan
+        let rootCanvasAdaptive = canvasStateUsesAdaptiveLayout
+        let source = folderIconPresentation(
+            folderID: folderID,
+            items: rootItems,
+            pageOffset: rootPageOffset,
+            canvasScale: rootCanvasScale,
+            canvasPan: rootCanvasPan,
+            canvasAdaptive: rootCanvasAdaptive,
+            useVisualSlots: true
+        )
+        frozenPageOffset = rootPageOffset
+        if let source {
+            lastFolderSource = FolderSourceSnapshot(
+                folderID: folderID,
+                center: source.center,
+                size: source.size,
+                rootPageOffset: rootPageOffset,
+                canvasScale: rootCanvasScale,
+                canvasPan: rootCanvasPan,
+                canvasAdaptive: rootCanvasAdaptive,
+                boundsSize: bounds.size
+            )
+        }
+        pendingFolderOpen = PendingFolderOpen(
+            folderID: folderID,
+            target: target,
+            signature: signature,
+            rootItems: rootItems,
+            rootPageOffset: rootPageOffset,
+            canvasScale: rootCanvasScale,
+            canvasPan: rootCanvasPan,
+            canvasAdaptive: rootCanvasAdaptive,
+            source: source
+        )
         prepareFolderTransitionResources(items: target)
+        if let surface = layer as? CAMetalLayer {
+            folderDrawableProvider.prefetch(from: surface)
+        }
         folderTransitionGeneration &+= 1
         onFolderTransitionBakeBackdrop?(
             folderID,
             folderTransitionGeneration,
-            displayedItems,
-            currentPageOffset,
-            canvasScale,
-            canvasPan,
-            canvasStateUsesAdaptiveLayout
+            rootItems,
+            rootPageOffset,
+            rootCanvasScale,
+            rootCanvasPan,
+            rootCanvasAdaptive
         )
         startDisplayLink()
-        needsDisplay = true
     }
 
     func handleBackdropReady(isReady: Bool) {
         if let pending = pendingFolderOpen {
             pendingFolderOpen = nil
             if store.openedFolderID == pending.folderID {
-                beginFolderOpenTransition(folderID: pending.folderID, target: pending.target)
+                if !beginFolderOpenTransition(
+                    folderID: pending.folderID,
+                    target: pending.target,
+                    pendingSnapshot: pending
+                ) {
+                    finishFolderTransition()
+                }
+            } else {
+                currentPageOffset = pending.rootPageOffset
+                frozenPageOffset = pending.rootPageOffset
             }
         }
+        startDisplayLink()
         needsDisplay = true
     }
 
     @discardableResult
     private func beginFolderOpenTransition(
         folderID: String,
-        target: [LaunchpadItem]
+        target: [LaunchpadItem],
+        pendingSnapshot: PendingFolderOpen? = nil
     ) -> Bool {
         if var active = folderTransition, active.folderID == folderID {
             reverseFolderTransition(&active, to: .opening)
-            presentsWithTransaction = true
             folderTransition = active
             startDisplayLink()
             needsDisplay = true
             return true
         }
 
-        let source = folderIconPresentation(
+        let rootItems = pendingSnapshot?.rootItems ?? displayedItems
+        let rootPageOffset = pendingSnapshot?.rootPageOffset ?? currentPageOffset
+        let rootCanvasScale = pendingSnapshot?.canvasScale ?? canvasScale
+        let rootCanvasPan = pendingSnapshot?.canvasPan ?? canvasPan
+        let rootCanvasAdaptive = pendingSnapshot?.canvasAdaptive ?? canvasStateUsesAdaptiveLayout
+        let source = pendingSnapshot?.source ?? folderIconPresentation(
             folderID: folderID,
-            items: displayedItems,
-            pageOffset: currentPageOffset,
-            canvasScale: canvasScale,
-            canvasPan: canvasPan,
-            canvasAdaptive: canvasStateUsesAdaptiveLayout,
+            items: rootItems,
+            pageOffset: rootPageOffset,
+            canvasScale: rootCanvasScale,
+            canvasPan: rootCanvasPan,
+            canvasAdaptive: rootCanvasAdaptive,
             useVisualSlots: true
         )
         guard let source else { return false }
@@ -2901,30 +2978,29 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             folderID: folderID,
             center: source.center,
             size: source.size,
-            rootPageOffset: currentPageOffset,
-            canvasScale: canvasScale,
-            canvasPan: canvasPan,
-            canvasAdaptive: canvasStateUsesAdaptiveLayout,
+            rootPageOffset: rootPageOffset,
+            canvasScale: rootCanvasScale,
+            canvasPan: rootCanvasPan,
+            canvasAdaptive: rootCanvasAdaptive,
             boundsSize: bounds.size
         )
-        frozenPageOffset = currentPageOffset
+        frozenPageOffset = rootPageOffset
         contentTransitionPhase = .idle
         contentTransitionAlpha = 1
         pendingDisplayItems = nil
         hasDrawnFolderFrame = false
-        presentsWithTransaction = true
         folderTransition = FolderTransition(
             direction: .opening,
             folderID: folderID,
             sourceCenter: source.center,
             sourceSize: source.size,
-            rootItems: displayedItems,
+            rootItems: rootItems,
             folderItems: target,
-            rootPageOffset: currentPageOffset,
+            rootPageOffset: rootPageOffset,
             folderPageOffset: 0,
-            rootCanvasScale: canvasScale,
-            rootCanvasPan: canvasPan,
-            rootCanvasAdaptive: canvasStateUsesAdaptiveLayout,
+            rootCanvasScale: rootCanvasScale,
+            rootCanvasPan: rootCanvasPan,
+            rootCanvasAdaptive: rootCanvasAdaptive,
             startTime: 0,
             duration: folderOpenDuration,
             startProgress: 0,
@@ -2938,7 +3014,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         var retainedImages: [CGImage] = []
         var retainedMap: [String: CGImage] = [:]
         let appName = effectiveAppearance.name.rawValue
-        for item in displayedItems.prefix(FolderPreviewLayout.capacity) {
+        for item in rootItems.prefix(FolderPreviewLayout.capacity) {
             if case .app(let app) = item,
                let img = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appName, allowFallback: true) {
                 retainedImages.append(img)
@@ -2954,11 +3030,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             onFolderTransitionBakeBackdrop?(
                 folderID,
                 folderTransitionGeneration,
-                displayedItems,
-                currentPageOffset,
-                canvasScale,
-                canvasPan,
-                canvasStateUsesAdaptiveLayout
+                rootItems,
+                rootPageOffset,
+                rootCanvasScale,
+                rootCanvasPan,
+                rootCanvasAdaptive
             )
         }
         startDisplayLink()
@@ -2974,7 +3050,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         if var active = folderTransition, active.folderID == folderID {
             reverseFolderTransition(&active, to: .closing)
             active.rootItems = target
-            presentsWithTransaction = true
             folderTransition = active
             startDisplayLink()
             needsDisplay = true
@@ -2989,7 +3064,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         contentTransitionAlpha = 1
         pendingDisplayItems = nil
         hasDrawnFolderFrame = false
-        presentsWithTransaction = true
         folderTransition = FolderTransition(
             direction: .closing,
             folderID: folderID,
@@ -3802,7 +3876,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         let quality = IconRenderQuality.current
         if quality.usesLazyTextureLoading {
-            if !isFolderTransitionActive {
+            if !isFolderTransitionActive && !isPreparingFolderOpen {
                 // Low-memory: also react to search/folder list identity, not just page.
                 let destPage = max(
                     0,
@@ -3857,7 +3931,26 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             )
         }
 
+        if isPreparingFolderOpen && firstFrameWaiters.isEmpty {
+            startDisplayLink()
+            return
+        }
+
+        if let transition = folderTransition, transition.hasDrawnSettledFrame {
+            let nativeReady = transition.direction == .closing
+                ? (areFolderPreviewsReady?(transition.folderID) ?? true)
+                : true
+            if nativeReady {
+                finishFolderTransition()
+            }
+        }
+
         let isSynchronizedTransition = isFolderTransitionActive
+        let isSettlingDesktop = pendingFolderTransitionEnd && (store.openedFolderID == nil)
+        let isSynchronized = isSynchronizedTransition || isSettlingDesktop
+        if presentsWithTransaction != isSynchronized {
+            presentsWithTransaction = isSynchronized
+        }
         // Avoid building frame storage when the layer cannot supply a drawable.
         // Acquire the drawable first so that any WindowServer / swapchain wait
         // occurs before sampling the animation timeline and advancing motion physics.
@@ -3913,6 +4006,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         if contentTransitionPhase != .fadingOut,
            !isFolderTransitionActive,
+           !isPreparingFolderOpen,
            !GridLayoutPreset.current.isInfiniteCanvas {
             let pageTarget = store.isPageGestureActive ? store.pageOffset : store.targetPage
             if store.isPageGestureActive {
@@ -4020,7 +4114,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let metrics = GridMetrics(size: bounds.size, safeInsets: store.safeInsets)
         let midX = bounds.midX
         let midY = bounds.height * 0.5
-        let pageOffset = contentTransitionPhase == .fadingOut || isFolderTransitionActive
+        let pageOffset = contentTransitionPhase == .fadingOut || isFolderTransitionActive || isPreparingFolderOpen
             ? frozenPageOffset
             : currentPageOffset
 
@@ -4078,8 +4172,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 folderPlates: &folderPlates
             )
         }
-        let isSettlingDesktop = pendingFolderTransitionEnd && (store.openedFolderID == nil)
-        let isSynchronized = isSynchronizedTransition || isSettlingDesktop
         if isSynchronized {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
@@ -4234,7 +4326,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
         let wasFirstFolderFrame = isFolderTransitionActive && !hasDrawnFolderFrame
         hasDrawnFolderFrame = isFolderTransitionActive
-        presentsWithTransaction = isFolderTransitionActive
         if wasFirstFolderFrame, let surface = layer as? CAMetalLayer {
             folderDrawableProvider.prefetch(from: surface, ready: { [weak self] in
                 guard let self,
@@ -4252,7 +4343,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private func frameTarget() -> (drawable: CAMetalDrawable, passDescriptor: MTLRenderPassDescriptor)? {
         guard isFolderTransitionActive,
               let surface = layer as? CAMetalLayer else {
-            folderDrawableProvider.invalidate()
+            if !isPreparingFolderOpen {
+                folderDrawableProvider.invalidate()
+            }
             guard let drawable = currentDrawable,
                   let passDescriptor = currentRenderPassDescriptor else { return nil }
             return (drawable, passDescriptor)
@@ -7055,7 +7148,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
 
         guard let source = dragSource, displayedItems.indices.contains(source) else { return }
-        if !didDrag, contentTransitionPhase == .idle, !isFolderTransitionActive {
+        if !didDrag, contentTransitionPhase == .idle, !isFolderTransitionActive, !isPreparingFolderOpen {
             let item = displayedItems[source]
             if case .folder(let folder) = item {
                 store.enterFolder(folder.id)
