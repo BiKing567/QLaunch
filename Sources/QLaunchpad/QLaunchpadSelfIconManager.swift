@@ -49,6 +49,9 @@ final class QLaunchpadSelfIconManager: ObservableObject {
     private var systemDynamicImage: NSImage?
     private var systemLightImage: NSImage?
     private var systemDarkImage: NSImage?
+    private var rocketDynamicImage: NSImage?
+    private var rocketLightImage: NSImage?
+    private var rocketDarkImage: NSImage?
 
     private init() {
         let savedRaw = UserDefaults.standard.string(forKey: QLaunchpadPreferences.selfAppIconPresetKey) ?? AppIconPreset.default.rawValue
@@ -80,8 +83,8 @@ final class QLaunchpadSelfIconManager: ObservableObject {
     }
 
     private func handleAppearanceChange() {
-        if currentPreset == .system {
-            applyToSystem(preset: .system)
+        if currentPreset == .system || currentPreset == .rocket {
+            applyToSystem(preset: currentPreset)
         }
         objectWillChange.send()
         NotificationCenter.default.post(name: .qlaunchpadSelfIconChanged, object: nil)
@@ -165,6 +168,53 @@ final class QLaunchpadSelfIconManager: ObservableObject {
         systemDynamicImage = dynamic
     }
 
+    /// Returns the classic Launchpad launcher icon, adapting automatically to light/dark appearance
+    func rocketIcon(isDark: Bool? = nil) -> NSImage {
+        loadRocketIconsIfNeeded()
+        let dark = isDark ?? isSystemDarkMode
+        if dark, let darkImg = rocketDarkImage {
+            return darkImg
+        }
+        if !dark, let lightImg = rocketLightImage {
+            return lightImg
+        }
+        return rocketDynamicImage ?? defaultAppIcon
+    }
+
+    private func loadRocketIconsIfNeeded() {
+        if rocketDynamicImage != nil { return }
+        guard let bundle = QLaunchpadResources.bundle else { return }
+
+        let lightURL = bundle.url(forResource: "AppIcon-Rocket-Light", withExtension: "png")
+            ?? bundle.url(forResource: "AppIcon-Rocket", withExtension: "png")
+        let darkURL = bundle.url(forResource: "AppIcon-Rocket-Dark", withExtension: "png")
+            ?? bundle.url(forResource: "AppIcon-Rocket", withExtension: "png")
+
+        if let lightURL, let img = NSImage(contentsOf: lightURL) {
+            rocketLightImage = img
+        }
+        if let darkURL, let img = NSImage(contentsOf: darkURL) {
+            rocketDarkImage = img
+        }
+
+        let light = rocketLightImage
+        let dark = rocketDarkImage
+
+        let dynamic = NSImage(size: NSSize(width: 1024, height: 1024), flipped: false) { [weak self] rect in
+            let appearance = NSAppearance.currentDrawing()
+            let isDark: Bool
+            if let match = appearance.bestMatch(from: [.darkAqua, .aqua]) {
+                isDark = (match == .darkAqua)
+            } else {
+                isDark = self?.isSystemDarkMode ?? false
+            }
+            let target = isDark ? (dark ?? light) : (light ?? dark)
+            target?.draw(in: rect)
+            return true
+        }
+        rocketDynamicImage = dynamic
+    }
+
     /// Retrieves the image for a specific preset, optionally specifying the appearance mode
     func image(for preset: AppIconPreset, isDark: Bool? = nil) -> NSImage? {
         switch preset {
@@ -185,17 +235,7 @@ final class QLaunchpadSelfIconManager: ObservableObject {
             return systemIcon(isDark: isDark)
 
         case .rocket:
-            if let cached = presetImageCache[.rocket] {
-                return cached
-            }
-            guard let name = preset.resourceName,
-                  let bundle = QLaunchpadResources.bundle,
-                  let url = bundle.url(forResource: name, withExtension: "png"),
-                  let img = NSImage(contentsOf: url) else {
-                return defaultAppIcon
-            }
-            presetImageCache[.rocket] = img
-            return img
+            return rocketIcon(isDark: isDark)
         }
     }
 
@@ -279,6 +319,12 @@ final class QLaunchpadSelfIconManager: ObservableObject {
             }
         } else if preset == .system {
             let img = systemIcon(isDark: isSystemDarkMode)
+            NSApp.applicationIconImage = img
+            if isPackagedApp {
+                NSWorkspace.shared.setIcon(img, forFile: bundlePath, options: [])
+            }
+        } else if preset == .rocket {
+            let img = rocketIcon(isDark: isSystemDarkMode)
             NSApp.applicationIconImage = img
             if isPackagedApp {
                 NSWorkspace.shared.setIcon(img, forFile: bundlePath, options: [])
