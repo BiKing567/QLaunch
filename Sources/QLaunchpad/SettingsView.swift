@@ -5,6 +5,9 @@ import UniformTypeIdentifiers
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
+    case appearance
+    case layout
+    case shortcuts
     case applications
     case about
 
@@ -15,6 +18,9 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .general: "gearshape"
+        case .appearance: "paintpalette"
+        case .layout: "square.grid.3x3"
+        case .shortcuts: "keyboard"
         case .applications: "square.grid.2x2"
         case .about: "info.circle"
         }
@@ -40,7 +46,7 @@ struct SettingsView: View {
                 Color.clear.frame(height: 28)
             }
             .background(Color(nsColor: .underPageBackgroundColor))
-            .frame(width: 140)
+            .frame(width: 175)
 
             Divider()
 
@@ -60,7 +66,13 @@ struct SettingsView: View {
                 Group {
                     switch selection {
                     case .general:
-                        GeneralSettingsView(store: store)
+                        GeneralSettingsView()
+                    case .appearance:
+                        AppearanceSettingsView(store: store)
+                    case .layout:
+                        LayoutSettingsView(store: store)
+                    case .shortcuts:
+                        ShortcutsSettingsView()
                     case .applications:
                         ApplicationSettingsView(store: store)
                     case .about:
@@ -72,44 +84,20 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Color(nsColor: .windowBackgroundColor))
         }
-        .frame(minWidth: 530, minHeight: 550)
+        .frame(minWidth: 580, minHeight: 560)
         .ignoresSafeArea(.container, edges: .top)
         .environment(\.locale, language.locale)
     }
 }
 
+// MARK: - 1. 通用 (General)
+
 private struct GeneralSettingsView: View {
-    @ObservedObject var store: AppStore
     @ObservedObject private var language = LocalizationManager.shared
     @AppStorage(QLaunchpadPreferences.showMenuBarIconKey)
     private var showMenuBarIcon = QLaunchpadPreferences.defaultShowMenuBarIcon
     @AppStorage(QLaunchpadPreferences.showDockIconKey)
     private var showDockIcon = QLaunchpadPreferences.defaultShowDockIcon
-    @AppStorage("showLabels") private var showLabels = true
-    @AppStorage(QLaunchpadPreferences.loopPagesKey)
-    private var loopPages = QLaunchpadPreferences.defaultLoopPages
-    @AppStorage(QLaunchpadPreferences.showDockInLaunchpadKey)
-    private var showDockInLaunchpad = QLaunchpadPreferences.defaultShowDockInLaunchpad
-    @AppStorage(GridLayoutPreset.defaultsKey)
-    private var gridLayoutPreset = GridLayoutPreset.defaultPreset.rawValue
-    @AppStorage(IconSizeTier.defaultsKey)
-    private var iconSizeTier = IconSizeTier.current.rawValue
-    @AppStorage(IconRenderQuality.defaultsKey)
-    private var iconRenderQuality = IconRenderQuality.defaultQuality.rawValue
-    @AppStorage(LaunchpadBackgroundPreferences.modeKey)
-    private var backgroundMode = LaunchpadBackgroundMode.defaultMode.rawValue
-    @AppStorage(LaunchpadBackgroundPreferences.customImagePathKey)
-    private var customBackgroundPath = ""
-    @AppStorage(LaunchpadBackgroundPreferences.blurAmountKey)
-    private var backgroundBlurAmount = LaunchpadBackgroundPreferences.defaultBlurAmount
-    @AppStorage(LaunchpadAnimationStyle.defaultsKey)
-    private var presentationAnimationStyle = LaunchpadAnimationStyle.fly.rawValue
-    @AppStorage(HotCornerPreferences.positionKey)
-    private var hotCornerPosition = HotCornerPreferences.defaultPosition.rawValue
-    @AppStorage(TrackpadGesturePreferences.enabledKey)
-    private var trackpadPinchEnabled = TrackpadGesturePreferences.defaultEnabled
-    @AppStorage(TrackpadGesturePreferences.takeOverSystemGestureKey)
-    private var trackpadTakeOverEnabled = TrackpadGesturePreferences.defaultTakeOverSystemGesture
     @State private var launchAtLogin = false
     @State private var launchAtLoginNeedsApproval = false
     @State private var didClearCache = false
@@ -165,11 +153,643 @@ private struct GeneralSettingsView: View {
                 }
 
                 Toggle(L10n.tr("settings.menuBarIcon"), isOn: $showMenuBarIcon)
-                .toggleStyle(.switch)
-                .onChange(of: showMenuBarIcon) { _, _ in
-                    notifyAppearanceChanged()
+                    .toggleStyle(.switch)
+                    .onChange(of: showMenuBarIcon) { _, _ in
+                        notifyAppearanceChanged()
+                    }
+            }
+
+            Section(L10n.tr("settings.section.maintenance")) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.cache.clear"))
+                        Text(L10n.tr("settings.cache.detail"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button(L10n.tr("common.clear")) {
+                        NotificationCenter.default.post(
+                            name: .qlaunchpadCacheClearRequested,
+                            object: nil
+                        )
+                        didClearCache = true
+                    }
+                    .buttonStyle(.bordered)
+                }
+                if didClearCache {
+                    Text(L10n.tr("settings.cache.cleared"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear(perform: refreshLaunchAtLogin)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshLaunchAtLogin()
+        }
+    }
+
+    private var launchAtLoginBinding: Binding<Bool> {
+        Binding(
+            get: { launchAtLogin },
+            set: { setLaunchAtLogin($0) }
+        )
+    }
+
+    private func refreshLaunchAtLogin() {
+        launchAtLoginNeedsApproval = LaunchAtLogin.needsApproval
+        launchAtLogin = LaunchAtLogin.isEnabled || launchAtLoginNeedsApproval
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            try LaunchAtLogin.setEnabled(enabled)
+            refreshLaunchAtLogin()
+            if enabled, LaunchAtLogin.needsApproval {
+                NotificationCenter.default.post(name: .qlaunchpadDismiss, object: nil)
+                LaunchAtLogin.openSystemSettings()
+            }
+        } catch {
+            refreshLaunchAtLogin()
+            presentLaunchAtLoginError(error)
+        }
+    }
+
+    private func presentLaunchAtLoginError(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = L10n.tr("error.loginItem.title")
+        alert.informativeText = L10n.tr("error.loginItem.message", error.localizedDescription)
+        alert.addButton(withTitle: L10n.tr("common.ok"))
+        presentSettingsAlert(alert)
+    }
+
+    private func notifyAppearanceChanged() {
+        NotificationCenter.default.post(name: .qlaunchpadAppearanceChanged, object: nil)
+    }
+}
+
+// MARK: - 2. 外观与动效 (Appearance & Effects)
+
+private struct AppearanceSettingsView: View {
+    @ObservedObject var store: AppStore
+    @AppStorage(LaunchpadBackgroundPreferences.modeKey)
+    private var backgroundMode = LaunchpadBackgroundMode.defaultMode.rawValue
+    @AppStorage(LaunchpadBackgroundPreferences.customImagePathKey)
+    private var customBackgroundPath = ""
+    @AppStorage(LaunchpadBackgroundPreferences.blurAmountKey)
+    private var backgroundBlurAmount = LaunchpadBackgroundPreferences.defaultBlurAmount
+    @AppStorage(LaunchpadAnimationStyle.defaultsKey)
+    private var presentationAnimationStyle = LaunchpadAnimationStyle.fly.rawValue
+    @AppStorage(IconRenderQuality.defaultsKey)
+    private var iconRenderQuality = IconRenderQuality.defaultQuality.rawValue
+
+    var body: some View {
+        Form {
+            Section(L10n.tr("settings.section.background")) {
+                Picker(selection: $backgroundMode) {
+                    ForEach(LaunchpadBackgroundMode.allCases) { mode in
+                        Text(mode.title).tag(mode.rawValue)
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.background.mode"))
+                        if let mode = LaunchpadBackgroundMode(rawValue: backgroundMode) {
+                            Text(mode.detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .onChange(of: backgroundMode) { _, _ in
+                    notifyBackgroundChanged()
                 }
 
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(L10n.tr("settings.background.blur"))
+                        Spacer()
+                        Text("\(Int(backgroundBlurAmount.rounded()))")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(
+                        value: $backgroundBlurAmount,
+                        in: LaunchpadBackgroundPreferences.minimumBlurAmount...LaunchpadBackgroundPreferences.maximumBlurAmount
+                    )
+                    .onChange(of: backgroundBlurAmount) { _, _ in
+                        notifyBackgroundChanged()
+                    }
+                    Text(L10n.tr("settings.background.blur.detail"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if LaunchpadBackgroundMode(rawValue: backgroundMode) == .custom {
+                    HStack(alignment: .top, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(customBackgroundName)
+                            Text(L10n.tr("settings.background.custom.instructions"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        Button(L10n.tr("common.choose")) {
+                            chooseCustomBackground()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if customBackgroundPath.isEmpty {
+                        Text(L10n.tr("settings.background.custom.missing"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if !FileManager.default.fileExists(atPath: customBackgroundPath) {
+                        Text(L10n.tr("settings.background.custom.unavailable"))
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+
+            Section(L10n.tr("settings.section.animation")) {
+                Picker(selection: $presentationAnimationStyle) {
+                    ForEach(LaunchpadAnimationStyle.allCases) { style in
+                        Text(style.title).tag(style.rawValue)
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.animation"))
+                        Text(L10n.tr("settings.animation.detail"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            Section(L10n.tr("settings.section.quality")) {
+                Picker(selection: $iconRenderQuality) {
+                    ForEach(IconRenderQuality.allCases) { quality in
+                        Text(quality.title).tag(quality.rawValue)
+                    }
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.renderQuality"))
+                        if store.isApplyingRenderQuality {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text(L10n.tr("settings.renderQuality.applying"))
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        } else if let quality = IconRenderQuality(rawValue: iconRenderQuality) {
+                            Text(quality.detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .disabled(store.isApplyingRenderQuality)
+                .onChange(of: iconRenderQuality) { _, newValue in
+                    UserDefaults.standard.set(newValue, forKey: IconRenderQuality.defaultsKey)
+                    NotificationCenter.default.post(
+                        name: .qlaunchpadRenderQualityChanged,
+                        object: nil
+                    )
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func notifyBackgroundChanged() {
+        NotificationCenter.default.post(name: .qlaunchpadBackgroundChanged, object: nil)
+    }
+
+    private var customBackgroundName: String {
+        guard !customBackgroundPath.isEmpty else {
+            return L10n.tr("settings.background.custom.choose")
+        }
+        return URL(fileURLWithPath: customBackgroundPath).lastPathComponent
+    }
+
+    private func chooseCustomBackground() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+
+        let completionHandler: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let url = panel.url else { return }
+            Self.applyCustomBackground(at: url)
+        }
+
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            panel.beginSheetModal(for: window, completionHandler: completionHandler)
+        } else if panel.runModal() == .OK, let url = panel.url {
+            Self.applyCustomBackground(at: url)
+        }
+    }
+
+    private static func applyCustomBackground(at url: URL) {
+        let modeWasCustom = LaunchpadBackgroundPreferences.mode == .custom
+        UserDefaults.standard.set(
+            url.path,
+            forKey: LaunchpadBackgroundPreferences.customImagePathKey
+        )
+        UserDefaults.standard.set(
+            LaunchpadBackgroundMode.custom.rawValue,
+            forKey: LaunchpadBackgroundPreferences.modeKey
+        )
+        if modeWasCustom {
+            NotificationCenter.default.post(name: .qlaunchpadBackgroundChanged, object: nil)
+        }
+    }
+}
+
+// MARK: - 3. 布局 (Layout)
+
+private struct LayoutSettingsView: View {
+    @ObservedObject var store: AppStore
+    @AppStorage("showLabels") private var showLabels = true
+    @AppStorage(QLaunchpadPreferences.loopPagesKey)
+    private var loopPages = QLaunchpadPreferences.defaultLoopPages
+    @AppStorage(QLaunchpadPreferences.showDockInLaunchpadKey)
+    private var showDockInLaunchpad = QLaunchpadPreferences.defaultShowDockInLaunchpad
+    @AppStorage(GridLayoutPreset.defaultsKey)
+    private var gridLayoutPreset = GridLayoutPreset.defaultPreset.rawValue
+    @AppStorage(IconSizeTier.defaultsKey)
+    private var iconSizeTier = IconSizeTier.current.rawValue
+    @State private var importStatusMessage: String?
+
+    var body: some View {
+        Form {
+            Section(L10n.tr("settings.section.gridAndDisplay")) {
+                Picker(L10n.tr("settings.layout"), selection: $gridLayoutPreset) {
+                    ForEach(GridLayoutPreset.menuGroups.indices, id: \.self) { groupIndex in
+                        if groupIndex > 0 {
+                            Divider()
+                        }
+                        ForEach(GridLayoutPreset.menuGroups[groupIndex]) { preset in
+                            Text(preset.title).tag(preset.rawValue)
+                        }
+                    }
+                }
+                .pickerStyle(.menu)
+                .onChange(of: gridLayoutPreset) { _, _ in
+                    NotificationCenter.default.post(name: .qlaunchpadGridLayoutChanged, object: nil)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(L10n.tr("settings.iconSize"))
+                        Spacer()
+                        Text(IconSizeTier(rawValue: iconSizeTier)?.localizedTitle ?? "")
+                            .foregroundStyle(.secondary)
+                    }
+                    Slider(
+                        value: Binding(
+                            get: { Double(iconSizeTier) },
+                            set: { newValue in
+                                let target = Int(newValue.rounded())
+                                if iconSizeTier != target {
+                                    iconSizeTier = target
+                                    NotificationCenter.default.post(name: .qlaunchpadGridLayoutChanged, object: nil)
+                                }
+                            }
+                        ),
+                        in: 1...5,
+                        step: 1
+                    ) {
+                        Text(L10n.tr("settings.iconSize"))
+                    } minimumValueLabel: {
+                        Text("64 pt")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    } maximumValueLabel: {
+                        Text("192 pt")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(L10n.tr("settings.iconSize.detail"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Toggle(L10n.tr("settings.showAppNames"), isOn: $showLabels)
+                    .toggleStyle(.switch)
+
+                Toggle(isOn: $loopPages) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.loopPages"))
+                        Text(L10n.tr("settings.loopPages.detail"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+
+                Toggle(isOn: $showDockInLaunchpad) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.showDockInLaunchpad"))
+                        Text(L10n.tr("settings.showDockInLaunchpad.detail"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+                .onChange(of: showDockInLaunchpad) { _, newValue in
+                    store.showSystemDock = newValue
+                }
+            }
+
+            Section(L10n.tr("settings.section.layoutProfiles")) {
+                HStack(spacing: 8) {
+                    LayoutProfilePopUp(
+                        profiles: store.layoutProfiles,
+                        selection: layoutSelectorSelection
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 22)
+                    .disabled(store.isLoading || store.apps.isEmpty)
+
+                    Button(L10n.tr("common.new")) { promptCreateLayoutProfile() }
+                        .buttonStyle(.bordered)
+                        .disabled(store.isLoading)
+
+                    Button(L10n.tr("common.delete")) { promptDeleteLayoutProfile() }
+                        .buttonStyle(.bordered)
+                        .disabled(
+                            store.isLoading
+                                || store.apps.isEmpty
+                                || !store.canDeleteActiveLayoutProfile
+                        )
+                }
+            }
+
+            Section(L10n.tr("settings.section.importExport")) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.layoutFile"))
+                        Text(L10n.tr("settings.layoutFile.detail"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button(L10n.tr("common.export")) { exportLayoutFile() }
+                        .buttonStyle(.bordered)
+                        .disabled(store.isLoading || store.apps.isEmpty)
+                    Button(L10n.tr("common.import")) { importLayoutFile() }
+                        .buttonStyle(.bordered)
+                        .disabled(store.isLoading || store.apps.isEmpty)
+                }
+
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.tr("settings.macosSystemLayout"))
+                        Text(L10n.tr("settings.macosSystemLayout.detail"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button(L10n.tr("common.importPlain")) { importMacOSSystemLayout() }
+                        .buttonStyle(.bordered)
+                        .disabled(store.isLoading || store.apps.isEmpty)
+                }
+
+                if let importStatusMessage {
+                    Text(importStatusMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var layoutSelectorSelection: Binding<String> {
+        Binding(
+            get: { store.layoutSelectorID },
+            set: { newID in
+                do {
+                    try store.selectLayoutSelector(newID)
+                } catch {
+                    presentSettingsAlert(title: L10n.tr("error.layout.switch"), message: profileErrorMessage(error))
+                }
+            }
+        )
+    }
+
+    private var layoutBackupDirectoryLabel: String {
+        let domain = Bundle.main.bundleIdentifier ?? (kCFPreferencesCurrentApplication as String)
+        let folderName = LaunchpadPreferenceStore.layoutBackupFileURL(domain: domain)
+            .deletingLastPathComponent()
+            .lastPathComponent
+        return L10n.tr("settings.appSupportPath", folderName)
+    }
+
+    private func promptCreateLayoutProfile() {
+        let alert = NSAlert()
+        alert.messageText = L10n.tr("layout.create.title")
+        alert.informativeText = L10n.tr("layout.create.detail")
+        alert.addButton(withTitle: L10n.tr("common.create"))
+        alert.addButton(withTitle: L10n.tr("common.cancel"))
+
+        let field = NSTextField(string: suggestedNewLayoutName())
+        field.placeholderString = L10n.tr("layout.name")
+        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+        field.isEditable = true
+        field.bezelStyle = .roundedBezel
+        alert.accessoryView = field
+
+        let complete: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .alertFirstButtonReturn else { return }
+            do {
+                try self.store.createLayoutProfile(named: field.stringValue)
+            } catch {
+                presentSettingsAlert(title: L10n.tr("error.layout.create"), message: self.profileErrorMessage(error))
+            }
+        }
+        presentSettingsAlert(alert, completion: complete)
+        DispatchQueue.main.async {
+            field.currentEditor()?.selectAll(nil)
+        }
+    }
+
+    private func promptDeleteLayoutProfile() {
+        guard store.canDeleteActiveLayoutProfile else { return }
+        let alert = NSAlert()
+        alert.messageText = L10n.tr("layout.delete.title", localizedProfileName(id: store.activeLayoutProfileID, name: store.activeLayoutProfileName))
+        alert.informativeText = L10n.tr("layout.delete.detail")
+        alert.addButton(withTitle: L10n.tr("common.delete"))
+        alert.addButton(withTitle: L10n.tr("common.cancel"))
+        presentSettingsAlert(alert) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            do {
+                try self.store.deleteLayoutProfile(self.store.activeLayoutProfileID)
+            } catch {
+                presentSettingsAlert(title: L10n.tr("error.layout.delete"), message: self.profileErrorMessage(error))
+            }
+        }
+    }
+
+    private func profileErrorMessage(_ error: Error) -> String {
+        if let error = error as? LaunchpadLayoutProfileError {
+            return L10n.profileError(error)
+        }
+        return layoutErrorMessage(error)
+    }
+
+    private func localizedProfileName(id: String, name: String) -> String {
+        id == LaunchpadLayoutProfileStore.defaultProfileID ? L10n.tr("layout.profile.default") : name
+    }
+
+    private func suggestedNewLayoutName() -> String {
+        let base = L10n.tr("layout.profile.new")
+        let taken = Set(store.layoutProfiles.map(\.name))
+        guard taken.contains(base) else { return base }
+        var index = 2
+        while taken.contains("\(base) \(index)") { index += 1 }
+        return "\(base) \(index)"
+    }
+
+    private func exportLayoutFile() {
+        guard !store.isLoading, !store.apps.isEmpty else { return }
+        let panel = NSSavePanel()
+        panel.title = L10n.tr("layout.export.title")
+        panel.nameFieldStringValue = "QLaunch-layout.json"
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        presentSettingsFilePanel(panel) { url in
+            guard let url else { return }
+            do {
+                let data = try LaunchpadLayoutDocument.makeEncoder(pretty: true).encode(store.exportLayout())
+                try data.write(to: url, options: .atomic)
+            } catch {
+                presentSettingsAlert(title: L10n.tr("error.layout.export"), message: layoutErrorMessage(error))
+            }
+        }
+    }
+
+    private func importLayoutFile() {
+        guard !store.isLoading, !store.apps.isEmpty else { return }
+        importStatusMessage = nil
+        let panel = NSOpenPanel()
+        panel.title = L10n.tr("layout.import.title")
+        panel.prompt = L10n.tr("common.open")
+        panel.allowedContentTypes = [.json]
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        presentSettingsFilePanel(panel) { url in
+            guard let url else { return }
+
+            let document: LaunchpadLayoutDocument
+            do {
+                let data = try Data(contentsOf: url)
+                try LaunchpadLayoutImporter.validateJSONSize(data)
+                document = try LaunchpadLayoutDocument.makeDecoder().decode(
+                    LaunchpadLayoutDocument.self,
+                    from: data
+                )
+                try LaunchpadLayoutImporter.validate(document)
+            } catch {
+                presentSettingsAlert(title: L10n.tr("error.layout.read"), message: layoutErrorMessage(error))
+                return
+            }
+
+            let alert = NSAlert()
+            alert.messageText = L10n.tr("layout.import.confirm.title")
+            alert.informativeText = L10n.tr("layout.import.confirm.detail", layoutBackupDirectoryLabel)
+            alert.addButton(withTitle: L10n.tr("common.importPlain"))
+            alert.addButton(withTitle: L10n.tr("common.cancel"))
+            presentSettingsAlert(alert) { response in
+                guard response == .alertFirstButtonReturn else { return }
+                self.applyImportedLayout(document)
+            }
+        }
+    }
+
+    private func applyImportedLayout(_ document: LaunchpadLayoutDocument) {
+        do {
+            let report = try store.applyLayout(document, mode: .merge)
+            importStatusMessage = L10n.tr(
+                "layout.import.result",
+                report.importedRootItems,
+                report.skippedUnknown.count,
+                report.appendedLeftover.count
+            )
+        } catch {
+            importStatusMessage = nil
+            presentSettingsAlert(title: L10n.tr("error.layout.import"), message: layoutErrorMessage(error))
+        }
+    }
+
+    private func importMacOSSystemLayout() {
+        guard !store.isLoading, !store.apps.isEmpty else { return }
+        importStatusMessage = nil
+
+        let document: LaunchpadLayoutDocument
+        do {
+            document = try MacOSLaunchpadReader.readLayoutDocument()
+        } catch {
+            presentSettingsAlert(title: L10n.tr("error.macosLayout.read"), message: layoutErrorMessage(error))
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = L10n.tr("layout.importSystem.confirm.title")
+        alert.informativeText = L10n.tr("layout.importSystem.confirm.detail", layoutBackupDirectoryLabel)
+        alert.addButton(withTitle: L10n.tr("common.importPlain"))
+        alert.addButton(withTitle: L10n.tr("common.cancel"))
+        presentSettingsAlert(alert) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            self.applyImportedMacOSLayout(document)
+        }
+    }
+
+    private func applyImportedMacOSLayout(_ document: LaunchpadLayoutDocument) {
+        do {
+            let report = try store.applyLayout(document, mode: .merge)
+            importStatusMessage = L10n.tr(
+                "layout.importSystem.result",
+                report.importedRootItems,
+                report.skippedUnknown.count,
+                report.appendedLeftover.count
+            )
+        } catch {
+            importStatusMessage = nil
+            presentSettingsAlert(title: L10n.tr("error.layout.import"), message: layoutErrorMessage(error))
+        }
+    }
+}
+
+// MARK: - 4. 快捷键与手势 (Shortcuts & Gestures)
+
+private struct ShortcutsSettingsView: View {
+    @AppStorage(HotCornerPreferences.positionKey)
+    private var hotCornerPosition = HotCornerPreferences.defaultPosition.rawValue
+    @AppStorage(TrackpadGesturePreferences.enabledKey)
+    private var trackpadPinchEnabled = TrackpadGesturePreferences.defaultEnabled
+    @AppStorage(TrackpadGesturePreferences.takeOverSystemGestureKey)
+    private var trackpadTakeOverEnabled = TrackpadGesturePreferences.defaultTakeOverSystemGesture
+
+    var body: some View {
+        Form {
+            Section(L10n.tr("settings.section.keyboard")) {
+                HotKeyRecorderRow()
+                LabeledContent(L10n.tr("settings.keyboard.close"), value: "Esc")
+                LabeledContent(L10n.tr("settings.keyboard.select"), value: L10n.tr("settings.keyboard.arrows"))
+                LabeledContent(L10n.tr("settings.keyboard.open"), value: "Return")
             }
 
             Section(L10n.tr("settings.section.hotCorner")) {
@@ -300,484 +920,17 @@ private struct GeneralSettingsView: View {
                     .padding(.vertical, 2)
                 }
             }
-
-            Section(L10n.tr("settings.section.display")) {
-                Toggle(L10n.tr("settings.showAppNames"), isOn: $showLabels)
-                    .toggleStyle(.switch)
-                Toggle(isOn: $loopPages) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.tr("settings.loopPages"))
-                        Text(L10n.tr("settings.loopPages.detail"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .toggleStyle(.switch)
-                Toggle(isOn: $showDockInLaunchpad) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.tr("settings.showDockInLaunchpad"))
-                        Text(L10n.tr("settings.showDockInLaunchpad.detail"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .toggleStyle(.switch)
-                .onChange(of: showDockInLaunchpad) { _, newValue in
-                    store.showSystemDock = newValue
-                }
-                Picker(L10n.tr("settings.layout"), selection: $gridLayoutPreset) {
-                    ForEach(GridLayoutPreset.menuGroups.indices, id: \.self) { groupIndex in
-                        if groupIndex > 0 {
-                            Divider()
-                        }
-                        ForEach(GridLayoutPreset.menuGroups[groupIndex]) { preset in
-                            Text(preset.title).tag(preset.rawValue)
-                        }
-                    }
-                }
-                .pickerStyle(.menu)
-                .onChange(of: gridLayoutPreset) { _, _ in
-                    NotificationCenter.default.post(name: .qlaunchpadGridLayoutChanged, object: nil)
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(L10n.tr("settings.iconSize"))
-                        Spacer()
-                        Text(IconSizeTier(rawValue: iconSizeTier)?.localizedTitle ?? "")
-                            .foregroundStyle(.secondary)
-                    }
-                    Slider(
-                        value: Binding(
-                            get: { Double(iconSizeTier) },
-                            set: { newValue in
-                                let target = Int(newValue.rounded())
-                                if iconSizeTier != target {
-                                    iconSizeTier = target
-                                    NotificationCenter.default.post(name: .qlaunchpadGridLayoutChanged, object: nil)
-                                }
-                            }
-                        ),
-                        in: 1...5,
-                        step: 1
-                    ) {
-                        Text(L10n.tr("settings.iconSize"))
-                    } minimumValueLabel: {
-                        Text("64 pt")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    } maximumValueLabel: {
-                        Text("192 pt")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(L10n.tr("settings.iconSize.detail"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Picker(selection: $iconRenderQuality) {
-                    ForEach(IconRenderQuality.allCases) { quality in
-                        Text(quality.title).tag(quality.rawValue)
-                    }
-                } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.tr("settings.renderQuality"))
-                        if store.isApplyingRenderQuality {
-                            HStack(spacing: 8) {
-                                ProgressView()
-                                    .controlSize(.small)
-                                Text(L10n.tr("settings.renderQuality.applying"))
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        } else if let quality = IconRenderQuality(rawValue: iconRenderQuality) {
-                            Text(quality.detail)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                }
-                .disabled(store.isApplyingRenderQuality)
-                .onChange(of: iconRenderQuality) { _, newValue in
-                    UserDefaults.standard.set(newValue, forKey: IconRenderQuality.defaultsKey)
-                    NotificationCenter.default.post(
-                        name: .qlaunchpadRenderQualityChanged,
-                        object: nil
-                    )
-                }
-            }
-
-            Section(L10n.tr("settings.section.animation")) {
-                Picker(selection: $presentationAnimationStyle) {
-                    ForEach(LaunchpadAnimationStyle.allCases) { style in
-                        Text(style.title).tag(style.rawValue)
-                    }
-                } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.tr("settings.animation"))
-                        Text(L10n.tr("settings.animation.detail"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-
-            Section(L10n.tr("settings.section.background")) {
-                Picker(selection: $backgroundMode) {
-                    ForEach(LaunchpadBackgroundMode.allCases) { mode in
-                        Text(mode.title).tag(mode.rawValue)
-                    }
-                } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.tr("settings.background.mode"))
-                        if let mode = LaunchpadBackgroundMode(rawValue: backgroundMode) {
-                            Text(mode.detail)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                }
-                .onChange(of: backgroundMode) { _, _ in
-                    notifyBackgroundChanged()
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(L10n.tr("settings.background.blur"))
-                        Spacer()
-                        Text("\(Int(backgroundBlurAmount.rounded()))")
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    }
-                    Slider(
-                        value: $backgroundBlurAmount,
-                        in: LaunchpadBackgroundPreferences.minimumBlurAmount...LaunchpadBackgroundPreferences.maximumBlurAmount
-                    )
-                    .onChange(of: backgroundBlurAmount) { _, _ in
-                        notifyBackgroundChanged()
-                    }
-                    Text(L10n.tr("settings.background.blur.detail"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if LaunchpadBackgroundMode(rawValue: backgroundMode) == .custom {
-                    HStack(alignment: .top, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(customBackgroundName)
-                            Text(L10n.tr("settings.background.custom.instructions"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer()
-                        Button(L10n.tr("common.choose")) {
-                            chooseCustomBackground()
-                        }
-                        .buttonStyle(.bordered)
-                    }
-
-                    if customBackgroundPath.isEmpty {
-                        Text(L10n.tr("settings.background.custom.missing"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else if !FileManager.default.fileExists(atPath: customBackgroundPath) {
-                        Text(L10n.tr("settings.background.custom.unavailable"))
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-                }
-            }
-
-            Section(L10n.tr("settings.section.keyboard")) {
-                HotKeyRecorderRow()
-                LabeledContent(L10n.tr("settings.keyboard.close"), value: "Esc")
-                LabeledContent(L10n.tr("settings.keyboard.select"), value: L10n.tr("settings.keyboard.arrows"))
-                LabeledContent(L10n.tr("settings.keyboard.open"), value: "Return")
-            }
-
-            Section(L10n.tr("settings.section.cache")) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.tr("settings.cache.clear"))
-                        Text(L10n.tr("settings.cache.detail"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button(L10n.tr("common.clear")) {
-                        NotificationCenter.default.post(
-                            name: .qlaunchpadCacheClearRequested,
-                            object: nil
-                        )
-                        didClearCache = true
-                    }
-                    .buttonStyle(.bordered)
-                }
-                if didClearCache {
-                    Text(L10n.tr("settings.cache.cleared"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
         }
         .formStyle(.grouped)
-        .onAppear(perform: refreshLaunchAtLogin)
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            refreshLaunchAtLogin()
-        }
-    }
-
-    private var launchAtLoginBinding: Binding<Bool> {
-        Binding(
-            get: { launchAtLogin },
-            set: { setLaunchAtLogin($0) }
-        )
-    }
-
-    private func refreshLaunchAtLogin() {
-        launchAtLoginNeedsApproval = LaunchAtLogin.needsApproval
-        launchAtLogin = LaunchAtLogin.isEnabled || launchAtLoginNeedsApproval
-    }
-
-    private func setLaunchAtLogin(_ enabled: Bool) {
-        do {
-            try LaunchAtLogin.setEnabled(enabled)
-            refreshLaunchAtLogin()
-            if enabled, LaunchAtLogin.needsApproval {
-                NotificationCenter.default.post(name: .qlaunchpadDismiss, object: nil)
-                LaunchAtLogin.openSystemSettings()
-            }
-        } catch {
-            refreshLaunchAtLogin()
-            presentLaunchAtLoginError(error)
-        }
-    }
-
-    private func presentLaunchAtLoginError(_ error: Error) {
-        let alert = NSAlert()
-        alert.messageText = L10n.tr("error.loginItem.title")
-        alert.informativeText = L10n.tr("error.loginItem.message", error.localizedDescription)
-        alert.addButton(withTitle: L10n.tr("common.ok"))
-        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
-            alert.beginSheetModal(for: window)
-        } else {
-            alert.runModal()
-        }
-    }
-
-    private func notifyAppearanceChanged() {
-        NotificationCenter.default.post(name: .qlaunchpadAppearanceChanged, object: nil)
-    }
-
-    private func notifyBackgroundChanged() {
-        NotificationCenter.default.post(name: .qlaunchpadBackgroundChanged, object: nil)
-    }
-
-    private var customBackgroundName: String {
-        guard !customBackgroundPath.isEmpty else {
-            return L10n.tr("settings.background.custom.choose")
-        }
-        return URL(fileURLWithPath: customBackgroundPath).lastPathComponent
-    }
-
-    private func chooseCustomBackground() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-
-        let completionHandler: (NSApplication.ModalResponse) -> Void = { response in
-            guard response == .OK, let url = panel.url else { return }
-            Self.applyCustomBackground(at: url)
-        }
-
-        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
-            panel.beginSheetModal(for: window, completionHandler: completionHandler)
-        } else if panel.runModal() == .OK, let url = panel.url {
-            Self.applyCustomBackground(at: url)
-        }
-    }
-
-    private static func applyCustomBackground(at url: URL) {
-        let modeWasCustom = LaunchpadBackgroundPreferences.mode == .custom
-        UserDefaults.standard.set(
-            url.path,
-            forKey: LaunchpadBackgroundPreferences.customImagePathKey
-        )
-        UserDefaults.standard.set(
-            LaunchpadBackgroundMode.custom.rawValue,
-            forKey: LaunchpadBackgroundPreferences.modeKey
-        )
-        if modeWasCustom {
-            NotificationCenter.default.post(name: .qlaunchpadBackgroundChanged, object: nil)
-        }
     }
 }
 
-private struct HotKeyRecorderRow: View {
-    @AppStorage(LaunchpadHotKeyPreferences.keyCodeKey)
-    private var keyCode = LaunchpadHotKeyPreferences.defaultKeyCode
-    @AppStorage(LaunchpadHotKeyPreferences.modifiersKey)
-    private var modifiers = LaunchpadHotKeyPreferences.defaultModifiers
-    @ObservedObject private var hotKeys = LaunchpadHotKeyCenter.shared
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(L10n.tr("settings.keyboard.toggle"))
-                Spacer()
-                HotKeyRecorder(
-                    keyCode: $keyCode,
-                    modifiers: $modifiers
-                )
-                .frame(width: 132, height: 26)
-            }
-            if hotKeys.showsRegistrationError {
-                Text(L10n.tr("settings.keyboard.registerFailed"))
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text(L10n.tr("settings.keyboard.detail"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-}
-
-private struct HotKeyRecorder: NSViewRepresentable {
-    @Binding var keyCode: Int
-    @Binding var modifiers: Int
-
-    func makeNSView(context: Context) -> HotKeyRecorderNSView {
-        let view = HotKeyRecorderNSView()
-        view.keyCode = UInt16(clamping: keyCode)
-        view.modifiers = NSEvent.ModifierFlags(rawValue: UInt(modifiers))
-        view.onChange = { keyCode, modifiers in
-            self.keyCode = Int(keyCode)
-            self.modifiers = Int(modifiers.rawValue)
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: HotKeyRecorderNSView, context: Context) {
-        nsView.keyCode = UInt16(clamping: keyCode)
-        nsView.modifiers = NSEvent.ModifierFlags(rawValue: UInt(modifiers))
-        nsView.needsDisplay = true
-    }
-}
-
-private final class HotKeyRecorderNSView: NSView {
-    var keyCode: UInt16 = UInt16(LaunchpadHotKeyPreferences.defaultKeyCode)
-    var modifiers = NSEvent.ModifierFlags(rawValue: UInt(LaunchpadHotKeyPreferences.defaultModifiers))
-    var onChange: ((UInt16, NSEvent.ModifierFlags) -> Void)?
-
-    private var isRecording = false
-
-    override var acceptsFirstResponder: Bool { true }
-
-    override func mouseDown(with event: NSEvent) {
-        isRecording = true
-        window?.makeFirstResponder(self)
-        NotificationCenter.default.post(
-            name: .qlaunchpadHotKeyRecordingChanged,
-            object: nil,
-            userInfo: ["recording": true]
-        )
-        needsDisplay = true
-    }
-
-    override func cancelOperation(_ sender: Any?) {
-        endRecording()
-    }
-
-    override func keyDown(with event: NSEvent) {
-        guard !event.isARepeat else { return }
-        if event.keyCode == 53 {
-            endRecording()
-            return
-        }
-
-        let shortcutModifiers = event.modifierFlags
-            .intersection(LaunchpadHotKeyPreferences.shortcutModifierMask)
-        guard !shortcutModifiers.isEmpty else { return }
-
-        keyCode = event.keyCode
-        modifiers = shortcutModifiers
-        onChange?(keyCode, modifiers)
-        endRecording()
-    }
-
-    private func endRecording() {
-        guard isRecording else {
-            window?.makeFirstResponder(nil)
-            return
-        }
-        isRecording = false
-        NotificationCenter.default.post(
-            name: .qlaunchpadHotKeyRecordingChanged,
-            object: nil,
-            userInfo: ["recording": false]
-        )
-        window?.makeFirstResponder(nil)
-        needsDisplay = true
-    }
-
-    override func resignFirstResponder() -> Bool {
-        if isRecording {
-            isRecording = false
-            NotificationCenter.default.post(
-                name: .qlaunchpadHotKeyRecordingChanged,
-                object: nil,
-                userInfo: ["recording": false]
-            )
-            needsDisplay = true
-        }
-        return super.resignFirstResponder()
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let rect = bounds.insetBy(dx: 1, dy: 1)
-        let background = NSColor.controlBackgroundColor.withAlphaComponent(0.8)
-        background.setFill()
-        NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
-
-        let border = isRecording ? NSColor.controlAccentColor : NSColor.separatorColor
-        border.setStroke()
-        let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
-        path.lineWidth = isRecording ? 2 : 1
-        path.stroke()
-
-        let title = isRecording
-            ? L10n.tr("settings.keyboard.record")
-            : LaunchpadHotKeyPreferences.displayName(keyCode: keyCode, modifiers: modifiers)
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-            .foregroundColor: NSColor.labelColor
-        ]
-        let size = title.size(withAttributes: attributes)
-        title.draw(
-            at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2),
-            withAttributes: attributes
-        )
-    }
-}
+// MARK: - 5. 应用管理 (Applications)
 
 private struct ApplicationSettingsView: View {
     @ObservedObject var store: AppStore
     @State private var selectedSource: String?
-    @State private var importStatusMessage: String?
+    @State private var customIconRevision: UInt64 = 0
 
     var body: some View {
         Form {
@@ -812,7 +965,7 @@ private struct ApplicationSettingsView: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 138)
+                    .frame(maxWidth: .infinity, minHeight: 90)
                 } else {
                     ForEach(store.hiddenApps) { app in
                         hiddenAppRow(app)
@@ -820,65 +973,50 @@ private struct ApplicationSettingsView: View {
                 }
             }
 
-            Section(L10n.tr("settings.section.userData")) {
+            Section(L10n.tr("settings.apps.customIcons")) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.tr("settings.layoutFile"))
-                        Text(L10n.tr("settings.layoutFile.detail"))
+                        Text(L10n.tr("settings.apps.customIcons.title"))
+                        Text(L10n.tr("settings.apps.customIcons.detail"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button(L10n.tr("common.export")) { exportLayoutFile() }
+                    Button(L10n.tr("settings.apps.customIcons.openFolder")) {
+                        let url = CustomIconStore.shared.customIconsDirectoryURL
+                        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: url.path)
+                    }
+                    .buttonStyle(.bordered)
+                    if !customIconApps.isEmpty {
+                        Button(L10n.tr("settings.apps.customIcons.resetAll")) {
+                            CustomIconStore.shared.resetAllCustomIcons()
+                        }
                         .buttonStyle(.bordered)
-                        .disabled(store.isLoading || store.apps.isEmpty)
-                    Button(L10n.tr("common.import")) { importLayoutFile() }
-                        .buttonStyle(.bordered)
-                        .disabled(store.isLoading || store.apps.isEmpty)
+                    }
                 }
+            }
 
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.tr("settings.macosSystemLayout"))
-                        Text(L10n.tr("settings.macosSystemLayout.detail"))
-                            .font(.caption)
+            Section {
+                if customIconApps.isEmpty {
+                    VStack(spacing: 5) {
+                        Text(L10n.tr("settings.apps.customIcons.empty"))
+                            .font(.body.weight(.medium))
+                        Text(L10n.tr("settings.apps.customIcons.hint"))
+                            .font(.callout)
                             .foregroundStyle(.secondary)
                     }
-                    Spacer()
-                    Button(L10n.tr("common.importPlain")) { importMacOSSystemLayout() }
-                        .buttonStyle(.bordered)
-                        .disabled(store.isLoading || store.apps.isEmpty)
-                }
-
-                HStack(spacing: 8) {
-                    LayoutProfilePopUp(
-                        profiles: store.layoutProfiles,
-                        selection: layoutSelectorSelection
-                    )
-                    .frame(maxWidth: .infinity, minHeight: 22)
-                    .disabled(store.isLoading || store.apps.isEmpty)
-
-                    Button(L10n.tr("common.new")) { promptCreateLayoutProfile() }
-                        .buttonStyle(.bordered)
-                        .disabled(store.isLoading)
-
-                    Button(L10n.tr("common.delete")) { promptDeleteLayoutProfile() }
-                        .buttonStyle(.bordered)
-                        .disabled(
-                            store.isLoading
-                                || store.apps.isEmpty
-                                || !store.canDeleteActiveLayoutProfile
-                        )
-                }
-
-                if let importStatusMessage {
-                    Text(importStatusMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 90)
+                } else {
+                    ForEach(customIconApps) { app in
+                        customIconAppRow(app)
+                    }
                 }
             }
         }
         .formStyle(.grouped)
+        .onReceive(NotificationCenter.default.publisher(for: .qlaunchpadCustomIconsChanged)) { _ in
+            customIconRevision &+= 1
+        }
     }
 
     private var sourceItems: [ApplicationSourceItem] {
@@ -908,6 +1046,38 @@ private struct ApplicationSettingsView: View {
         .frame(minHeight: 44)
     }
 
+    private var customIconApps: [AppInfo] {
+        _ = customIconRevision
+        let keys = CustomIconStore.shared.customizedKeys()
+        guard !keys.isEmpty else { return [] }
+        return store.apps.filter { app in
+            keys.contains(app.id) || keys.contains(app.bundleIdentifier)
+        }
+    }
+
+    private func customIconAppRow(_ app: AppInfo) -> some View {
+        HStack(spacing: 12) {
+            Image(nsImage: AppIconSource.shared.image(for: app, size: 64))
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 32, height: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(app.name).font(.body.weight(.medium))
+                Text(app.url.path)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            Button(L10n.tr("context.resetIcon")) {
+                CustomIconStore.shared.resetCustomIcon(for: app)
+            }
+            .buttonStyle(.borderless)
+        }
+        .frame(minHeight: 44)
+    }
+
     private func addSource() {
         let panel = NSOpenPanel()
         panel.title = L10n.tr("panel.chooseAppFolder")
@@ -915,277 +1085,11 @@ private struct ApplicationSettingsView: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        presentFilePanel(panel) { url in
+        presentSettingsFilePanel(panel) { url in
             guard let url else { return }
             store.addApplicationSource(url)
             selectedSource = url.standardizedFileURL.path
         }
-    }
-
-    private var layoutSelectorSelection: Binding<String> {
-        Binding(
-            get: { store.layoutSelectorID },
-            set: { newID in
-                do {
-                    try store.selectLayoutSelector(newID)
-                } catch {
-                    presentAlert(title: L10n.tr("error.layout.switch"), message: profileErrorMessage(error))
-                }
-            }
-        )
-    }
-
-    private var layoutBackupDirectoryLabel: String {
-        let domain = Bundle.main.bundleIdentifier ?? (kCFPreferencesCurrentApplication as String)
-        let folderName = LaunchpadPreferenceStore.layoutBackupFileURL(domain: domain)
-            .deletingLastPathComponent()
-            .lastPathComponent
-        return L10n.tr("settings.appSupportPath", folderName)
-    }
-
-    private func promptCreateLayoutProfile() {
-        let alert = NSAlert()
-        alert.messageText = L10n.tr("layout.create.title")
-        alert.informativeText = L10n.tr("layout.create.detail")
-        alert.addButton(withTitle: L10n.tr("common.create"))
-        alert.addButton(withTitle: L10n.tr("common.cancel"))
-
-        let field = NSTextField(string: suggestedNewLayoutName())
-        field.placeholderString = L10n.tr("layout.name")
-        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
-        field.isEditable = true
-        field.bezelStyle = .roundedBezel
-        alert.accessoryView = field
-
-        let complete: (NSApplication.ModalResponse) -> Void = { response in
-            guard response == .alertFirstButtonReturn else { return }
-            do {
-                try self.store.createLayoutProfile(named: field.stringValue)
-            } catch {
-                self.presentAlert(title: L10n.tr("error.layout.create"), message: self.profileErrorMessage(error))
-            }
-        }
-        presentAlert(alert, completion: complete)
-        DispatchQueue.main.async {
-            field.currentEditor()?.selectAll(nil)
-        }
-    }
-
-    private func promptDeleteLayoutProfile() {
-        guard store.canDeleteActiveLayoutProfile else { return }
-        let alert = NSAlert()
-        alert.messageText = L10n.tr("layout.delete.title", localizedProfileName(id: store.activeLayoutProfileID, name: store.activeLayoutProfileName))
-        alert.informativeText = L10n.tr("layout.delete.detail")
-        alert.addButton(withTitle: L10n.tr("common.delete"))
-        alert.addButton(withTitle: L10n.tr("common.cancel"))
-        presentAlert(alert) { response in
-            guard response == .alertFirstButtonReturn else { return }
-            do {
-                try self.store.deleteLayoutProfile(self.store.activeLayoutProfileID)
-            } catch {
-                self.presentAlert(title: L10n.tr("error.layout.delete"), message: self.profileErrorMessage(error))
-            }
-        }
-    }
-
-    private func profileErrorMessage(_ error: Error) -> String {
-        if let error = error as? LaunchpadLayoutProfileError {
-            return L10n.profileError(error)
-        }
-        return layoutErrorMessage(error)
-    }
-
-    private func localizedProfileName(id: String, name: String) -> String {
-        id == LaunchpadLayoutProfileStore.defaultProfileID ? L10n.tr("layout.profile.default") : name
-    }
-
-    private func suggestedNewLayoutName() -> String {
-        let base = L10n.tr("layout.profile.new")
-        let taken = Set(store.layoutProfiles.map(\.name))
-        guard taken.contains(base) else { return base }
-        var index = 2
-        while taken.contains("\(base) \(index)") { index += 1 }
-        return "\(base) \(index)"
-    }
-
-    private func exportLayoutFile() {
-        guard !store.isLoading, !store.apps.isEmpty else { return }
-        let panel = NSSavePanel()
-        panel.title = L10n.tr("layout.export.title")
-        panel.nameFieldStringValue = "QLaunch-layout.json"
-        panel.allowedContentTypes = [.json]
-        panel.canCreateDirectories = true
-        presentFilePanel(panel) { url in
-            guard let url else { return }
-            do {
-                let data = try LaunchpadLayoutDocument.makeEncoder(pretty: true).encode(store.exportLayout())
-                try data.write(to: url, options: .atomic)
-            } catch {
-                presentAlert(title: L10n.tr("error.layout.export"), message: layoutErrorMessage(error))
-            }
-        }
-    }
-
-    private func importLayoutFile() {
-        guard !store.isLoading, !store.apps.isEmpty else { return }
-        importStatusMessage = nil
-        let panel = NSOpenPanel()
-        panel.title = L10n.tr("layout.import.title")
-        panel.prompt = L10n.tr("common.open")
-        panel.allowedContentTypes = [.json]
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        presentFilePanel(panel) { url in
-            guard let url else { return }
-
-            let document: LaunchpadLayoutDocument
-            do {
-                let data = try Data(contentsOf: url)
-                try LaunchpadLayoutImporter.validateJSONSize(data)
-                document = try LaunchpadLayoutDocument.makeDecoder().decode(
-                    LaunchpadLayoutDocument.self,
-                    from: data
-                )
-                try LaunchpadLayoutImporter.validate(document)
-            } catch {
-                presentAlert(title: L10n.tr("error.layout.read"), message: layoutErrorMessage(error))
-                return
-            }
-
-            let alert = NSAlert()
-            alert.messageText = L10n.tr("layout.import.confirm.title")
-            alert.informativeText = L10n.tr("layout.import.confirm.detail", layoutBackupDirectoryLabel)
-            alert.addButton(withTitle: L10n.tr("common.importPlain"))
-            alert.addButton(withTitle: L10n.tr("common.cancel"))
-            presentAlert(alert) { response in
-                guard response == .alertFirstButtonReturn else { return }
-                self.applyImportedLayout(document)
-            }
-        }
-    }
-
-    private func applyImportedLayout(_ document: LaunchpadLayoutDocument) {
-        do {
-            let report = try store.applyLayout(document, mode: .merge)
-            importStatusMessage = L10n.tr(
-                "layout.import.result",
-                report.importedRootItems,
-                report.skippedUnknown.count,
-                report.appendedLeftover.count
-            )
-        } catch {
-            importStatusMessage = nil
-            presentAlert(title: L10n.tr("error.layout.import"), message: layoutErrorMessage(error))
-        }
-    }
-
-    private func importMacOSSystemLayout() {
-        guard !store.isLoading, !store.apps.isEmpty else { return }
-        importStatusMessage = nil
-
-        let document: LaunchpadLayoutDocument
-        do {
-            document = try MacOSLaunchpadReader.readLayoutDocument()
-        } catch {
-            presentAlert(title: L10n.tr("error.macosLayout.read"), message: layoutErrorMessage(error))
-            return
-        }
-
-        let alert = NSAlert()
-        alert.messageText = L10n.tr("layout.importSystem.confirm.title")
-        alert.informativeText = L10n.tr("layout.importSystem.confirm.detail", layoutBackupDirectoryLabel)
-        alert.addButton(withTitle: L10n.tr("common.importPlain"))
-        alert.addButton(withTitle: L10n.tr("common.cancel"))
-        presentAlert(alert) { response in
-            guard response == .alertFirstButtonReturn else { return }
-            self.applyImportedMacOSLayout(document)
-        }
-    }
-
-    private func applyImportedMacOSLayout(_ document: LaunchpadLayoutDocument) {
-        do {
-            let report = try store.applyLayout(document, mode: .merge)
-            importStatusMessage = L10n.tr(
-                "layout.importSystem.result",
-                report.importedRootItems,
-                report.skippedUnknown.count,
-                report.appendedLeftover.count
-            )
-        } catch {
-            importStatusMessage = nil
-            presentAlert(title: L10n.tr("error.layout.import"), message: layoutErrorMessage(error))
-        }
-    }
-
-    private func layoutErrorMessage(_ error: Error) -> String {
-        if let error = error as? MacOSLaunchpadError {
-            switch error {
-            case .databaseNotFound:
-                return L10n.tr("error.macosLayout.notFound")
-            case .emptyDatabase, .cannotOpenDatabase, .queryFailed:
-                return error.localizedDescription
-            }
-        }
-        guard let error = error as? LaunchpadLayoutError else {
-            return error.localizedDescription
-        }
-        switch error {
-        case .invalidKind:
-            return L10n.tr("error.layout.invalidKind")
-        case .unsupportedSchemaVersion:
-            return L10n.tr("error.layout.unsupportedVersion")
-        case .malformed(let reason):
-            if reason == "application catalog is empty" {
-                return L10n.tr("error.layout.catalogEmpty")
-            }
-            return L10n.tr("error.layout.malformed")
-        case .limitExceeded(let limit):
-            return L10n.tr(limit == "json" ? "error.layout.tooLarge" : "error.layout.limitExceeded")
-        case .duplicateID:
-            return L10n.tr("error.layout.duplicate")
-        case .nestedFolder:
-            return L10n.tr("error.layout.nestedFolder")
-        case .itemHiddenOverlap:
-            return L10n.tr("error.layout.hiddenOverlap")
-        case .strictUnresolved:
-            return L10n.tr("error.layout.unresolved")
-        }
-    }
-
-    private func presentAlert(title: String, message: String) {
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = message
-        alert.addButton(withTitle: L10n.tr("common.ok"))
-        presentAlert(alert)
-    }
-
-    private func presentAlert(
-        _ alert: NSAlert,
-        completion: ((NSApplication.ModalResponse) -> Void)? = nil
-    ) {
-        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
-            alert.beginSheetModal(for: window, completionHandler: completion)
-        } else if let completion {
-            completion(alert.runModal())
-        } else {
-            alert.runModal()
-        }
-    }
-
-    /// File panels default to `.modalPanel`, which sits below Settings and the
-    /// Launchpad overlay (both `.popUpMenu`). A modal loop with an invisible
-    /// panel looks like a freeze. Attach them as a sheet on the host window.
-    private func presentFilePanel(_ panel: NSSavePanel, completion: @escaping (URL?) -> Void) {
-        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
-            panel.beginSheetModal(for: window) { response in
-                completion(response == .OK ? panel.url : nil)
-            }
-            return
-        }
-        panel.level = NSWindow.Level(rawValue: Int(NSWindow.Level.screenSaver.rawValue) + 3)
-        completion(panel.runModal() == .OK ? panel.url : nil)
     }
 
     private func removeSelectedSource() {
@@ -1207,80 +1111,9 @@ private struct ApplicationSettingsView: View {
     }
 }
 
-private struct LayoutProfilePopUp: NSViewRepresentable {
-    var profiles: [LaunchpadLayoutProfile]
-    @Binding var selection: String
+// MARK: - 6. 关于 (About)
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(selection: $selection)
-    }
-
-    func makeNSView(context: Context) -> NSPopUpButton {
-        let button = NSPopUpButton(frame: .zero, pullsDown: false)
-        button.autoenablesItems = false
-        button.target = context.coordinator
-        button.action = #selector(Coordinator.changed(_:))
-        button.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        return button
-    }
-
-    func updateNSView(_ button: NSPopUpButton, context: Context) {
-        context.coordinator.selection = $selection
-        button.removeAllItems()
-        if button.menu == nil {
-            button.menu = NSMenu()
-        }
-        guard let menu = button.menu else { return }
-
-        let userHeader = NSMenuItem(title: L10n.tr("layout.user"), action: nil, keyEquivalent: "")
-        userHeader.isEnabled = false
-        menu.addItem(userHeader)
-        for profile in profiles {
-            let title = profile.id == LaunchpadLayoutProfileStore.defaultProfileID
-                ? L10n.tr("layout.profile.default") : profile.name
-            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            item.representedObject = LaunchpadLayoutSelectorID.user(profile.id)
-            menu.addItem(item)
-        }
-
-        menu.addItem(.separator())
-
-        let autoHeader = NSMenuItem(title: L10n.tr("layout.auto"), action: nil, keyEquivalent: "")
-        autoHeader.isEnabled = false
-        menu.addItem(autoHeader)
-        for kind in LaunchpadAutoLayoutKind.allCases {
-            let item = NSMenuItem(title: kind.localizedTitle, action: nil, keyEquivalent: "")
-            item.representedObject = LaunchpadLayoutSelectorID.auto(kind)
-            menu.addItem(item)
-        }
-
-        if let index = menu.items.firstIndex(where: { ($0.representedObject as? String) == selection }) {
-            button.selectItem(at: index)
-        }
-    }
-
-    final class Coordinator: NSObject {
-        var selection: Binding<String>
-
-        init(selection: Binding<String>) {
-            self.selection = selection
-        }
-
-        @objc func changed(_ sender: NSPopUpButton) {
-            guard let id = sender.selectedItem?.representedObject as? String else { return }
-            selection.wrappedValue = id
-            if selection.wrappedValue != id,
-               let index = sender.itemArray.firstIndex(where: {
-                   ($0.representedObject as? String) == selection.wrappedValue
-               }) {
-                sender.selectItem(at: index)
-            }
-        }
-    }
-}
-
-/// 关于页（参考 Qf `AboutSettingsView`：版本、作者与社区链接、版权）。
+/// 关于页（版本、检查更新、作者与社区链接、版权）。
 private struct AboutSettingsView: View {
     @ObservedObject private var updater = Updater.shared
 
@@ -1328,7 +1161,6 @@ private struct AboutSettingsView: View {
                 .resizable()
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
-                // Optical size: system icons already include margin + soft shadow.
                 .frame(width: 96, height: 96)
 
             Text("QLaunch")
@@ -1347,9 +1179,9 @@ private struct AboutSettingsView: View {
         aboutCard(header: L10n.tr("about.updates")) {
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.blue)
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.purple)
                         .frame(width: 22)
 
                     Text(versionLabel)
@@ -1405,21 +1237,27 @@ private struct AboutSettingsView: View {
         aboutCard(header: L10n.tr("about.authorCommunity")) {
             VStack(spacing: 0) {
                 githubMenuRow
+
                 aboutDivider()
+
                 linkRow(
                     title: L10n.tr("about.xiaohongshu"),
-                    subtitle: Self.xiaohongshuURL,
+                    subtitle: "qzrzz",
                     url: Self.xiaohongshuURL,
-                    icon: templateIcon("RemixXiaohongshu", systemFallback: "book", tint: .red)
+                    icon: templateIcon("RemixXiaohongshu", systemFallback: "book.fill", tint: .red)
                 )
+
                 aboutDivider()
+
                 linkRow(
                     title: L10n.tr("about.bilibili"),
-                    subtitle: Self.bilibiliURL,
+                    subtitle: "BiKing567",
                     url: Self.bilibiliURL,
-                    icon: templateIcon("RemixBilibili", systemFallback: "play.rectangle.fill", tint: .cyan)
+                    icon: templateIcon("RemixBilibili", systemFallback: "play.tv.fill", tint: .cyan)
                 )
+
                 aboutDivider()
+
                 linkRow(
                     title: "Email",
                     subtitle: Self.emailAddress,
@@ -1584,6 +1422,299 @@ private struct AboutSettingsView: View {
         guard let url = URL(string: urlString) else { return }
         NotificationCenter.default.post(name: .qlaunchpadDismiss, object: nil)
         NSWorkspace.shared.open(url)
+    }
+}
+
+// MARK: - 7. 通用辅助组件与函数
+
+private func presentSettingsAlert(title: String, message: String) {
+    let alert = NSAlert()
+    alert.messageText = title
+    alert.informativeText = message
+    alert.addButton(withTitle: L10n.tr("common.ok"))
+    presentSettingsAlert(alert)
+}
+
+private func presentSettingsAlert(
+    _ alert: NSAlert,
+    completion: ((NSApplication.ModalResponse) -> Void)? = nil
+) {
+    if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+        alert.beginSheetModal(for: window, completionHandler: completion)
+    } else if let completion {
+        completion(alert.runModal())
+    } else {
+        alert.runModal()
+    }
+}
+
+private func presentSettingsFilePanel(_ panel: NSSavePanel, completion: @escaping (URL?) -> Void) {
+    if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+        panel.beginSheetModal(for: window) { response in
+            completion(response == .OK ? panel.url : nil)
+        }
+        return
+    }
+    panel.level = NSWindow.Level(rawValue: Int(NSWindow.Level.screenSaver.rawValue) + 3)
+    completion(panel.runModal() == .OK ? panel.url : nil)
+}
+
+private func layoutErrorMessage(_ error: Error) -> String {
+    if let error = error as? MacOSLaunchpadError {
+        switch error {
+        case .databaseNotFound:
+            return L10n.tr("error.macosLayout.notFound")
+        case .emptyDatabase, .cannotOpenDatabase, .queryFailed:
+            return error.localizedDescription
+        }
+    }
+    guard let error = error as? LaunchpadLayoutError else {
+        return error.localizedDescription
+    }
+    switch error {
+    case .invalidKind:
+        return L10n.tr("error.layout.invalidKind")
+    case .unsupportedSchemaVersion:
+        return L10n.tr("error.layout.unsupportedVersion")
+    case .malformed(let reason):
+        if reason == "application catalog is empty" {
+            return L10n.tr("error.layout.catalogEmpty")
+        }
+        return L10n.tr("error.layout.malformed")
+    case .limitExceeded(let limit):
+        return L10n.tr(limit == "json" ? "error.layout.tooLarge" : "error.layout.limitExceeded")
+    case .duplicateID:
+        return L10n.tr("error.layout.duplicate")
+    case .nestedFolder:
+        return L10n.tr("error.layout.nestedFolder")
+    case .itemHiddenOverlap:
+        return L10n.tr("error.layout.hiddenOverlap")
+    case .strictUnresolved:
+        return L10n.tr("error.layout.unresolved")
+    }
+}
+
+private struct LayoutProfilePopUp: NSViewRepresentable {
+    let profiles: [LaunchpadLayoutProfile]
+    @Binding var selection: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(selection: $selection)
+    }
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = NSPopUpButton(frame: .zero, pullsDown: false)
+        button.autoenablesItems = false
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.changed(_:))
+        button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return button
+    }
+
+    func updateNSView(_ button: NSPopUpButton, context: Context) {
+        context.coordinator.selection = $selection
+        button.removeAllItems()
+        if button.menu == nil {
+            button.menu = NSMenu()
+        }
+        guard let menu = button.menu else { return }
+
+        let userHeader = NSMenuItem(title: L10n.tr("layout.user"), action: nil, keyEquivalent: "")
+        userHeader.isEnabled = false
+        menu.addItem(userHeader)
+        for profile in profiles {
+            let title = profile.id == LaunchpadLayoutProfileStore.defaultProfileID
+                ? L10n.tr("layout.profile.default") : profile.name
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.representedObject = LaunchpadLayoutSelectorID.user(profile.id)
+            menu.addItem(item)
+        }
+
+        menu.addItem(.separator())
+
+        let autoHeader = NSMenuItem(title: L10n.tr("layout.auto"), action: nil, keyEquivalent: "")
+        autoHeader.isEnabled = false
+        menu.addItem(autoHeader)
+        for kind in LaunchpadAutoLayoutKind.allCases {
+            let item = NSMenuItem(title: kind.localizedTitle, action: nil, keyEquivalent: "")
+            item.representedObject = LaunchpadLayoutSelectorID.auto(kind)
+            menu.addItem(item)
+        }
+
+        if let index = menu.items.firstIndex(where: { ($0.representedObject as? String) == selection }) {
+            button.selectItem(at: index)
+        }
+    }
+
+    final class Coordinator: NSObject {
+        var selection: Binding<String>
+
+        init(selection: Binding<String>) {
+            self.selection = selection
+        }
+
+        @objc func changed(_ sender: NSPopUpButton) {
+            guard let id = sender.selectedItem?.representedObject as? String else { return }
+            selection.wrappedValue = id
+            if selection.wrappedValue != id,
+               let index = sender.itemArray.firstIndex(where: {
+                   ($0.representedObject as? String) == selection.wrappedValue
+               }) {
+                sender.selectItem(at: index)
+            }
+        }
+    }
+}
+
+private struct HotKeyRecorderRow: View {
+    @AppStorage(LaunchpadHotKeyPreferences.keyCodeKey)
+    private var keyCode = LaunchpadHotKeyPreferences.defaultKeyCode
+    @AppStorage(LaunchpadHotKeyPreferences.modifiersKey)
+    private var modifiers = LaunchpadHotKeyPreferences.defaultModifiers
+    @ObservedObject private var hotKeys = LaunchpadHotKeyCenter.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(L10n.tr("settings.keyboard.toggle"))
+                Spacer()
+                HotKeyRecorder(
+                    keyCode: $keyCode,
+                    modifiers: $modifiers
+                )
+                .frame(width: 132, height: 26)
+            }
+            if hotKeys.showsRegistrationError {
+                Text(L10n.tr("settings.keyboard.registerFailed"))
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(L10n.tr("settings.keyboard.detail"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+private struct HotKeyRecorder: NSViewRepresentable {
+    @Binding var keyCode: Int
+    @Binding var modifiers: Int
+
+    func makeNSView(context: Context) -> HotKeyRecorderNSView {
+        let view = HotKeyRecorderNSView()
+        view.keyCode = UInt16(clamping: keyCode)
+        view.modifiers = NSEvent.ModifierFlags(rawValue: UInt(modifiers))
+        view.onChange = { keyCode, modifiers in
+            self.keyCode = Int(keyCode)
+            self.modifiers = Int(modifiers.rawValue)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: HotKeyRecorderNSView, context: Context) {
+        nsView.keyCode = UInt16(clamping: keyCode)
+        nsView.modifiers = NSEvent.ModifierFlags(rawValue: UInt(modifiers))
+        nsView.needsDisplay = true
+    }
+}
+
+private final class HotKeyRecorderNSView: NSView {
+    var keyCode: UInt16 = UInt16(LaunchpadHotKeyPreferences.defaultKeyCode)
+    var modifiers = NSEvent.ModifierFlags(rawValue: UInt(LaunchpadHotKeyPreferences.defaultModifiers))
+    var onChange: ((UInt16, NSEvent.ModifierFlags) -> Void)?
+
+    private var isRecording = false
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        isRecording = true
+        window?.makeFirstResponder(self)
+        NotificationCenter.default.post(
+            name: .qlaunchpadHotKeyRecordingChanged,
+            object: nil,
+            userInfo: ["recording": true]
+        )
+        needsDisplay = true
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        endRecording()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard !event.isARepeat else { return }
+        if event.keyCode == 53 {
+            endRecording()
+            return
+        }
+
+        let shortcutModifiers = event.modifierFlags
+            .intersection(LaunchpadHotKeyPreferences.shortcutModifierMask)
+        guard !shortcutModifiers.isEmpty else { return }
+
+        keyCode = event.keyCode
+        modifiers = shortcutModifiers
+        onChange?(keyCode, modifiers)
+        endRecording()
+    }
+
+    private func endRecording() {
+        guard isRecording else {
+            window?.makeFirstResponder(nil)
+            return
+        }
+        isRecording = false
+        NotificationCenter.default.post(
+            name: .qlaunchpadHotKeyRecordingChanged,
+            object: nil,
+            userInfo: ["recording": false]
+        )
+        window?.makeFirstResponder(nil)
+        needsDisplay = true
+    }
+
+    override func resignFirstResponder() -> Bool {
+        if isRecording {
+            isRecording = false
+            NotificationCenter.default.post(
+                name: .qlaunchpadHotKeyRecordingChanged,
+                object: nil,
+                userInfo: ["recording": false]
+            )
+            needsDisplay = true
+        }
+        return super.resignFirstResponder()
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let rect = bounds.insetBy(dx: 1, dy: 1)
+        let background = NSColor.controlBackgroundColor.withAlphaComponent(0.8)
+        background.setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
+
+        let border = isRecording ? NSColor.controlAccentColor : NSColor.separatorColor
+        border.setStroke()
+        let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+        path.lineWidth = isRecording ? 2 : 1
+        path.stroke()
+
+        let title = isRecording
+            ? L10n.tr("settings.keyboard.record")
+            : LaunchpadHotKeyPreferences.displayName(keyCode: keyCode, modifiers: modifiers)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+            .foregroundColor: NSColor.labelColor
+        ]
+        let size = title.size(withAttributes: attributes)
+        title.draw(
+            at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2),
+            withAttributes: attributes
+        )
     }
 }
 

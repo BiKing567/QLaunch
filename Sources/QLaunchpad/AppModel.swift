@@ -167,12 +167,10 @@ enum LaunchpadItem: Identifiable, Hashable {
 }
 
 struct AppIconCache {
-    /// `NSWorkspace` is already backed by the system icon cache. Returning the
-    /// original multi-representation image preserves its ICC profile until the
-    /// renderer performs the single linear Display P3 rasterization.
+    /// Dispatches icon extraction via `AppIconSource`, seamlessly resolving custom
+    /// user-assigned icons or falling back to the system icon cache with original ICC profiles.
     func image(for app: AppInfo, size: CGFloat = 512) -> NSImage {
-        let source = NSWorkspace.shared.icon(forFile: app.url.path)
-        return (source.copy() as? NSImage) ?? source
+        AppIconSource.shared.image(for: app, size: size)
     }
 }
 

@@ -25,6 +25,7 @@ final class IconTextureStore: @unchecked Sendable {
         /// Avoid reusing a texture when quality/format flips at the same size.
         let quality: String
         let appearanceName: String
+        let iconRevision: UInt64
     }
 
     private let device: MTLDevice
@@ -340,7 +341,8 @@ final class IconTextureStore: @unchecked Sendable {
             sourcePath: app.resourceSourcePath,
             pixelSize: pixelSize,
             quality: quality,
-            appearanceName: appearanceName ?? currentAppearanceName
+            appearanceName: appearanceName ?? currentAppearanceName,
+            iconRevision: CustomIconStore.shared.iconRevision(for: app)
         )
     }
 
@@ -374,7 +376,8 @@ final class IconTextureStore: @unchecked Sendable {
         bakeQueue.async { [weak self] in
             guard let self else { return }
             self.cacheLock.lock()
-            guard self.appearanceGeneration == bakeGen else {
+            let currentRevision = CustomIconStore.shared.iconRevision(for: app)
+            guard self.appearanceGeneration == bakeGen && currentRevision == key.iconRevision else {
                 self.inflightBakes.remove(key)
                 self.cacheLock.unlock()
                 return
@@ -388,7 +391,8 @@ final class IconTextureStore: @unchecked Sendable {
                     pixelSize: pixelSize,
                     quality: quality,
                     generation: bakeGen,
-                    appearance: bakeApp
+                    appearance: bakeApp,
+                    expectedRevision: key.iconRevision
                 )
             }
             self.cacheLock.lock()
@@ -423,8 +427,12 @@ final class IconTextureStore: @unchecked Sendable {
         pixelSize requestedPixelSize: Int,
         quality: IconRenderQuality,
         generation: UInt64? = nil,
-        appearance: NSAppearance? = nil
+        appearance: NSAppearance? = nil,
+        expectedRevision: UInt64? = nil
     ) -> MTLTexture? {
+        if let expectedRevision, expectedRevision != CustomIconStore.shared.iconRevision(for: app) {
+            return nil
+        }
         let targetAppearance = appearance ?? currentAppearance
         guard let texture = makeTexture(
             for: app,
@@ -444,12 +452,32 @@ final class IconTextureStore: @unchecked Sendable {
         if let generation, generation != appearanceGeneration {
             return nil
         }
+        if let expectedRevision, expectedRevision != CustomIconStore.shared.iconRevision(for: app) {
+            return nil
+        }
         if pixelSize != requestedPixelSize || cachedQualityRaw != quality.rawValue {
             return nil
         }
         if let existing = cache[key] { return existing }
         cache[key] = texture
         return texture
+    }
+
+    func invalidate(for appID: String, keepingRevision: UInt64? = nil) {
+        cacheLock.lock()
+        let staleKeys = cache.keys.filter { key in
+            guard key.appID == appID else { return false }
+            if let keep = keepingRevision {
+                return key.iconRevision != keep
+            }
+            return true
+        }
+        for k in staleKeys {
+            cache.removeValue(forKey: k)
+            inflightBakes.remove(k)
+        }
+        cacheLock.unlock()
+        scheduleBakeNotification()
     }
 
     private func makeTexture(

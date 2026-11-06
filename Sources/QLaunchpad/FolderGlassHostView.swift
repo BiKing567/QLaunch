@@ -15,6 +15,7 @@ final class FolderPreviewCompositeCache {
     struct MemberKey: Hashable, Sendable {
         let id: String
         let sourcePath: String
+        let iconRevision: UInt64
     }
 
     struct PreviewKey: Hashable, Sendable {
@@ -85,7 +86,13 @@ final class FolderPreviewCompositeCache {
         let pxH = pxW
         let iconPx = max(1, Int((Self.canonicalIconPt * scale).rounded()))
         let scaleMilli = Int((scale * 1000).rounded())
-        let memberKeys = displayMembers.map { MemberKey(id: $0.id, sourcePath: $0.resourceSourcePath) }
+        let memberKeys = displayMembers.map {
+            MemberKey(
+                id: $0.id,
+                sourcePath: $0.resourceSourcePath,
+                iconRevision: CustomIconStore.shared.iconRevision(for: $0)
+            )
+        }
         return PreviewKey(
             members: memberKeys,
             appearanceName: appearanceName,
@@ -582,7 +589,8 @@ final class AppIconImageProvider: @unchecked Sendable {
     }
 
     private func cacheKey(for app: AppInfo, appearanceName: String) -> NSString {
-        "\(app.url.path)|\(appearanceName)" as NSString
+        let rev = CustomIconStore.shared.iconRevision(for: app)
+        return "\(app.url.path)|\(appearanceName)|\(rev)" as NSString
     }
 
     func hasCachedCGImage(for app: AppInfo, appearanceName: String? = nil) -> Bool {
@@ -713,12 +721,16 @@ final class AppIconImageProvider: @unchecked Sendable {
         generation: UInt64
     ) -> CGImage? {
         var cg: CGImage?
-        appearance.performAsCurrentDrawingAppearance {
-            let image = NSWorkspace.shared.icon(forFile: app.url.path)
-            // Request 256pt (512px on Retina) to ensure razor-sharp rendering in preview layers
-            image.size = NSSize(width: 256, height: 256)
-            var proposedRect = CGRect(origin: .zero, size: image.size)
-            cg = image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil)
+        if let custom = CustomIconStore.shared.cgImage(for: app) {
+            cg = custom
+        } else {
+            appearance.performAsCurrentDrawingAppearance {
+                let image = NSWorkspace.shared.icon(forFile: app.url.path)
+                // Request 256pt (512px on Retina) to ensure razor-sharp rendering in preview layers
+                image.size = NSSize(width: 256, height: 256)
+                var proposedRect = CGRect(origin: .zero, size: image.size)
+                cg = image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil)
+            }
         }
         guard let cg else { return nil }
         lock.lock()
@@ -785,6 +797,7 @@ private final class FolderGlassPlateItemView: NSView {
     private var lastCornerRadius: CGFloat = -1
     private var lastAlpha: Float = -1
     private var lastMemberIDs: [String] = []
+    private var lastMemberRevisions: [UInt64] = []
     private var lastPreviewVisible: Bool = false
     private var lastIconSize: CGFloat = -1
     private var lastScale: CGFloat = -1
@@ -812,6 +825,7 @@ private final class FolderGlassPlateItemView: NSView {
         lastCornerRadius = -1
         lastAlpha = -1
         lastMemberIDs = []
+        lastMemberRevisions = []
         lastPreviewVisible = false
         lastIconSize = -1
         lastScale = -1
@@ -1174,8 +1188,10 @@ private final class FolderGlassPlateItemView: NSView {
                 && abs(currentBounds.height - lastPreviewBoundsSize.height) < 0.05
                 && abs(iconSize - lastIconSize) < 0.05
         )
+        let currentRevisions = displayMembers.map { CustomIconStore.shared.iconRevision(for: $0) }
         let contentUnchanged = boundsMatch
             && memberIDs == lastMemberIDs
+            && currentRevisions == lastMemberRevisions
             && previewVisible == lastPreviewVisible
             && abs(scale - lastScale) < 0.001
             && incomingDropAppID == lastIncomingDropAppID
@@ -1191,10 +1207,13 @@ private final class FolderGlassPlateItemView: NSView {
         let previousDisplayMemberIDs = currentDisplayMemberIDs
         let previousAppearanceName = lastAppearanceName
         let previousLoadedImages = loadedMemberImages
-        let canRetainExistingImages = previousDisplayMemberIDs == memberIDs && previousAppearanceName == appearanceName
+        let canRetainExistingImages = previousDisplayMemberIDs == memberIDs
+            && previousAppearanceName == appearanceName
+            && lastMemberRevisions == currentRevisions
 
         lastPreviewBoundsSize = currentBounds.size
         lastMemberIDs = memberIDs
+        lastMemberRevisions = currentRevisions
         lastPreviewVisible = previewVisible
         lastIconSize = iconSize
         lastScale = scale

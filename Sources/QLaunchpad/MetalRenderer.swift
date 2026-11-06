@@ -4,6 +4,7 @@ import MetalKit
 import QuartzCore
 import QLaunchpadCore
 import simd
+import UniformTypeIdentifiers
 
 // MARK: - GPU instance layout (three float4s, 48-byte stride)
 
@@ -680,6 +681,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         NotificationCenter.default.addObserver(
             self, selector: #selector(iconTexturesUpdated),
             name: .qlaunchpadIconTexturesUpdated, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(customIconsChanged(_:)),
+            name: .qlaunchpadCustomIconsChanged, object: nil
         )
     }
 
@@ -1650,6 +1655,32 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             checkAndStartAppearanceCrossfadeIfNeeded(now: CACurrentMediaTime())
         }
         // Background bakes finished — paint without doing work on this path.
+        if store.openedFolderID != nil, IconRenderQuality.current == .quality, folderTransition == nil, !isAppearanceCrossfadeActive, pendingTargetAppearance == nil {
+            syncFolderDepthBackdropIfNeeded()
+        }
+        needsDisplay = true
+        startDisplayLink()
+    }
+
+    @objc private func customIconsChanged(_ notification: Notification) {
+        if let bundleID = notification.userInfo?["bundleIdentifier"] as? String {
+            let matchingApps = store.apps.filter { $0.bundleIdentifier == bundleID }
+            for app in matchingApps {
+                let rev = CustomIconStore.shared.iconRevision(for: app)
+                _ = iconTextures.ensureTexture(for: app)
+                iconTextures.invalidate(for: app.id, keepingRevision: rev)
+            }
+        } else if let appID = notification.userInfo?["appID"] as? String {
+            if let app = store.app(withID: appID) {
+                let rev = CustomIconStore.shared.iconRevision(for: app)
+                _ = iconTextures.ensureTexture(for: app)
+                iconTextures.invalidate(for: appID, keepingRevision: rev)
+            } else {
+                iconTextures.invalidate(for: appID)
+            }
+        } else {
+            iconTextures.clear()
+        }
         if store.openedFolderID != nil, IconRenderQuality.current == .quality, folderTransition == nil, !isAppearanceCrossfadeActive, pendingTargetAppearance == nil {
             syncFolderDepthBackdropIfNeeded()
         }
@@ -6614,6 +6645,36 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         let iconImageItem = NSMenuItem(title: L10n.tr("context.iconImage"), action: nil, keyEquivalent: "")
         let iconImageMenu = NSMenu(title: L10n.tr("context.iconImage"))
+
+        let changeIconItem = NSMenuItem(
+            title: L10n.tr("context.changeIcon"),
+            action: #selector(changeContextMenuAppIcon),
+            keyEquivalent: ""
+        )
+        changeIconItem.target = self
+        iconImageMenu.addItem(changeIconItem)
+
+        let pasteIconItem = NSMenuItem(
+            title: L10n.tr("context.pasteIcon"),
+            action: #selector(pasteContextMenuAppIcon),
+            keyEquivalent: ""
+        )
+        pasteIconItem.target = self
+        pasteIconItem.isEnabled = canPasteIconFromClipboard()
+        iconImageMenu.addItem(pasteIconItem)
+
+        if CustomIconStore.shared.hasCustomIcon(for: app) {
+            let resetIconItem = NSMenuItem(
+                title: L10n.tr("context.resetIcon"),
+                action: #selector(resetContextMenuAppIcon),
+                keyEquivalent: ""
+            )
+            resetIconItem.target = self
+            iconImageMenu.addItem(resetIconItem)
+        }
+
+        iconImageMenu.addItem(.separator())
+
         let currentSizeItem = NSMenuItem(
             title: L10n.tr("context.downloadCurrentIcon"),
             action: #selector(downloadContextMenuAppIconAtCurrentSize),
@@ -6840,6 +6901,110 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         Self.didShowIconDownloadHint = true
         let alert = NSAlert()
         alert.messageText = L10n.tr("context.iconDownloaded")
+        alert.addButton(withTitle: L10n.tr("common.ok"))
+        if let window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
+    private func canPasteIconFromClipboard() -> Bool {
+        let pb = NSPasteboard.general
+        if NSImage.canInit(with: pb) {
+            return true
+        }
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: [
+            .urlReadingFileURLsOnly: true
+        ]) as? [URL], let first = urls.first {
+            let ext = first.pathExtension.lowercased()
+            let supported = ["png", "jpg", "jpeg", "icns", "webp", "tiff", "gif", "bmp", "heic"]
+            return supported.contains(ext)
+        }
+        return false
+    }
+
+    private func imageFromClipboard() -> NSImage? {
+        let pb = NSPasteboard.general
+        if let images = pb.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
+           let img = images.first {
+            return img
+        }
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: [
+            .urlReadingFileURLsOnly: true
+        ]) as? [URL], let first = urls.first {
+            return NSImage(contentsOf: first)
+        }
+        return nil
+    }
+
+    @objc private func changeContextMenuAppIcon() {
+        guard let app = contextMenuApp else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.image]
+        panel.prompt = L10n.tr("common.choose")
+
+        let completionHandler: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            self?.applyCustomIcon(at: url, for: app)
+        }
+
+        if let window {
+            panel.beginSheetModal(for: window, completionHandler: completionHandler)
+        } else if panel.runModal() == .OK, let url = panel.url {
+            applyCustomIcon(at: url, for: app)
+        }
+    }
+
+    @objc private func pasteContextMenuAppIcon() {
+        guard let app = contextMenuApp else { return }
+        guard let image = imageFromClipboard() else {
+            presentAlert(title: L10n.tr("error.icon.clipboardNoImage"))
+            return
+        }
+        applyCustomIcon(image, for: app)
+    }
+
+    @objc private func resetContextMenuAppIcon() {
+        guard let app = contextMenuApp else { return }
+        CustomIconStore.shared.resetCustomIcon(for: app)
+    }
+
+    private func applyCustomIcon(at url: URL, for app: AppInfo) {
+        guard let image = NSImage(contentsOf: url) else {
+            presentAlert(
+                title: L10n.tr("error.icon.invalidImage"),
+                informativeText: url.lastPathComponent
+            )
+            return
+        }
+        applyCustomIcon(image, for: app)
+    }
+
+    private func applyCustomIcon(_ image: NSImage, for app: AppInfo) {
+        CustomIconStore.shared.stageCustomIcon(sourceImage: image, for: app) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let staged):
+                CustomIconStore.shared.commitCustomIcon(staged: staged, for: app)
+            case .failure(let error):
+                self.presentAlert(
+                    title: L10n.tr("error.icon.invalidImage"),
+                    informativeText: error.localizedDescription
+                )
+            }
+        }
+    }
+
+    private func presentAlert(title: String, informativeText: String? = nil) {
+        let alert = NSAlert()
+        alert.messageText = title
+        if let informativeText {
+            alert.informativeText = informativeText
+        }
         alert.addButton(withTitle: L10n.tr("common.ok"))
         if let window {
             alert.beginSheetModal(for: window)

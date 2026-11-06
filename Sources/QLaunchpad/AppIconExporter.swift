@@ -39,6 +39,9 @@ enum AppIconExporter {
     }
 
     private static func sourceImage(for app: AppInfo) -> NSImage {
+        if let custom = CustomIconStore.shared.image(for: app) {
+            return custom
+        }
         let workspaceIcon = NSWorkspace.shared.icon(forFile: app.url.path)
         // Prefer the system icon service: it includes 1024pt / @2x variants
         // that the bundle .icns often omits. Fall back only when it is empty.
