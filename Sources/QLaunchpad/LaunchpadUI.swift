@@ -415,6 +415,8 @@ final class LaunchpadContainerView: NSView {
                pending.folderID == self.metalView.activeFolderTransitionID,
                !fgPlates.isEmpty,
                self.metalView.isFolderTransitionActive {
+                self.backgroundFolderHostView.usesUnifiedBackdropBlur = (IconRenderQuality.current == .quality)
+                    && self.backdropView.isReady && !self.backdropView.isHidden
                 self.backgroundFolderHostView.update(plates: pending.plates, removeUnused: true)
                 self.backgroundFolderHostView.setPlateHidden(true, for: pending.folderID)
                 self.pendingBackdropPlates = nil
@@ -426,6 +428,12 @@ final class LaunchpadContainerView: NSView {
             let shouldRemoveUnused = !retainsDepthPlates
             if !bgPlates.isEmpty || shouldRemoveUnused {
                 self.backgroundFolderHostView.update(plates: bgPlates, removeUnused: shouldRemoveUnused)
+                if !bgPlates.isEmpty,
+                   IconRenderQuality.current == .quality,
+                   !self.metalView.isFolderTransitionActive,
+                   self.store.openedFolderID == nil {
+                    self.metalView.prewarmSunkFolderTextures(for: bgPlates)
+                }
             }
 
             var fgSeedImages: [String: [String: CGImage]] = [:]
@@ -458,6 +466,9 @@ final class LaunchpadContainerView: NSView {
             guard let self else { return false }
             return self.foregroundFolderHostView.hasReadyPreviews(for: "opened-folder-" + folderID)
                 || self.backgroundFolderHostView.hasReadyPreviews(for: folderID)
+        }
+        metalView.onLookupFolderPreviewImages = { [weak self] folderID in
+            self?.backgroundFolderHostView.previewImages(for: folderID) ?? [:]
         }
         metalView.onUpdateFolderTitleTransition = { [weak self] state in
             self?.folderTitleView.update(state: state)
@@ -496,6 +507,11 @@ final class LaunchpadContainerView: NSView {
         metalView.onFolderTransitionProgress = { [weak self] progress, materialProgress in
             guard let self else { return }
             self.backdropView.updateProgress(progress)
+            let unified = (IconRenderQuality.current == .quality)
+                && self.backdropView.isReady && !self.backdropView.isHidden
+            if self.backgroundFolderHostView.usesUnifiedBackdropBlur != unified {
+                self.backgroundFolderHostView.usesUnifiedBackdropBlur = unified
+            }
             let sink = FolderDepthBackdropView.sinkTransform(progress: progress)
             self.backgroundFolderHostView.applySinkTransform(
                 sink.transform,
@@ -520,6 +536,7 @@ final class LaunchpadContainerView: NSView {
             if !isReady {
                 self.pendingBackdropPlates = nil
             }
+            self.backgroundFolderHostView.usesUnifiedBackdropBlur = isReady && (IconRenderQuality.current == .quality)
             self.metalView.handleBackdropReady(isReady: isReady)
         }
         metalView.onFolderDepthBackdropDismiss = { [weak self] in
@@ -547,6 +564,7 @@ final class LaunchpadContainerView: NSView {
             if self.store.openedFolderID == nil {
                 self.pendingBackdropPlates = nil
                 self.backdropView.dismiss()
+                self.backgroundFolderHostView.usesUnifiedBackdropBlur = false
                 self.foregroundFolderHostView.setAllPlatesHidden(true)
                 self.dragFolderHostView.removeAllPlates()
             }
@@ -574,6 +592,9 @@ final class LaunchpadContainerView: NSView {
             self.backgroundFolderHostView.commitAppearanceCrossfade(toAppearance: toApp)
             self.foregroundFolderHostView.commitAppearanceCrossfade(toAppearance: toApp)
             self.dragFolderHostView.commitAppearanceCrossfade(toAppearance: toApp)
+            if self.store.openedFolderID != nil, IconRenderQuality.current == .quality {
+                self.metalView.syncFolderDepthBackdropIfNeeded()
+            }
         }
         metalView.onInteractiveDismissProgress = { [weak self] progress in
             self?.onInteractiveDismissProgress?(progress)

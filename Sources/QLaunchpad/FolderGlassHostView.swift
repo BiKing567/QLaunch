@@ -1,7 +1,400 @@
 import AppKit
 import ImageIO
+import Metal
 import QLaunchpadCore
 import QuartzCore
+
+/// Caches pre-rendered 3×3 mini-icon composites (with drop shadows) and complete
+/// sunk folder textures (outer shadow + sunk baseplate + 3×3 mini-icons) so folder
+/// open/close transitions do not recompute 9 mini-icon CALayer shadows and
+/// per-folder CIGaussianBlur filters on every frame.
+@MainActor
+final class FolderPreviewCompositeCache {
+    static let shared = FolderPreviewCompositeCache()
+
+    struct MemberKey: Hashable, Sendable {
+        let id: String
+        let sourcePath: String
+    }
+
+    struct PreviewKey: Hashable, Sendable {
+        let members: [MemberKey]
+        let appearanceName: String
+        let boundsPixelWidth: Int
+        let boundsPixelHeight: Int
+        let iconPixelSize: Int
+        let scaleMilli: Int
+        let incomingDropAppID: String?
+    }
+
+    struct SunkTextureKey: Hashable, Sendable {
+        let previewKey: PreviewKey
+        let cornerRadiusMilli: Int
+        let isDark: Bool
+        let isFloat16: Bool
+        let deviceID: ObjectIdentifier
+    }
+
+    struct SunkFolderTextureEntry {
+        let texture: MTLTexture
+        let totalSizePt: CGFloat
+    }
+
+    private static let linearDisplayP3: CGColorSpace = {
+        CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3)
+            ?? CGColorSpace(name: CGColorSpace.displayP3)
+            ?? CGColorSpaceCreateDeviceRGB()
+    }()
+
+    private static let displayP3: CGColorSpace = {
+        CGColorSpace(name: CGColorSpace.displayP3)
+            ?? CGColorSpaceCreateDeviceRGB()
+    }()
+
+    private var previewCache: [PreviewKey: CGImage] = [:]
+    private var sunkTextureCache: [SunkTextureKey: SunkFolderTextureEntry] = [:]
+    private let maxEntries = 96
+
+    private init() {}
+
+    func clear() {
+        previewCache.removeAll(keepingCapacity: true)
+        sunkTextureCache.removeAll(keepingCapacity: true)
+    }
+
+    func makePreviewKey(
+        boundsSize: CGSize,
+        iconSize: CGFloat,
+        scale: CGFloat,
+        displayMembers: [AppInfo],
+        incomingDropAppID: String?,
+        appearanceName: String
+    ) -> PreviewKey {
+        let side = min(boundsSize.width, boundsSize.height)
+        let effectiveIconSize = iconSize > 0 ? iconSize : (side / 0.8125)
+        let pxW = max(1, Int((boundsSize.width * scale).rounded()))
+        let pxH = max(1, Int((boundsSize.height * scale).rounded()))
+        let iconPx = max(1, Int((effectiveIconSize * scale).rounded()))
+        let scaleMilli = Int((scale * 1000).rounded())
+        let memberKeys = displayMembers.map { MemberKey(id: $0.id, sourcePath: $0.resourceSourcePath) }
+        return PreviewKey(
+            members: memberKeys,
+            appearanceName: appearanceName,
+            boundsPixelWidth: pxW,
+            boundsPixelHeight: pxH,
+            iconPixelSize: iconPx,
+            scaleMilli: scaleMilli,
+            incomingDropAppID: incomingDropAppID
+        )
+    }
+
+    func previewCompositeImage(
+        boundsSize: CGSize,
+        iconSize: CGFloat,
+        scale: CGFloat,
+        displayMembers: [AppInfo],
+        incomingDropAppID: String?,
+        appearanceName: String,
+        imagesByID: [String: CGImage]
+    ) -> CGImage? {
+        guard !displayMembers.isEmpty, boundsSize.width >= 1, boundsSize.height >= 1 else {
+            return nil
+        }
+        let key = makePreviewKey(
+            boundsSize: boundsSize,
+            iconSize: iconSize,
+            scale: scale,
+            displayMembers: displayMembers,
+            incomingDropAppID: incomingDropAppID,
+            appearanceName: appearanceName
+        )
+        if let cached = previewCache[key] {
+            return cached
+        }
+
+        let pxW = key.boundsPixelWidth
+        let pxH = key.boundsPixelHeight
+        guard let ctx = CGContext(
+            data: nil,
+            width: pxW,
+            height: pxH,
+            bitsPerComponent: 8,
+            bytesPerRow: pxW * 4,
+            space: Self.displayP3,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        ctx.clear(CGRect(x: 0, y: 0, width: pxW, height: pxH))
+        ctx.interpolationQuality = .high
+
+        let side = min(boundsSize.width, boundsSize.height)
+        let folderCenter = CGPoint(x: side * 0.5, y: side * 0.5)
+        let effectiveIconSize = iconSize > 0 ? iconSize : (side / 0.8125)
+        let miniSize = FolderPreviewLayout.miniSize(in: effectiveIconSize)
+
+        let shadowColor = NSColor.black.withAlphaComponent(0.24).cgColor
+        let shadowOffsetY = -1.0 * (side / 128.0) * scale
+        let shadowBlur = 1.5 * (side / 128.0) * scale
+        ctx.setShadow(
+            offset: CGSize(width: 0, height: shadowOffsetY),
+            blur: shadowBlur,
+            color: shadowColor
+        )
+
+        for (index, app) in displayMembers.enumerated() {
+            if let incomingDropAppID, app.id == incomingDropAppID {
+                continue
+            }
+            guard let cgImage = imagesByID[app.id] else {
+                continue
+            }
+            let center = FolderPreviewLayout.miniCenter(
+                index: index,
+                folderCenter: folderCenter,
+                folderSize: effectiveIconSize,
+                yIncreasesDown: true
+            )
+            let originX = ((center.x - miniSize * 0.5) * scale).rounded()
+            let originYTop = ((center.y - miniSize * 0.5) * scale).rounded()
+            let snappedPx = (miniSize * scale).rounded()
+            let originYBottom = CGFloat(pxH) - originYTop - snappedPx
+            let drawRect = CGRect(x: originX, y: originYBottom, width: snappedPx, height: snappedPx)
+            ctx.draw(cgImage, in: drawRect)
+        }
+
+        guard let image = ctx.makeImage() else { return nil }
+        if previewCache.count >= maxEntries {
+            previewCache.removeAll(keepingCapacity: true)
+        }
+        previewCache[key] = image
+        return image
+    }
+
+    func sunkFolderTexture(
+        device: MTLDevice,
+        plate: FolderPlateModel,
+        scale: CGFloat,
+        appearanceName: String,
+        isDark: Bool,
+        isFloat16: Bool,
+        fallbackImages: [String: CGImage]? = nil,
+        allowCreateMissingIcons: Bool = true
+    ) -> SunkFolderTextureEntry? {
+        let plateSizePt = min(plate.rect.width, plate.rect.height)
+        guard plateSizePt >= 1 else { return nil }
+
+        let displayMembers = Array(plate.members.prefix(FolderPreviewLayout.capacity))
+        let platePx = max(1, Int((plateSizePt * scale).rounded()))
+        let outsetPx = max(4, Int((18.0 * (plateSizePt / 104.0) * scale).rounded()))
+        let totalPx = platePx + outsetPx * 2
+        let totalSizePt = CGFloat(totalPx) / scale
+        let normalizedBoundsSize = CGSize(width: CGFloat(platePx) / scale, height: CGFloat(platePx) / scale)
+        let effectiveIconSize = plate.iconSize > 0 ? plate.iconSize : (plateSizePt / 0.8125)
+        let cornerRadiusPt = plate.customCornerRadius ?? (plateSizePt * 0.225)
+        let cornerRadiusMilli = Int((cornerRadiusPt * 1000).rounded())
+
+        let previewKey = makePreviewKey(
+            boundsSize: normalizedBoundsSize,
+            iconSize: effectiveIconSize,
+            scale: scale,
+            displayMembers: displayMembers,
+            incomingDropAppID: plate.incomingDropAppID,
+            appearanceName: appearanceName
+        )
+        let sunkKey = SunkTextureKey(
+            previewKey: previewKey,
+            cornerRadiusMilli: cornerRadiusMilli,
+            isDark: isDark,
+            isFloat16: isFloat16,
+            deviceID: ObjectIdentifier(device)
+        )
+        if let cached = sunkTextureCache[sunkKey] {
+            return cached
+        }
+
+        var previewImage: CGImage? = previewCache[previewKey]
+        if previewImage == nil, plate.previewVisible, !displayMembers.isEmpty {
+            var imagesByID: [String: CGImage] = [:]
+            for app in displayMembers {
+                if let incoming = plate.incomingDropAppID, app.id == incoming {
+                    continue
+                }
+                if let img = AppIconImageProvider.shared.cachedCGImage(
+                    for: app,
+                    appearanceName: appearanceName,
+                    allowFallback: true
+                ) ?? fallbackImages?[app.id] ?? (
+                    allowCreateMissingIcons
+                        ? AppIconImageProvider.shared.cgImage(for: app, allowCreate: true)
+                        : nil
+                ) {
+                    imagesByID[app.id] = img
+                } else if !allowCreateMissingIcons {
+                    return nil
+                }
+            }
+            previewImage = previewCompositeImage(
+                boundsSize: normalizedBoundsSize,
+                iconSize: effectiveIconSize,
+                scale: scale,
+                displayMembers: displayMembers,
+                incomingDropAppID: plate.incomingDropAppID,
+                appearanceName: appearanceName,
+                imagesByID: imagesByID
+            )
+        }
+
+        let bytesPerComponent = MemoryLayout<Float16>.size
+        let bytesPerRow = totalPx * 4 * bytesPerComponent
+        let bitmapInfo = CGBitmapInfo.floatComponents.rawValue
+            | CGBitmapInfo.byteOrder16Little.rawValue
+            | CGImageAlphaInfo.premultipliedLast.rawValue
+
+        guard let ctx = CGContext(
+            data: nil,
+            width: totalPx,
+            height: totalPx,
+            bitsPerComponent: 16,
+            bytesPerRow: bytesPerRow,
+            space: Self.linearDisplayP3,
+            bitmapInfo: bitmapInfo
+        ), let data = ctx.data else {
+            return nil
+        }
+
+        ctx.clear(CGRect(x: 0, y: 0, width: totalPx, height: totalPx))
+        ctx.interpolationQuality = .high
+
+        let plateRect = CGRect(x: outsetPx, y: outsetPx, width: platePx, height: platePx)
+        let maxRadius = min(plateRect.width, plateRect.height) * 0.5
+        let radiusPx = min(maxRadius, max(0, cornerRadiusPt * scale))
+        let platePath = CGPath(
+            roundedRect: plateRect,
+            cornerWidth: radiusPx,
+            cornerHeight: radiusPx,
+            transform: nil
+        )
+
+        // 1. Outer shadow matching sunkContainerView.layer (shadowOpacity = 0.18, offset = (0, -2), radius = 8.0)
+        let shadowScale = plateSizePt / 104.0
+        let shadowOffsetY = -2.0 * scale * shadowScale
+        let shadowBlur = 8.0 * scale * shadowScale
+        let offscreenShiftY = CGFloat(totalPx * 2)
+        var shiftTransform = CGAffineTransform(translationX: 0, y: offscreenShiftY)
+        if let shiftedPath = platePath.copy(using: &shiftTransform) {
+            ctx.saveGState()
+            ctx.setShadow(
+                offset: CGSize(width: 0, height: -offscreenShiftY + shadowOffsetY),
+                blur: shadowBlur,
+                color: NSColor.black.withAlphaComponent(0.18).cgColor
+            )
+            ctx.setFillColor(NSColor.black.cgColor)
+            ctx.addPath(shiftedPath)
+            ctx.fillPath()
+            ctx.restoreGState()
+        }
+
+        // 2. Sunk baseplate fill & inner 0.5pt border matching sunkPlateView.layer
+        ctx.saveGState()
+        ctx.addPath(platePath)
+        ctx.clip()
+
+        let fillColor = isDark
+            ? NSColor(white: 0.34, alpha: 0.55).cgColor
+            : NSColor(white: 0.80, alpha: 0.28).cgColor
+        ctx.setFillColor(fillColor)
+        ctx.addPath(platePath)
+        ctx.fillPath()
+
+        let borderColor = isDark
+            ? NSColor(white: 1.0, alpha: 0.18).cgColor
+            : NSColor(white: 1.0, alpha: 0.35).cgColor
+        ctx.setStrokeColor(borderColor)
+        ctx.setLineWidth(1.0 * scale)
+        ctx.addPath(platePath)
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        // 3. Cached 3x3 mini-icon + drop shadow composite
+        if let previewImage, plate.previewVisible {
+            ctx.draw(previewImage, in: plateRect)
+        }
+
+        let texture: MTLTexture?
+        if isFloat16 {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .rgba16Float,
+                width: totalPx,
+                height: totalPx,
+                mipmapped: false
+            )
+            descriptor.usage = [.shaderRead]
+            descriptor.storageMode = .shared
+            guard let tex = device.makeTexture(descriptor: descriptor) else { return nil }
+            tex.replace(
+                region: MTLRegionMake2D(0, 0, totalPx, totalPx),
+                mipmapLevel: 0,
+                withBytes: data,
+                bytesPerRow: bytesPerRow
+            )
+            texture = tex
+        } else {
+            let pixelCount = totalPx * totalPx
+            var unorm = [UInt8](repeating: 0, count: pixelCount * 4)
+            data.withMemoryRebound(to: Float16.self, capacity: pixelCount * 4) { src in
+                var pixel = 0
+                while pixel < pixelCount {
+                    let base = pixel * 4
+                    unorm[base]     = Self.encodeLinearToSRGB8(Float(src[base]))
+                    unorm[base + 1] = Self.encodeLinearToSRGB8(Float(src[base + 1]))
+                    unorm[base + 2] = Self.encodeLinearToSRGB8(Float(src[base + 2]))
+                    let alpha = min(max(Float(src[base + 3]), 0), 1)
+                    unorm[base + 3] = UInt8(alpha * 255.0 + 0.5)
+                    pixel += 1
+                }
+            }
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .rgba8Unorm_srgb,
+                width: totalPx,
+                height: totalPx,
+                mipmapped: false
+            )
+            descriptor.usage = [.shaderRead]
+            descriptor.storageMode = .shared
+            guard let tex = device.makeTexture(descriptor: descriptor) else { return nil }
+            unorm.withUnsafeBytes { raw in
+                tex.replace(
+                    region: MTLRegionMake2D(0, 0, totalPx, totalPx),
+                    mipmapLevel: 0,
+                    withBytes: raw.baseAddress!,
+                    bytesPerRow: totalPx * 4
+                )
+            }
+            texture = tex
+        }
+
+        guard let texture else { return nil }
+        let entry = SunkFolderTextureEntry(texture: texture, totalSizePt: totalSizePt)
+        if sunkTextureCache.count >= maxEntries {
+            sunkTextureCache.removeAll(keepingCapacity: true)
+        }
+        sunkTextureCache[sunkKey] = entry
+        return entry
+    }
+
+    private static func encodeLinearToSRGB8(_ linear: Float) -> UInt8 {
+        let x = min(max(linear, 0), 1)
+        let encoded: Float
+        if x <= 0.0031308 {
+            encoded = x * 12.92
+        } else {
+            encoded = 1.055 * pow(x, 1.0 / 2.4) - 0.055
+        }
+        return UInt8(encoded * 255.0 + 0.5)
+    }
+}
 
 /// Geometric and content descriptor for an active folder glass plate on screen.
 struct FolderPlateModel: Equatable, Sendable {
@@ -304,9 +697,19 @@ private final class FolderGlassPlateItemView: NSView {
     private var currentMaterialStyle: FolderPlateMaterialStyle = .glass
     private let sunkContainerView = FlippedContainerView()
     private let contentView = FlippedContainerView()
+    private let compositePreviewLayer = CALayer()
     private var previewLayers: [CALayer] = []
     private var crossfadePreviewLayers: [CALayer] = []
     private var currentDisplayMemberIDs: [String] = []
+    private var loadedMemberImages: [String: CGImage] = [:]
+
+    var usesUnifiedBackdropBlur: Bool = false {
+        didSet {
+            guard usesUnifiedBackdropBlur != oldValue else { return }
+            lastTransitionProgress = -1
+            lastMaterialProgress = -1
+        }
+    }
 
     private var lastBoundsSize: CGSize = .zero
     private var lastPreviewBoundsSize: CGSize = .zero
@@ -332,6 +735,9 @@ private final class FolderGlassPlateItemView: NSView {
     func resetCachedState() {
         previewRequestGeneration &+= 1
         currentDisplayMemberIDs = []
+        loadedMemberImages.removeAll(keepingCapacity: true)
+        compositePreviewLayer.contents = nil
+        compositePreviewLayer.isHidden = true
         lastBoundsSize = .zero
         lastPreviewBoundsSize = .zero
         lastCornerRadius = -1
@@ -350,8 +756,9 @@ private final class FolderGlassPlateItemView: NSView {
     func previewImages() -> [String: CGImage] {
         var result: [String: CGImage] = [:]
         for (i, id) in currentDisplayMemberIDs.enumerated() {
-            guard i < previewLayers.count else { break }
-            if let image = previewLayers[i].contents {
+            if let image = loadedMemberImages[id] {
+                result[id] = image
+            } else if i < previewLayers.count, let image = previewLayers[i].contents {
                 result[id] = (image as! CGImage)
             }
         }
@@ -360,7 +767,13 @@ private final class FolderGlassPlateItemView: NSView {
 
     var hasReadyPreviews: Bool {
         guard currentPreviewVisible, !currentDisplayMemberIDs.isEmpty else { return false }
-        for i in 0..<currentDisplayMemberIDs.count {
+        for (i, id) in currentDisplayMemberIDs.enumerated() {
+            if let incoming = currentIncomingDropAppID, id == incoming {
+                continue
+            }
+            if loadedMemberImages[id] != nil {
+                continue
+            }
             guard i < previewLayers.count else { return false }
             if previewLayers[i].contents == nil || previewLayers[i].isHidden {
                 return false
@@ -427,13 +840,20 @@ private final class FolderGlassPlateItemView: NSView {
         contentView.autoresizingMask = [.width, .height]
         sunkContainerView.addSubview(contentView, positioned: .above, relativeTo: sunkPlateView)
 
-        // Pre-create 9 reusable CALayers for the 3×3 grid plus 9 crossfade overlay layers
+        compositePreviewLayer.frame = bounds
+        compositePreviewLayer.contentsGravity = .resizeAspect
+        compositePreviewLayer.masksToBounds = false
+        compositePreviewLayer.shadowOpacity = 0.0
+        compositePreviewLayer.isHidden = true
+        contentView.layer?.addSublayer(compositePreviewLayer)
+
+        // Pre-create 9 reusable CALayers for fallback / crossfade without live per-icon CALayer drop shadows
         for _ in 0..<FolderPreviewLayout.capacity {
             let layer = CALayer()
             layer.contentsGravity = .resizeAspect
             layer.masksToBounds = false
             layer.shadowColor = NSColor.black.withAlphaComponent(0.24).cgColor
-            layer.shadowOpacity = 1.0
+            layer.shadowOpacity = 0.0
             layer.shadowOffset = CGSize(width: 0, height: 1)
             layer.shadowRadius = 1.5
             layer.isHidden = true
@@ -444,7 +864,7 @@ private final class FolderGlassPlateItemView: NSView {
             crossLayer.contentsGravity = .resizeAspect
             crossLayer.masksToBounds = false
             crossLayer.shadowColor = NSColor.black.withAlphaComponent(0.24).cgColor
-            crossLayer.shadowOpacity = 1.0
+            crossLayer.shadowOpacity = 0.0
             crossLayer.shadowOffset = CGSize(width: 0, height: 1)
             crossLayer.shadowRadius = 1.5
             crossLayer.isHidden = true
@@ -492,6 +912,7 @@ private final class FolderGlassPlateItemView: NSView {
         sunkContainerView.frame = currentBounds
         sunkPlateView.frame = currentBounds
         contentView.frame = currentBounds
+        compositePreviewLayer.frame = currentBounds
         if currentBounds.size != lastBoundsSize {
             lastBoundsSize = currentBounds.size
             let radius = lastCornerRadius > 0 ? lastCornerRadius : 24.0
@@ -538,6 +959,73 @@ private final class FolderGlassPlateItemView: NSView {
         }
     }
 
+    private func applyPreviewCompositeOrFallback(
+        displayMembers: [AppInfo],
+        boundsSize: CGSize,
+        iconSize: CGFloat,
+        scale: CGFloat,
+        incomingDropAppID: String?,
+        appearanceName: String
+    ) {
+        var allReady = true
+        for app in displayMembers {
+            if let incomingDropAppID, app.id == incomingDropAppID {
+                continue
+            }
+            if loadedMemberImages[app.id] == nil {
+                allReady = false
+                break
+            }
+        }
+
+        if allReady,
+           let composite = FolderPreviewCompositeCache.shared.previewCompositeImage(
+               boundsSize: boundsSize,
+               iconSize: iconSize,
+               scale: scale,
+               displayMembers: displayMembers,
+               incomingDropAppID: incomingDropAppID,
+               appearanceName: appearanceName,
+               imagesByID: loadedMemberImages
+           ) {
+            compositePreviewLayer.frame = CGRect(origin: .zero, size: boundsSize)
+            compositePreviewLayer.contentsScale = scale
+            compositePreviewLayer.contents = composite
+            compositePreviewLayer.opacity = 1.0
+            compositePreviewLayer.isHidden = false
+            for layer in previewLayers {
+                layer.isHidden = true
+            }
+            for crossLayer in crossfadePreviewLayers {
+                crossLayer.isHidden = true
+                crossLayer.contents = nil
+            }
+        } else {
+            compositePreviewLayer.isHidden = true
+            compositePreviewLayer.contents = nil
+            for (index, layer) in previewLayers.enumerated() {
+                if index < displayMembers.count {
+                    let app = displayMembers[index]
+                    if let incomingDropAppID, app.id == incomingDropAppID {
+                        layer.isHidden = true
+                        continue
+                    }
+                    if let img = loadedMemberImages[app.id] {
+                        layer.contents = img
+                        layer.opacity = 1.0
+                        layer.isHidden = false
+                    } else {
+                        layer.isHidden = true
+                        layer.contents = nil
+                    }
+                } else {
+                    layer.isHidden = true
+                    layer.contents = nil
+                }
+            }
+        }
+    }
+
     func update(
         rect: CGRect,
         cornerRadius: CGFloat,
@@ -560,6 +1048,7 @@ private final class FolderGlassPlateItemView: NSView {
             sunkContainerView.frame = currentBounds
             sunkPlateView.frame = currentBounds
             contentView.frame = currentBounds
+            compositePreviewLayer.frame = currentBounds
             lastBoundsSize = currentBounds.size
         }
         if alpha != lastAlpha {
@@ -587,6 +1076,9 @@ private final class FolderGlassPlateItemView: NSView {
         guard previewVisible, !members.isEmpty else {
             if lastPreviewVisible != previewVisible || !lastMemberIDs.isEmpty {
                 previewRequestGeneration &+= 1
+                loadedMemberImages.removeAll(keepingCapacity: true)
+                compositePreviewLayer.isHidden = true
+                compositePreviewLayer.contents = nil
                 for layer in previewLayers {
                     layer.isHidden = true
                     layer.contents = nil
@@ -624,6 +1116,7 @@ private final class FolderGlassPlateItemView: NSView {
 
         let previousDisplayMemberIDs = currentDisplayMemberIDs
         let previousAppearanceName = lastAppearanceName
+        let previousLoadedImages = loadedMemberImages
         let canRetainExistingImages = previousDisplayMemberIDs == memberIDs && previousAppearanceName == appearanceName
 
         lastPreviewBoundsSize = currentBounds.size
@@ -634,6 +1127,7 @@ private final class FolderGlassPlateItemView: NSView {
         lastIncomingDropAppID = incomingDropAppID
         lastAppearanceName = appearanceName
         currentDisplayMemberIDs = memberIDs
+        loadedMemberImages.removeAll(keepingCapacity: true)
 
         let side = min(currentBounds.width, currentBounds.height)
         let folderCenter = CGPoint(x: side * 0.5, y: side * 0.5)
@@ -667,19 +1161,20 @@ private final class FolderGlassPlateItemView: NSView {
 
                 layer.frame = CGRect(x: originX, y: originY, width: snappedSize, height: snappedSize)
                 layer.contentsScale = scale
-                layer.shadowOffset = CGSize(width: 0, height: 1.0 * (side / 128.0))
-                layer.shadowRadius = 1.5 * (side / 128.0)
 
-                let canRetainExistingImage = (canRetainExistingImages || (index < previousDisplayMemberIDs.count && previousDisplayMemberIDs[index] == app.id && previousAppearanceName == appearanceName)) && layer.contents != nil
+                let canRetainExistingImage = (canRetainExistingImages || (index < previousDisplayMemberIDs.count && previousDisplayMemberIDs[index] == app.id && previousAppearanceName == appearanceName)) && previousLoadedImages[app.id] != nil
 
                 if let cgImage = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appearanceName, allowFallback: true) {
+                    loadedMemberImages[app.id] = cgImage
                     layer.contents = cgImage
-                    layer.isHidden = false
                 } else if let seed = seedImages?[app.id] {
+                    loadedMemberImages[app.id] = seed
                     layer.contents = seed
-                    layer.isHidden = false
                 } else {
-                    if !canRetainExistingImage {
+                    if canRetainExistingImage, let retained = previousLoadedImages[app.id] {
+                        loadedMemberImages[app.id] = retained
+                        layer.contents = retained
+                    } else {
                         layer.isHidden = true
                         layer.contents = nil
                     }
@@ -690,8 +1185,21 @@ private final class FolderGlassPlateItemView: NSView {
                         guard self.currentDisplayMemberIDs.indices.contains(index),
                               self.currentDisplayMemberIDs[index] == app.id else { return }
                         if let incoming = self.currentIncomingDropAppID, incoming == app.id { return }
+                        self.loadedMemberImages[app.id] = cgImage
                         layer.contents = cgImage
-                        layer.isHidden = false
+                        let curScale = self.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? self.lastScale
+                        let curDisplay = Array(self.currentMembers.prefix(FolderPreviewLayout.capacity))
+                        CATransaction.begin()
+                        CATransaction.setDisableActions(true)
+                        self.applyPreviewCompositeOrFallback(
+                            displayMembers: curDisplay,
+                            boundsSize: self.bounds.size,
+                            iconSize: self.lastIconSize,
+                            scale: curScale > 0 ? curScale : 2.0,
+                            incomingDropAppID: self.currentIncomingDropAppID,
+                            appearanceName: self.effectiveAppearance.name.rawValue
+                        )
+                        CATransaction.commit()
                     }
                 }
             } else {
@@ -703,6 +1211,15 @@ private final class FolderGlassPlateItemView: NSView {
                 }
             }
         }
+
+        applyPreviewCompositeOrFallback(
+            displayMembers: displayMembers,
+            boundsSize: currentBounds.size,
+            iconSize: iconSize,
+            scale: scale,
+            incomingDropAppID: incomingDropAppID,
+            appearanceName: appearanceName
+        )
     }
 
     private static func blendCrossfadeImages(old: CGImage, new: CGImage, progress: CGFloat) -> CGImage? {
@@ -743,6 +1260,7 @@ private final class FolderGlassPlateItemView: NSView {
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        compositePreviewLayer.isHidden = true
 
         for (index, layer) in previewLayers.enumerated() {
             guard index < displayMembers.count, index < crossfadePreviewLayers.count else {
@@ -804,10 +1322,10 @@ private final class FolderGlassPlateItemView: NSView {
             if index < displayMembers.count {
                 let app = displayMembers[index]
                 if let newImg = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: toName, allowFallback: true) {
+                    loadedMemberImages[app.id] = newImg
                     layer.contents = newImg
                 }
                 layer.opacity = 1.0
-                layer.isHidden = false
             }
             if index < crossfadePreviewLayers.count {
                 let crossLayer = crossfadePreviewLayers[index]
@@ -816,6 +1334,15 @@ private final class FolderGlassPlateItemView: NSView {
                 crossLayer.isHidden = true
             }
         }
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? (lastScale > 0 ? lastScale : 2.0)
+        applyPreviewCompositeOrFallback(
+            displayMembers: displayMembers,
+            boundsSize: bounds.size,
+            iconSize: lastIconSize,
+            scale: scale,
+            incomingDropAppID: currentIncomingDropAppID,
+            appearanceName: toName
+        )
         CATransaction.commit()
     }
 
@@ -823,14 +1350,58 @@ private final class FolderGlassPlateItemView: NSView {
     func updateTransitionProgress(progress: CGFloat, materialProgress: CGFloat) {
         let localProgress = min(max(progress, 0), 1)
         let localMaterial = min(max(materialProgress, 0), 1)
-        if abs(localProgress - lastTransitionProgress) < 0.001 && abs(localMaterial - lastMaterialProgress) < 0.001 {
-            return
+        if usesUnifiedBackdropBlur {
+            if abs(localMaterial - lastMaterialProgress) < 0.0005 {
+                lastTransitionProgress = localProgress
+                return
+            }
+        } else {
+            if abs(localProgress - lastTransitionProgress) < 0.001 && abs(localMaterial - lastMaterialProgress) < 0.001 {
+                return
+            }
         }
         lastTransitionProgress = localProgress
         lastMaterialProgress = localMaterial
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+
+        if usesUnifiedBackdropBlur {
+            // Sunk baseplate, outer shadow, and blurred 3x3 mini-icons are already rendered
+            // in FolderDepthBackdropView's unified Metal blur texture.
+            applyBlurRadius(0)
+            sunkPlateView.alphaValue = 0.0
+            sunkPlateView.isHidden = true
+            sunkContainerView.layer?.shadowOpacity = 0.0
+
+            if localMaterial <= 0.0001 {
+                glassEffectView?.alphaValue = 1.0
+                glassEffectView?.isHidden = (currentMaterialStyle == .regular)
+                contentView.alphaValue = 1.0
+                contentView.isHidden = false
+                sunkContainerView.isHidden = false
+            } else if localMaterial >= 0.9999 {
+                glassEffectView?.alphaValue = 0.0
+                glassEffectView?.isHidden = true
+                contentView.alphaValue = 0.0
+                contentView.isHidden = true
+                sunkContainerView.isHidden = true
+            } else {
+                let smoothT = localMaterial * localMaterial * (3.0 - 2.0 * localMaterial)
+                let glassAlpha = 1.0 - smoothT
+                glassEffectView?.alphaValue = glassAlpha
+                glassEffectView?.isHidden = (currentMaterialStyle == .regular)
+                contentView.alphaValue = glassAlpha
+                contentView.isHidden = false
+                sunkContainerView.isHidden = false
+            }
+            CATransaction.commit()
+            return
+        }
+
+        contentView.alphaValue = 1.0
+        contentView.isHidden = false
+        sunkContainerView.isHidden = false
 
         // 1. Cross-fade baseplates strictly driven by materialProgress (0 = 100% glass, 1 = 100% static sunk plate).
         // Overlap duration is limited to <= 80ms by the animation clock with a single Hermite ease.
@@ -918,6 +1489,23 @@ private final class FolderGlassPlateItemView: NSView {
 @MainActor
 final class FolderGlassHostView: NSView {
     var reusableSinglePlateID: String? = nil
+    var usesUnifiedBackdropBlur: Bool = false {
+        didSet {
+            guard usesUnifiedBackdropBlur != oldValue else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            for item in itemsByID.values {
+                item.usesUnifiedBackdropBlur = usesUnifiedBackdropBlur
+                if !item.isHidden {
+                    item.updateTransitionProgress(
+                        progress: currentTransitionProgress,
+                        materialProgress: currentMaterialProgress
+                    )
+                }
+            }
+            CATransaction.commit()
+        }
+    }
     var currentMaterialStyle: FolderPlateMaterialStyle = .glass {
         didSet {
             guard currentMaterialStyle != oldValue else { return }
@@ -977,6 +1565,7 @@ final class FolderGlassHostView: NSView {
     func prewarmPlate(id: String) {
         if itemsByID[id] == nil {
             let item = FolderGlassPlateItemView(frame: .zero, materialStyle: currentMaterialStyle)
+            item.usesUnifiedBackdropBlur = usesUnifiedBackdropBlur
             item.isHidden = true
             item.updateTransitionProgress(progress: currentTransitionProgress, materialProgress: currentMaterialProgress)
             hostView.addSubview(item)
@@ -1016,6 +1605,7 @@ final class FolderGlassHostView: NSView {
                 hostView.addSubview(item)
                 itemsByID[plateID] = item
             }
+            item.usesUnifiedBackdropBlur = usesUnifiedBackdropBlur
             item.updateTransitionProgress(progress: currentTransitionProgress, materialProgress: currentMaterialProgress)
 
             // If an item is being actively dragged, bring it to the front so it floats above stationary folders
@@ -1048,9 +1638,17 @@ final class FolderGlassHostView: NSView {
     }
 
     func setPlateHidden(_ isHidden: Bool, for id: String) {
+        guard let item = itemsByID[id] else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        itemsByID[id]?.isHidden = isHidden
+        if !isHidden {
+            item.usesUnifiedBackdropBlur = usesUnifiedBackdropBlur
+            item.updateTransitionProgress(
+                progress: currentTransitionProgress,
+                materialProgress: currentMaterialProgress
+            )
+        }
+        item.isHidden = isHidden
         CATransaction.commit()
     }
 
@@ -1058,6 +1656,13 @@ final class FolderGlassHostView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for item in itemsByID.values {
+            if !isHidden {
+                item.usesUnifiedBackdropBlur = usesUnifiedBackdropBlur
+                item.updateTransitionProgress(
+                    progress: currentTransitionProgress,
+                    materialProgress: currentMaterialProgress
+                )
+            }
             item.isHidden = isHidden
         }
         CATransaction.commit()
@@ -1071,7 +1676,7 @@ final class FolderGlassHostView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         hostView.layer?.sublayerTransform = centeredTransform(for: transform, in: bounds)
-        for item in itemsByID.values {
+        for item in itemsByID.values where !item.isHidden {
             item.updateTransitionProgress(progress: progress, materialProgress: materialProgress)
         }
         CATransaction.commit()
@@ -1083,10 +1688,12 @@ final class FolderGlassHostView: NSView {
         currentTransitionProgress = 0
         currentMaterialProgress = 0
         currentMaterialStyle = .glass
+        usesUnifiedBackdropBlur = false
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         hostView.layer?.sublayerTransform = CATransform3DIdentity
         for item in itemsByID.values {
+            item.usesUnifiedBackdropBlur = false
             item.updateTransitionProgress(progress: 0, materialProgress: 0)
         }
         CATransaction.commit()
@@ -1096,6 +1703,7 @@ final class FolderGlassHostView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for (_, item) in itemsByID {
+            item.usesUnifiedBackdropBlur = false
             item.updateTransitionProgress(progress: 0, materialProgress: 0)
             item.resetCachedState()
             item.removeFromSuperview()
@@ -1104,6 +1712,7 @@ final class FolderGlassHostView: NSView {
         currentRawSinkTransform = nil
         currentTransitionProgress = 0
         currentMaterialProgress = 0
+        usesUnifiedBackdropBlur = false
         hostView.layer?.sublayerTransform = CATransform3DIdentity
         CATransaction.commit()
     }
@@ -1138,6 +1747,7 @@ final class FolderGlassHostView: NSView {
 
     func clearCache() {
         AppIconImageProvider.shared.clear()
+        FolderPreviewCompositeCache.shared.clear()
         for item in itemsByID.values {
             item.resetCachedState()
         }

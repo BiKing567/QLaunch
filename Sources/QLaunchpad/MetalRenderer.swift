@@ -448,6 +448,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     var isDepthBackdropBaking: (() -> Bool)?
     var isDepthBackdropFailed: (() -> Bool)?
     var areFolderPreviewsReady: ((String) -> Bool)?
+    var onLookupFolderPreviewImages: ((String) -> [String: CGImage])?
     private(set) var folderTransitionGeneration: UInt64 = 0
 
     var activeFolderTransitionID: String? {
@@ -1669,6 +1670,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         pauseResourcePrewarming()
         iconTextures.resetForRenderQualityChange()
+        FolderPreviewCompositeCache.shared.clear()
         cancelTextAtlasBuild()
         textAtlas.clear()
         lastTextSignature = nil
@@ -1699,6 +1701,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     @objc private func clearCacheRequested() {
         pauseResourcePrewarming()
         iconTextures.clear()
+        FolderPreviewCompositeCache.shared.clear()
         cancelTextAtlasBuild()
         textAtlas.clear()
         lastCatalogSignature = nil
@@ -1800,6 +1803,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let page = max(0, Int(currentPageOffset.rounded()))
         let window = iconCacheWindow(around: page, items: items, radius: 0)
         pruneIconTextureCaches(appIDs: window.appIDs, folderIDs: window.folderIDs)
+        FolderPreviewCompositeCache.shared.clear()
         lastTextureWindowPage = page
 
         // Low-memory mode drops labels while hidden; rebuild them off-main on
@@ -4657,6 +4661,33 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
     }
 
+    func prewarmSunkFolderTextures(for plates: [FolderPlateModel]) {
+        guard let device, !plates.isEmpty else { return }
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        let isFloat16 = !IconRenderQuality.current.usesUnorm8Drawable
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let appearanceName = effectiveAppearance.name.rawValue
+        for plate in plates {
+            guard !plate.id.hasPrefix("opened-folder"),
+                  !plate.isIsolated,
+                  plate.rect.width >= 1,
+                  plate.rect.height >= 1,
+                  plate.alpha > 0.005 else {
+                continue
+            }
+            _ = FolderPreviewCompositeCache.shared.sunkFolderTexture(
+                device: device,
+                plate: plate,
+                scale: scale,
+                appearanceName: appearanceName,
+                isDark: isDark,
+                isFloat16: isFloat16,
+                fallbackImages: onLookupFolderPreviewImages?(plate.id),
+                allowCreateMissingIcons: false
+            )
+        }
+    }
+
     /// Renders the root grid into an offscreen texture for the depth backdrop blur effect.
     @discardableResult
     func renderBackdropRootGrid(
@@ -4669,7 +4700,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         canvasPan: CGPoint,
         canvasAdaptive: Bool
     ) -> [FolderPlateModel] {
-        guard device != nil else { return [] }
+        guard let device else { return [] }
         let preset = GridLayoutPreset.current
         let rootCapacity = preset.columns * preset.exportedRows(itemCount: items.count)
         var rootStyle = GridDrawStyle(
@@ -4722,6 +4753,42 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             folderPlates: &folderPlates,
             style: rootStyle
         )
+
+        let scale = max(1.0, CGFloat(destinationTexture.width) / max(bounds.width, 1.0))
+        let isFloat16 = destinationTexture.pixelFormat == .rgba16Float
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let appearanceName = effectiveAppearance.name.rawValue
+        for plate in folderPlates {
+            guard !plate.id.hasPrefix("opened-folder"),
+                  !plate.isIsolated,
+                  plate.id != folderID,
+                  plate.rect.width >= 1,
+                  plate.rect.height >= 1,
+                  plate.alpha > 0.005 else {
+                continue
+            }
+            if let sunk = FolderPreviewCompositeCache.shared.sunkFolderTexture(
+                device: device,
+                plate: plate,
+                scale: scale,
+                appearanceName: appearanceName,
+                isDark: isDark,
+                isFloat16: isFloat16,
+                fallbackImages: onLookupFolderPreviewImages?(plate.id),
+                allowCreateMissingIcons: true
+            ) {
+                let sprite = SpriteInstance.label(
+                    center: CGPoint(x: plate.rect.midX, y: plate.rect.midY),
+                    size: CGSize(width: sunk.totalSizePt, height: sunk.totalSizePt),
+                    uv: SIMD4(0, 0, 1, 1),
+                    alpha: plate.alpha,
+                    snapToPixels: true
+                )
+                iconSprites.append(sprite)
+                iconDrawTextures.append(sunk.texture)
+                iconDrawNextTextures.append(sunk.texture)
+            }
+        }
 
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = destinationTexture
