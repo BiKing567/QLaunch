@@ -74,6 +74,24 @@ final class FolderPreviewCompositeCache {
         sunkTextureCache.removeAll(keepingCapacity: true)
     }
 
+    func cachedPreviewComposite(forKey key: PreviewKey) -> CGImage? {
+        previewCache[key]
+    }
+
+    func invalidate(appearanceName: String) {
+        previewCache = previewCache.filter { $0.key.appearanceName != appearanceName }
+        sunkTextureCache = sunkTextureCache.filter { $0.key.previewKey.appearanceName != appearanceName }
+    }
+
+    func invalidate(for appID: String) {
+        previewCache = previewCache.filter { key, _ in
+            !key.members.contains(where: { $0.id == appID })
+        }
+        sunkTextureCache = sunkTextureCache.filter { key, _ in
+            !key.previewKey.members.contains(where: { $0.id == appID })
+        }
+    }
+
     func makePreviewKey(
         boundsSize: CGSize,
         iconSize: CGFloat,
@@ -126,6 +144,16 @@ final class FolderPreviewCompositeCache {
         )
         if let cached = previewCache[key] {
             return cached
+        }
+
+        // Strict verification: only generate and cache if all required members have images.
+        for app in displayMembers {
+            if let incomingDropAppID, app.id == incomingDropAppID {
+                continue
+            }
+            guard imagesByID[app.id] != nil else {
+                return nil
+            }
         }
 
         let pxW = key.boundsPixelWidth
@@ -336,10 +364,10 @@ final class FolderPreviewCompositeCache {
                 if let img = AppIconImageProvider.shared.cachedCGImage(
                     for: app,
                     appearanceName: appearanceName,
-                    allowFallback: true
+                    allowFallback: false
                 ) ?? fallbackImages?[app.id] ?? (
                     allowCreateMissingIcons
-                        ? AppIconImageProvider.shared.cgImage(for: app, allowCreate: true)
+                        ? AppIconImageProvider.shared.cgImage(for: app, appearanceName: appearanceName, allowCreate: true)
                         : nil
                 ) {
                     imagesByID[app.id] = img
@@ -549,6 +577,16 @@ final class AppIconImageProvider: @unchecked Sendable {
         lock.unlock()
     }
 
+    private func parseCacheKey(_ key: String) -> (path: String, appearanceName: String, revision: UInt64)? {
+        let parts = key.split(separator: "|")
+        guard parts.count >= 3 else { return nil }
+        let revStr = parts.last!
+        let rev = UInt64(revStr) ?? 0
+        let appName = String(parts[parts.count - 2])
+        let path = parts[0..<(parts.count - 2)].joined(separator: "|")
+        return (path, appName, rev)
+    }
+
     func commitAppearanceChange(_ appearance: NSAppearance) {
         let name = appearance.name.rawValue
         lock.lock()
@@ -562,10 +600,8 @@ final class AppIconImageProvider: @unchecked Sendable {
             let nsKey = k as NSString
             if cache.object(forKey: nsKey) == nil {
                 staleKeys.insert(k)
-            } else if k.hasSuffix("|\(name)") {
-                if let sep = k.lastIndex(of: "|") {
-                    readyPaths.insert(String(k[..<sep]))
-                }
+            } else if let parsed = parseCacheKey(k), parsed.appearanceName == name {
+                readyPaths.insert(parsed.path)
             }
         }
         for k in staleKeys {
@@ -573,12 +609,9 @@ final class AppIconImageProvider: @unchecked Sendable {
         }
 
         let toRemove = cachedKeys.filter { k in
-            guard !k.hasSuffix("|\(name)") else { return false }
-            if let sep = k.lastIndex(of: "|") {
-                let path = String(k[..<sep])
-                return readyPaths.contains(path)
-            }
-            return false
+            guard let parsed = parseCacheKey(k) else { return false }
+            guard parsed.appearanceName != name else { return false }
+            return readyPaths.contains(parsed.path)
         }
         for k in toRemove {
             cache.removeObject(forKey: k as NSString)
@@ -602,14 +635,27 @@ final class AppIconImageProvider: @unchecked Sendable {
         appearanceName: String? = nil,
         allowFallback: Bool = true
     ) -> CGImage? {
-        lock.lock()
-        defer { lock.unlock() }
         let name = appearanceName ?? currentAppearanceName
         let key = cacheKey(for: app, appearanceName: name)
+        lock.lock()
         if let exact = cache.object(forKey: key) {
+            lock.unlock()
             return exact
         }
+        lock.unlock()
+
+        if let custom = CustomIconStore.shared.cgImage(for: app) {
+            lock.lock()
+            let cost = custom.bytesPerRow * custom.height
+            cache.setObject(custom, forKey: key, cost: cost)
+            cachedKeys.insert(key as String)
+            lock.unlock()
+            return custom
+        }
+
         guard allowFallback else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
         let prefix = "\(app.url.path)|"
         for k in cachedKeys {
             if k.hasPrefix(prefix), let img = cache.object(forKey: k as NSString) {
@@ -622,15 +668,27 @@ final class AppIconImageProvider: @unchecked Sendable {
     /// Returns cached image if available. If missing, only creates synchronously
     /// if `allowCreate` is true (non-animation contexts). In animation frames,
     /// pass `allowCreate: false` to avoid blocking the main thread.
-    func cgImage(for app: AppInfo, allowCreate: Bool = true) -> CGImage? {
+    func cgImage(for app: AppInfo, appearanceName: String? = nil, allowCreate: Bool = true) -> CGImage? {
+        let name = appearanceName ?? currentAppearanceName
+        let key = cacheKey(for: app, appearanceName: name)
         lock.lock()
-        let key = cacheKey(for: app, appearanceName: currentAppearanceName)
-        let appGen = appearanceGeneration
-        let appAppearance = currentAppearance
-        lock.unlock()
         if let cached = cache.object(forKey: key) {
+            lock.unlock()
             return cached
         }
+        let appGen = appearanceGeneration
+        let appAppearance = (appearanceName != nil ? NSAppearance(named: NSAppearance.Name(name)) : nil) ?? currentAppearance
+        lock.unlock()
+
+        if let custom = CustomIconStore.shared.cgImage(for: app) {
+            lock.lock()
+            let cost = custom.bytesPerRow * custom.height
+            cache.setObject(custom, forKey: key, cost: cost)
+            cachedKeys.insert(key as String)
+            lock.unlock()
+            return custom
+        }
+
         guard allowCreate else { return nil }
         return createAndCacheImage(for: app, key: key, appearance: appAppearance, generation: appGen)
     }
@@ -1050,18 +1108,39 @@ private final class FolderGlassPlateItemView: NSView {
         incomingDropAppID: String?,
         appearanceName: String
     ) {
-        var allReady = true
+        let key = FolderPreviewCompositeCache.shared.makePreviewKey(
+            boundsSize: boundsSize,
+            iconSize: iconSize,
+            scale: scale,
+            displayMembers: displayMembers,
+            incomingDropAppID: incomingDropAppID,
+            appearanceName: appearanceName
+        )
+
+        // 1. If we already have a cached composite for this exact key, use it directly.
+        if let cached = FolderPreviewCompositeCache.shared.cachedPreviewComposite(forKey: key) {
+            useComposite(cached, boundsSize: boundsSize, scale: scale)
+            return
+        }
+
+        // 2. Only generate composite if ALL target images are ready for appearanceName
+        var allTargetImagesReady = true
+        var targetImagesByID: [String: CGImage] = [:]
+
         for app in displayMembers {
             if let incomingDropAppID, app.id == incomingDropAppID {
                 continue
             }
-            if loadedMemberImages[app.id] == nil {
-                allReady = false
+            if let exact = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appearanceName, allowFallback: false) {
+                targetImagesByID[app.id] = exact
+                loadedMemberImages[app.id] = exact
+            } else {
+                allTargetImagesReady = false
                 break
             }
         }
 
-        if allReady,
+        if allTargetImagesReady,
            let composite = FolderPreviewCompositeCache.shared.previewCompositeImage(
                boundsSize: boundsSize,
                iconSize: iconSize,
@@ -1069,42 +1148,50 @@ private final class FolderGlassPlateItemView: NSView {
                displayMembers: displayMembers,
                incomingDropAppID: incomingDropAppID,
                appearanceName: appearanceName,
-               imagesByID: loadedMemberImages
+               imagesByID: targetImagesByID
            ) {
-            compositePreviewLayer.frame = CGRect(origin: .zero, size: boundsSize)
-            compositePreviewLayer.contentsScale = scale
-            compositePreviewLayer.contents = composite
-            compositePreviewLayer.opacity = 1.0
-            compositePreviewLayer.isHidden = false
-            for layer in previewLayers {
-                layer.isHidden = true
-            }
-            for crossLayer in crossfadePreviewLayers {
-                crossLayer.isHidden = true
-                crossLayer.contents = nil
-            }
+            useComposite(composite, boundsSize: boundsSize, scale: scale)
         } else {
-            compositePreviewLayer.isHidden = true
-            compositePreviewLayer.contents = nil
-            for (index, layer) in previewLayers.enumerated() {
-                if index < displayMembers.count {
-                    let app = displayMembers[index]
-                    if let incomingDropAppID, app.id == incomingDropAppID {
-                        layer.isHidden = true
-                        continue
-                    }
-                    if let img = loadedMemberImages[app.id] {
-                        layer.contents = img
-                        layer.opacity = 1.0
-                        layer.isHidden = false
-                    } else {
-                        layer.isHidden = true
-                        layer.contents = nil
-                    }
+            useIndividualLayers(displayMembers: displayMembers, incomingDropAppID: incomingDropAppID)
+        }
+    }
+
+    private func useComposite(_ composite: CGImage, boundsSize: CGSize, scale: CGFloat) {
+        compositePreviewLayer.frame = CGRect(origin: .zero, size: boundsSize)
+        compositePreviewLayer.contentsScale = scale
+        compositePreviewLayer.contents = composite
+        compositePreviewLayer.opacity = 1.0
+        compositePreviewLayer.isHidden = false
+        for layer in previewLayers {
+            layer.isHidden = true
+        }
+        for crossLayer in crossfadePreviewLayers {
+            crossLayer.isHidden = true
+            crossLayer.contents = nil
+        }
+    }
+
+    private func useIndividualLayers(displayMembers: [AppInfo], incomingDropAppID: String?) {
+        compositePreviewLayer.isHidden = true
+        compositePreviewLayer.contents = nil
+        for (index, layer) in previewLayers.enumerated() {
+            if index < displayMembers.count {
+                let app = displayMembers[index]
+                if let incomingDropAppID, app.id == incomingDropAppID {
+                    layer.isHidden = true
+                    continue
+                }
+                if let img = loadedMemberImages[app.id] {
+                    layer.contents = img
+                    layer.opacity = 1.0
+                    layer.isHidden = false
                 } else {
                     layer.isHidden = true
                     layer.contents = nil
                 }
+            } else {
+                layer.isHidden = true
+                layer.contents = nil
             }
         }
     }
@@ -1189,7 +1276,13 @@ private final class FolderGlassPlateItemView: NSView {
                 && abs(iconSize - lastIconSize) < 0.05
         )
         let currentRevisions = displayMembers.map { CustomIconStore.shared.iconRevision(for: $0) }
-        let contentUnchanged = boundsMatch
+        let allTargetImagesReady = displayMembers.allSatisfy { app in
+            if let incomingDropAppID, app.id == incomingDropAppID { return true }
+            return AppIconImageProvider.shared.hasCachedCGImage(for: app, appearanceName: appearanceName)
+        }
+        let needsPromotionToComposite = !isCompositeActive && allTargetImagesReady
+        let contentUnchanged = !needsPromotionToComposite
+            && boundsMatch
             && memberIDs == lastMemberIDs
             && currentRevisions == lastMemberRevisions
             && previewVisible == lastPreviewVisible
@@ -1257,21 +1350,41 @@ private final class FolderGlassPlateItemView: NSView {
 
                 let canRetainExistingImage = (canRetainExistingImages || (index < previousDisplayMemberIDs.count && previousDisplayMemberIDs[index] == app.id && previousAppearanceName == appearanceName)) && previousLoadedImages[app.id] != nil
 
-                if let cgImage = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appearanceName, allowFallback: true) {
-                    loadedMemberImages[app.id] = cgImage
-                    layer.contents = cgImage
-                } else if let seed = seedImages?[app.id] {
-                    loadedMemberImages[app.id] = seed
-                    layer.contents = seed
+                let isTargetImageCached = AppIconImageProvider.shared.hasCachedCGImage(for: app, appearanceName: appearanceName)
+
+                if isTargetImageCached,
+                   let exact = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appearanceName, allowFallback: false) {
+                    loadedMemberImages[app.id] = exact
+                    layer.contents = exact
+                    layer.opacity = 1.0
+                    layer.isHidden = false
                 } else {
-                    if canRetainExistingImage, let retained = previousLoadedImages[app.id] {
+                    // Target image is not yet cached for this appearance.
+                    // Temporary display: fallback image / seed / retained image to avoid flashing blank
+                    if let fallback = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appearanceName, allowFallback: true) {
+                        loadedMemberImages[app.id] = fallback
+                        layer.contents = fallback
+                        layer.opacity = 1.0
+                        layer.isHidden = false
+                    } else if let seed = seedImages?[app.id] {
+                        loadedMemberImages[app.id] = seed
+                        layer.contents = seed
+                        layer.opacity = 1.0
+                        layer.isHidden = false
+                    } else if canRetainExistingImage, let retained = previousLoadedImages[app.id] {
                         loadedMemberImages[app.id] = retained
                         layer.contents = retained
+                        layer.opacity = 1.0
+                        layer.isHidden = false
                     } else {
                         layer.isHidden = true
                         layer.contents = nil
+                        loadedMemberImages.removeValue(forKey: app.id)
                     }
-                    AppIconImageProvider.shared.loadAsync(for: app) { [weak self, weak layer] cgImage in
+
+                    // Continue loading target theme icon asynchronously
+                    let targetApp = effectiveAppearance
+                    AppIconImageProvider.shared.loadAsync(for: app, appearance: targetApp) { [weak self, weak layer] cgImage in
                         guard let self, let layer, let cgImage else { return }
                         guard self.previewRequestGeneration == requestGen else { return }
                         guard self.currentPreviewVisible else { return }
@@ -1280,19 +1393,30 @@ private final class FolderGlassPlateItemView: NSView {
                         if let incoming = self.currentIncomingDropAppID, incoming == app.id { return }
                         self.loadedMemberImages[app.id] = cgImage
                         layer.contents = cgImage
+                        layer.opacity = 1.0
+                        layer.isHidden = false
                         let curScale = self.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? self.lastScale
                         let curDisplay = Array(self.currentMembers.prefix(FolderPreviewLayout.capacity))
-                        CATransaction.begin()
-                        CATransaction.setDisableActions(true)
-                        self.applyPreviewCompositeOrFallback(
-                            displayMembers: curDisplay,
-                            boundsSize: self.bounds.size,
-                            iconSize: self.lastIconSize,
-                            scale: curScale > 0 ? curScale : 2.0,
-                            incomingDropAppID: self.currentIncomingDropAppID,
-                            appearanceName: self.effectiveAppearance.name.rawValue
-                        )
-                        CATransaction.commit()
+                        let curAppearanceName = self.effectiveAppearance.name.rawValue
+
+                        let allReady = curDisplay.allSatisfy { member in
+                            if let incoming = self.currentIncomingDropAppID, member.id == incoming { return true }
+                            return AppIconImageProvider.shared.hasCachedCGImage(for: member, appearanceName: curAppearanceName)
+                        }
+
+                        if allReady {
+                            CATransaction.begin()
+                            CATransaction.setDisableActions(true)
+                            self.applyPreviewCompositeOrFallback(
+                                displayMembers: curDisplay,
+                                boundsSize: self.bounds.size,
+                                iconSize: self.lastIconSize,
+                                scale: curScale > 0 ? curScale : 2.0,
+                                incomingDropAppID: self.currentIncomingDropAppID,
+                                appearanceName: curAppearanceName
+                            )
+                            CATransaction.commit()
+                        }
                     }
                 }
             } else {
@@ -1411,12 +1535,51 @@ private final class FolderGlassPlateItemView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let displayMembers = Array(currentMembers.prefix(FolderPreviewLayout.capacity))
+        let requestGen = previewRequestGeneration
         for (index, layer) in previewLayers.enumerated() {
             if index < displayMembers.count {
                 let app = displayMembers[index]
-                if let newImg = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: toName, allowFallback: true) {
+                if let newImg = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: toName, allowFallback: false) {
                     loadedMemberImages[app.id] = newImg
                     layer.contents = newImg
+                } else {
+                    if let fallback = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: toName, allowFallback: true) {
+                        loadedMemberImages[app.id] = fallback
+                        layer.contents = fallback
+                    }
+                    AppIconImageProvider.shared.loadAsync(for: app, appearance: toAppearance) { [weak self, weak layer] cgImage in
+                        guard let self, let layer, let cgImage else { return }
+                        guard self.previewRequestGeneration == requestGen else { return }
+                        guard self.currentPreviewVisible else { return }
+                        guard self.currentDisplayMemberIDs.indices.contains(index),
+                              self.currentDisplayMemberIDs[index] == app.id else { return }
+                        if let incoming = self.currentIncomingDropAppID, incoming == app.id { return }
+                        self.loadedMemberImages[app.id] = cgImage
+                        layer.contents = cgImage
+                        layer.opacity = 1.0
+                        layer.isHidden = false
+
+                        let curScale = self.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? self.lastScale
+                        let curDisplay = Array(self.currentMembers.prefix(FolderPreviewLayout.capacity))
+                        let curAppearanceName = self.effectiveAppearance.name.rawValue
+                        let allReady = curDisplay.allSatisfy { member in
+                            if let incoming = self.currentIncomingDropAppID, member.id == incoming { return true }
+                            return AppIconImageProvider.shared.hasCachedCGImage(for: member, appearanceName: curAppearanceName)
+                        }
+                        if allReady {
+                            CATransaction.begin()
+                            CATransaction.setDisableActions(true)
+                            self.applyPreviewCompositeOrFallback(
+                                displayMembers: curDisplay,
+                                boundsSize: self.bounds.size,
+                                iconSize: self.lastIconSize,
+                                scale: curScale > 0 ? curScale : 2.0,
+                                incomingDropAppID: self.currentIncomingDropAppID,
+                                appearanceName: curAppearanceName
+                            )
+                            CATransaction.commit()
+                        }
+                    }
                 }
                 layer.opacity = 1.0
             }
