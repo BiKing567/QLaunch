@@ -2911,7 +2911,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             canvasAdaptive: rootCanvasAdaptive,
             source: source
         )
-        prepareFolderTransitionResources(items: target)
+        prepareFolderTransitionResources(folderID: folderID, folderItems: target, prewarmItems: target)
         if let surface = layer as? CAMetalLayer {
             folderDrawableProvider.prefetch(from: surface)
         }
@@ -3014,19 +3014,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             currentMaterialProgress: 0
         )
         folderTransitionGeneration &+= 1
-        prepareFolderTransitionResources(items: target)
-        var retainedImages: [CGImage] = []
-        var retainedMap: [String: CGImage] = [:]
-        let appName = effectiveAppearance.name.rawValue
-        for item in rootItems.prefix(FolderPreviewLayout.capacity) {
-            if case .app(let app) = item,
-               let img = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appName, allowFallback: true) {
-                retainedImages.append(img)
-                retainedMap[app.id] = img
-            }
-        }
-        folderTransition?.retainedPreviewImages = retainedImages
-        folderTransition?.retainedPreviewImagesByAppID = retainedMap
+        prepareFolderTransitionResources(folderID: folderID, folderItems: target, prewarmItems: target)
         store.setFolderTransitionActive(true)
         if IconRenderQuality.current == .quality,
            isDepthBackdropActive?() != true,
@@ -3089,19 +3077,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             currentMaterialProgress: 1
         )
         folderTransitionGeneration &+= 1
-        prepareFolderTransitionResources(items: target)
-        var retainedImages: [CGImage] = []
-        var retainedMap: [String: CGImage] = [:]
-        let appName = effectiveAppearance.name.rawValue
-        for item in displayedItems.prefix(FolderPreviewLayout.capacity) {
-            if case .app(let app) = item,
-               let img = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appName, allowFallback: true) {
-                retainedImages.append(img)
-                retainedMap[app.id] = img
-            }
-        }
-        folderTransition?.retainedPreviewImages = retainedImages
-        folderTransition?.retainedPreviewImagesByAppID = retainedMap
+        prepareFolderTransitionResources(folderID: folderID, folderItems: displayedItems, prewarmItems: target)
         store.setFolderTransitionActive(true)
         startDisplayLink()
         needsDisplay = true
@@ -3132,35 +3108,37 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         store.app(withID: id) ?? iconTextures.app(forID: id)
     }
 
-    private func prepareFolderTransitionResources(items: [LaunchpadItem]) {
+    private func prepareFolderTransitionResources(
+        folderID: String,
+        folderItems: [LaunchpadItem],
+        prewarmItems: [LaunchpadItem]
+    ) {
         var previewApps: [AppInfo] = []
-        for item in items.prefix(FolderPreviewLayout.capacity) {
-            switch item {
-            case .app(let app):
+        for item in folderItems.prefix(FolderPreviewLayout.capacity) {
+            if case .app(let app) = item {
                 previewApps.append(app)
-            case .folder(let folder):
-                let folderApps = folder.appIDs.prefix(FolderPreviewLayout.capacity).compactMap { appInfo(forID: $0) }
-                previewApps.append(contentsOf: folderApps)
             }
         }
-        if let transition = folderTransition {
-            for item in transition.folderItems.prefix(FolderPreviewLayout.capacity) {
-                if case .app(let app) = item {
-                    previewApps.append(app)
+        let appName = effectiveAppearance.name.rawValue
+        let nativePreviewMap = onLookupFolderPreviewImages?(folderID)
+        var retainedImages: [CGImage] = []
+        var retainedMap: [String: CGImage] = [:]
+        for app in previewApps {
+            if let img = nativePreviewMap?[app.id]
+                ?? AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appName, allowFallback: true) {
+                retainedImages.append(img)
+                retainedMap[app.id] = img
+            } else {
+                AppIconImageProvider.shared.prepare(app: app)
+                if let img = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appName, allowFallback: true) {
+                    retainedImages.append(img)
+                    retainedMap[app.id] = img
                 }
             }
-        }
-        for app in previewApps {
-            AppIconImageProvider.shared.prepare(app: app)
         }
         if var transition = folderTransition {
-            let appName = effectiveAppearance.name.rawValue
-            for app in previewApps {
-                if let img = AppIconImageProvider.shared.cachedCGImage(for: app, appearanceName: appName, allowFallback: true) {
-                    transition.retainedPreviewImages.append(img)
-                    transition.retainedPreviewImagesByAppID[app.id] = img
-                }
-            }
+            transition.retainedPreviewImages = retainedImages
+            transition.retainedPreviewImagesByAppID = retainedMap
             folderTransition = transition
         }
 
@@ -3168,7 +3146,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         resourcePrewarmSignature = nil
         lastTextureWindowPage = -1
         isResourcePrewarmingPaused = false
-        let appIDs = Set(items.compactMap { item -> String? in
+        let appIDs = Set(prewarmItems.compactMap { item -> String? in
             if case .app(let app) = item { return app.id }
             return nil
         })
@@ -3949,9 +3927,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             }
         }
 
-        let isSynchronizedTransition = isFolderTransitionActive
-        let isSettlingDesktop = pendingFolderTransitionEnd && (store.openedFolderID == nil)
-        let isSynchronized = isSynchronizedTransition || isSettlingDesktop
+        var isSynchronizedTransition = isFolderTransitionActive
+        var isSettlingDesktop = pendingFolderTransitionEnd && (store.openedFolderID == nil)
+        var isSynchronized = isSynchronizedTransition || isSettlingDesktop
         if presentsWithTransaction != isSynchronized {
             presentsWithTransaction = isSynchronized
         }
@@ -4003,6 +3981,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         tickContentTransition(now: now)
         tickFolderTransition(now: now)
+        isSynchronizedTransition = isFolderTransitionActive
+        isSettlingDesktop = pendingFolderTransitionEnd && (store.openedFolderID == nil)
+        isSynchronized = isSynchronizedTransition || isSettlingDesktop
+        if presentsWithTransaction != isSynchronized {
+            presentsWithTransaction = isSynchronized
+        }
         tickDragVisualAnimations(now: now, dt: dt)
         synchronizeReorderVisualSlots(with: displayedItems)
         tickReorderAnimation(dt: dt)
@@ -4754,19 +4738,24 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             style: rootStyle
         )
 
-        let scale = max(1.0, CGFloat(destinationTexture.width) / max(bounds.width, 1.0))
+        let scale = max(1.0, window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0)
         let isFloat16 = destinationTexture.pixelFormat == .rgba16Float
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let appearanceName = effectiveAppearance.name.rawValue
+        let viewportRect = CGRect(origin: .zero, size: bounds.size)
+        var visibleFolderPlates: [FolderPlateModel] = []
+        visibleFolderPlates.reserveCapacity(folderPlates.count)
         for plate in folderPlates {
             guard !plate.id.hasPrefix("opened-folder"),
                   !plate.isIsolated,
                   plate.id != folderID,
                   plate.rect.width >= 1,
                   plate.rect.height >= 1,
-                  plate.alpha > 0.005 else {
+                  plate.alpha > 0.005,
+                  plate.rect.insetBy(dx: -32, dy: -32).intersects(viewportRect) else {
                 continue
             }
+            visibleFolderPlates.append(plate)
             if let sunk = FolderPreviewCompositeCache.shared.sunkFolderTexture(
                 device: device,
                 plate: plate,
@@ -4789,6 +4778,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 iconDrawNextTextures.append(sunk.texture)
             }
         }
+        folderPlates = visibleFolderPlates
 
         let rpd = MTLRenderPassDescriptor()
         rpd.colorAttachments[0].texture = destinationTexture
@@ -5171,18 +5161,21 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     let isFolderHoverTarget = isHoverVisualTarget || itemID == dragHoverTargetID || itemID == groupingCandidateID
                     let incomingAppID = isFolderHoverTarget ? draggedAppID : nil
                     let isIsolated = isDragged || isCollapsedSibling || isReturning || isExpandingSibling
-                    folderPlates.append(
-                        FolderPlateModel(
-                            id: itemID,
-                            rect: padRect,
-                            alpha: drawnAlpha,
-                            members: members,
-                            previewVisible: true,
-                            iconSize: iconSize,
-                            incomingDropAppID: incomingAppID,
-                            isIsolated: isIsolated
+                    let viewportRect = CGRect(origin: .zero, size: bounds.size)
+                    if isIsolated || padRect.insetBy(dx: -32, dy: -32).intersects(viewportRect) {
+                        folderPlates.append(
+                            FolderPlateModel(
+                                id: itemID,
+                                rect: padRect,
+                                alpha: drawnAlpha,
+                                members: members,
+                                previewVisible: true,
+                                iconSize: iconSize,
+                                incomingDropAppID: incomingAppID,
+                                isIsolated: isIsolated
+                            )
                         )
-                    )
+                    }
                 }
 
                 if isHoverVisualTarget,

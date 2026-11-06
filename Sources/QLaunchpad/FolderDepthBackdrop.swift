@@ -6,10 +6,72 @@ import QuartzCore
 /// Dedicated worker that executes Gaussian blur and CAMetalLayer presentation
 /// on a private serial queue so drawable waits never block the main thread.
 private final class BackdropBlurWorker: @unchecked Sendable {
+    private struct PendingBlur {
+        let progress: Float
+        let materialProgress: Float
+    }
+
+    private struct MaskPipelineKey: Hashable {
+        let deviceID: ObjectIdentifier
+        let pixelFormat: MTLPixelFormat
+    }
+
+    private static let maskShaderSource = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct MaskVertexOut {
+        float4 position [[position]];
+        float2 localPosPt;
+        float2 sizePt;
+        float smoothT;
+        float featherPt;
+    };
+
+    vertex MaskVertexOut ql_backdrop_mask_vertex(
+        uint vid [[vertex_id]],
+        uint iid [[instance_id]],
+        device const float4 *rects [[buffer(0)]],
+        constant float4 &uniforms [[buffer(1)]])
+    {
+        const float2 corners[6] = {
+            float2(0.0, 0.0), float2(1.0, 0.0), float2(0.0, 1.0),
+            float2(0.0, 1.0), float2(1.0, 0.0), float2(1.0, 1.0)
+        };
+        float2 c = corners[vid];
+        float4 r = rects[iid];
+        float2 sizePt = max(r.zw - r.xy, float2(1.0));
+        float2 posPt = r.xy + c * sizePt;
+        float2 viewport = max(uniforms.xy, float2(1.0));
+        float2 ndc = float2(
+            posPt.x / viewport.x * 2.0 - 1.0,
+            1.0 - posPt.y / viewport.y * 2.0
+        );
+        MaskVertexOut out;
+        out.position = float4(ndc, 0.0, 1.0);
+        out.localPosPt = c * sizePt;
+        out.sizePt = sizePt;
+        out.smoothT = uniforms.z;
+        out.featherPt = uniforms.w;
+        return out;
+    }
+
+    fragment float4 ql_backdrop_mask_fragment(MaskVertexOut in [[stage_in]]) {
+        float dist = min(
+            min(in.localPosPt.x, in.sizePt.x - in.localPosPt.x),
+            min(in.localPosPt.y, in.sizePt.y - in.localPosPt.y)
+        );
+        float w = smoothstep(0.0, max(in.featherPt, 0.5), dist);
+        float factor = mix(1.0, in.smoothT, w);
+        return float4(0.0, 0.0, 0.0, factor);
+    }
+    """
+
     private let queue = DispatchQueue(label: "com.qzrzz.qlaunchpad.backdrop-blur", qos: .userInteractive)
     private var isBlurInFlight = false
-    private var pendingProgress: Float?
+    private var pendingBlur: PendingBlur?
     private var blurKernels: [Int: MPSImageGaussianBlur] = [:]
+    private var maskPipelines: [MaskPipelineKey: MTLRenderPipelineState] = [:]
     private var activeGeneration: UInt64 = 0
 
     private struct PrewarmKey: Equatable {
@@ -22,7 +84,7 @@ private final class BackdropBlurWorker: @unchecked Sendable {
     func reset(generation: UInt64) {
         queue.async {
             self.activeGeneration = generation
-            self.pendingProgress = nil
+            self.pendingBlur = nil
             self.isBlurInFlight = false
         }
     }
@@ -30,8 +92,35 @@ private final class BackdropBlurWorker: @unchecked Sendable {
     func purgeKernels() {
         queue.async {
             self.blurKernels.removeAll(keepingCapacity: true)
+            self.maskPipelines.removeAll(keepingCapacity: true)
             self.lastPrewarmKey = nil
         }
+    }
+
+    private func maskPipeline(device: MTLDevice, pixelFormat: MTLPixelFormat) -> MTLRenderPipelineState? {
+        let key = MaskPipelineKey(deviceID: ObjectIdentifier(device), pixelFormat: pixelFormat)
+        if let cached = maskPipelines[key] {
+            return cached
+        }
+        guard let library = try? device.makeLibrary(source: Self.maskShaderSource, options: nil),
+              let vertex = library.makeFunction(name: "ql_backdrop_mask_vertex"),
+              let fragment = library.makeFunction(name: "ql_backdrop_mask_fragment") else {
+            return nil
+        }
+        let desc = MTLRenderPipelineDescriptor()
+        desc.vertexFunction = vertex
+        desc.fragmentFunction = fragment
+        desc.colorAttachments[0].pixelFormat = pixelFormat
+        desc.colorAttachments[0].isBlendingEnabled = true
+        desc.colorAttachments[0].sourceRGBBlendFactor = .zero
+        desc.colorAttachments[0].destinationRGBBlendFactor = .sourceAlpha
+        desc.colorAttachments[0].sourceAlphaBlendFactor = .zero
+        desc.colorAttachments[0].destinationAlphaBlendFactor = .sourceAlpha
+        guard let pipeline = try? device.makeRenderPipelineState(descriptor: desc) else {
+            return nil
+        }
+        maskPipelines[key] = pipeline
+        return pipeline
     }
 
     func prewarmKernels(
@@ -51,6 +140,7 @@ private final class BackdropBlurWorker: @unchecked Sendable {
                 return
             }
             self.lastPrewarmKey = key
+            _ = self.maskPipeline(device: device, pixelFormat: pixelFormat)
 
             let blurRadius: Float = 16.0
             let desc = MTLTextureDescriptor.texture2DDescriptor(
@@ -85,8 +175,11 @@ private final class BackdropBlurWorker: @unchecked Sendable {
 
     func schedule(
         progress: Float,
+        materialProgress: Float = 1.0,
         generation: UInt64,
         scale: CGFloat,
+        boundsSize: CGSize = .zero,
+        folderMaskQuads: [SIMD4<Float>] = [],
         rawTex: MTLTexture,
         metalLayer: CAMetalLayer,
         device: MTLDevice,
@@ -99,15 +192,18 @@ private final class BackdropBlurWorker: @unchecked Sendable {
                 return
             }
             if self.isBlurInFlight {
-                self.pendingProgress = progress
+                self.pendingBlur = PendingBlur(progress: progress, materialProgress: materialProgress)
                 onSubmission?(generation, false)
                 return
             }
             self.isBlurInFlight = true
             self.executeBlur(
                 progress: progress,
+                materialProgress: materialProgress,
                 generation: generation,
                 scale: scale,
+                boundsSize: boundsSize,
+                folderMaskQuads: folderMaskQuads,
                 rawTex: rawTex,
                 metalLayer: metalLayer,
                 device: device,
@@ -119,8 +215,11 @@ private final class BackdropBlurWorker: @unchecked Sendable {
 
     private func executeBlur(
         progress: Float,
+        materialProgress: Float,
         generation: UInt64,
         scale: CGFloat,
+        boundsSize: CGSize,
+        folderMaskQuads: [SIMD4<Float>],
         rawTex: MTLTexture,
         metalLayer: CAMetalLayer,
         device: MTLDevice,
@@ -135,7 +234,7 @@ private final class BackdropBlurWorker: @unchecked Sendable {
         guard let drawable = metalLayer.nextDrawable(),
               let commandBuffer = commandQueue.makeCommandBuffer() else {
             isBlurInFlight = false
-            pendingProgress = nil
+            pendingBlur = nil
             onSubmission?(generation, false)
             return
         }
@@ -170,6 +269,42 @@ private final class BackdropBlurWorker: @unchecked Sendable {
             blur.encode(commandBuffer: commandBuffer, sourceTexture: rawTex, destinationTexture: drawable.texture)
         }
 
+        let clampedMat = min(max(materialProgress, 0.0), 1.0)
+        if clampedMat < 0.9999, !folderMaskQuads.isEmpty,
+           let pipeline = maskPipeline(device: device, pixelFormat: drawable.texture.pixelFormat) {
+            let smoothT = clampedMat * clampedMat * (3.0 - 2.0 * clampedMat)
+            let rpd = MTLRenderPassDescriptor()
+            rpd.colorAttachments[0].texture = drawable.texture
+            rpd.colorAttachments[0].loadAction = .load
+            rpd.colorAttachments[0].storeAction = .store
+            if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: rpd) {
+                var uniforms = SIMD4<Float>(
+                    Float(max(boundsSize.width, 1.0)),
+                    Float(max(boundsSize.height, 1.0)),
+                    smoothT,
+                    3.0
+                )
+                encoder.setRenderPipelineState(pipeline)
+                encoder.setVertexBytes(&uniforms, length: MemoryLayout<SIMD4<Float>>.stride, index: 1)
+                let maxInlineQuads = 64
+                var offset = 0
+                while offset < folderMaskQuads.count {
+                    let count = min(maxInlineQuads, folderMaskQuads.count - offset)
+                    folderMaskQuads.withUnsafeBufferPointer { buf in
+                        guard let base = buf.baseAddress else { return }
+                        encoder.setVertexBytes(
+                            base.advanced(by: offset),
+                            length: count * MemoryLayout<SIMD4<Float>>.stride,
+                            index: 0
+                        )
+                    }
+                    encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: count)
+                    offset += count
+                }
+                encoder.endEncoding()
+            }
+        }
+
         commandBuffer.present(drawable)
         commandBuffer.addCompletedHandler { [weak self] _ in
             onSubmission?(generation, true)
@@ -177,13 +312,16 @@ private final class BackdropBlurWorker: @unchecked Sendable {
             self.queue.async {
                 guard generation == self.activeGeneration else { return }
                 self.isBlurInFlight = false
-                if let next = self.pendingProgress {
-                    self.pendingProgress = nil
+                if let next = self.pendingBlur {
+                    self.pendingBlur = nil
                     self.isBlurInFlight = true
                     self.executeBlur(
-                        progress: next,
+                        progress: next.progress,
+                        materialProgress: next.materialProgress,
                         generation: generation,
                         scale: scale,
+                        boundsSize: boundsSize,
+                        folderMaskQuads: folderMaskQuads,
                         rawTex: rawTex,
                         metalLayer: metalLayer,
                         device: device,
@@ -215,6 +353,8 @@ final class FolderDepthBackdropView: NSView {
     private var commandQueue: MTLCommandQueue?
     private var cachedPixelSize: CGSize = .zero
     private var currentScale: CGFloat = 2.0
+    private var currentBoundsSize: CGSize = .zero
+    private var folderMaskQuads: [SIMD4<Float>] = []
 
     var onReadyChange: (@MainActor (Bool) -> Void)?
     private(set) var isReady = false
@@ -367,17 +507,35 @@ final class FolderDepthBackdropView: NSView {
         )
     }
 
+    func setFolderMaskRects(_ rects: [CGRect]) {
+        folderMaskQuads = rects.compactMap { rect in
+            guard rect.width >= 1, rect.height >= 1 else { return nil }
+            let outsetSideTop = rect.width * 0.22
+            let outsetBottom = rect.height * 0.11 + 4.5
+            return SIMD4<Float>(
+                Float(rect.minX - outsetSideTop),
+                Float(rect.minY - outsetSideTop),
+                Float(rect.maxX + outsetSideTop),
+                Float(rect.maxY + outsetBottom)
+            )
+        }
+    }
+
     /// Bakes the sharp root grid once into the offscreen texture.
     func bake(
         device: MTLDevice,
         commandQueue: MTLCommandQueue,
         boundsSize: CGSize,
         scale: CGFloat,
+        initialProgress: CGFloat = 0.0,
+        initialMaterialProgress: CGFloat = 0.0,
         renderPass: (MTLCommandBuffer, MTLTexture) -> Void
     ) {
         self.device = device
         self.commandQueue = commandQueue
         self.currentScale = scale
+        self.currentBoundsSize = boundsSize
+        self.folderMaskQuads = []
         applyLayerConfiguration()
         generation &+= 1
         let currentGen = generation
@@ -430,10 +588,15 @@ final class FolderDepthBackdropView: NSView {
         isBaking = true
         bakeFailed = false
 
+        let clampedInitProgress = Float(min(max(initialProgress, 0), 1))
+        let clampedInitMaterial = Float(min(max(initialMaterialProgress, 0), 1))
         worker.schedule(
-            progress: 0.0,
+            progress: clampedInitProgress,
+            materialProgress: clampedInitMaterial,
             generation: currentGen,
             scale: scale,
+            boundsSize: boundsSize,
+            folderMaskQuads: folderMaskQuads,
             rawTex: rawTex,
             metalLayer: metalLayer,
             device: device,
@@ -473,16 +636,21 @@ final class FolderDepthBackdropView: NSView {
     }
 
     /// Updates the depth backdrop animation progress (0 = fully closed/resting root, 1 = fully open folder).
-    func updateProgress(_ progress: CGFloat) {
+    func updateProgress(_ progress: CGFloat, materialProgress: CGFloat = 1.0) {
         guard isReady || isBaking else { return }
 
         let local = min(max(progress, 0), 1)
+        let localMaterial = min(max(materialProgress, 0), 1)
+        let effectiveBoundsSize = currentBoundsSize.width >= 1 ? currentBoundsSize : bounds.size
 
         if let rawTex = rawTexture, let device, let commandQueue {
             worker.schedule(
                 progress: Float(local),
+                materialProgress: Float(localMaterial),
                 generation: generation,
                 scale: currentScale,
+                boundsSize: effectiveBoundsSize,
+                folderMaskQuads: folderMaskQuads,
                 rawTex: rawTex,
                 metalLayer: metalLayer,
                 device: device,

@@ -397,8 +397,8 @@ final class LaunchpadContainerView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
         addSubview(backgroundView)
-        addSubview(backdropView)
         addSubview(backgroundFolderHostView)
+        addSubview(backdropView)
         addSubview(fullScreenDimView)
         addSubview(foregroundFolderHostView)
         addSubview(metalView)
@@ -428,12 +428,6 @@ final class LaunchpadContainerView: NSView {
             let shouldRemoveUnused = !retainsDepthPlates
             if !bgPlates.isEmpty || shouldRemoveUnused {
                 self.backgroundFolderHostView.update(plates: bgPlates, removeUnused: shouldRemoveUnused)
-                if !bgPlates.isEmpty,
-                   IconRenderQuality.current == .quality,
-                   !self.metalView.isFolderTransitionActive,
-                   self.store.openedFolderID == nil {
-                    self.metalView.prewarmSunkFolderTextures(for: bgPlates)
-                }
             }
 
             var fgSeedImages: [String: [String: CGImage]] = [:]
@@ -477,11 +471,16 @@ final class LaunchpadContainerView: NSView {
             guard let self else { return }
             guard let device = self.metalView.device else { return }
             let scale = self.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+            let isAlreadyOpen = self.store.openedFolderID != nil
+                && !self.metalView.isPreparingFolderOpen
+                && !self.metalView.isFolderTransitionActive
             self.backdropView.bake(
                 device: device,
                 commandQueue: self.metalView.commandQueue,
                 boundsSize: self.bounds.size,
-                scale: scale
+                scale: scale,
+                initialProgress: isAlreadyOpen ? 1.0 : 0.0,
+                initialMaterialProgress: isAlreadyOpen ? 1.0 : 0.0
             ) { commandBuffer, targetTexture in
                 guard generation == self.metalView.folderTransitionGeneration else { return }
                 let bgPlates = self.metalView.renderBackdropRootGrid(
@@ -494,6 +493,18 @@ final class LaunchpadContainerView: NSView {
                     canvasPan: canvasPan,
                     canvasAdaptive: canvasAdaptive
                 )
+                let maskRects = bgPlates.compactMap { plate -> CGRect? in
+                    guard !plate.id.hasPrefix("opened-folder"),
+                          !plate.isIsolated,
+                          plate.id != folderID,
+                          plate.rect.width >= 1,
+                          plate.rect.height >= 1,
+                          plate.alpha > 0.005 else {
+                        return nil
+                    }
+                    return plate.rect
+                }
+                self.backdropView.setFolderMaskRects(maskRects)
                 if self.metalView.isFolderTransitionActive || !self.metalView.isPreparingFolderOpen {
                     if !bgPlates.isEmpty {
                         self.backgroundFolderHostView.update(plates: bgPlates, removeUnused: true)
@@ -506,7 +517,7 @@ final class LaunchpadContainerView: NSView {
         }
         metalView.onFolderTransitionProgress = { [weak self] progress, materialProgress in
             guard let self else { return }
-            self.backdropView.updateProgress(progress)
+            self.backdropView.updateProgress(progress, materialProgress: materialProgress)
             let unified = (IconRenderQuality.current == .quality)
                 && self.backdropView.isReady && !self.backdropView.isHidden
             if self.backgroundFolderHostView.usesUnifiedBackdropBlur != unified {
@@ -564,7 +575,7 @@ final class LaunchpadContainerView: NSView {
             if self.store.openedFolderID == nil {
                 self.pendingBackdropPlates = nil
                 self.backdropView.dismiss()
-                self.backgroundFolderHostView.usesUnifiedBackdropBlur = false
+                self.backgroundFolderHostView.resetSinkTransform()
                 self.foregroundFolderHostView.setAllPlatesHidden(true)
                 self.dragFolderHostView.removeAllPlates()
             }

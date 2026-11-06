@@ -27,6 +27,12 @@ final class FolderPreviewCompositeCache {
         let incomingDropAppID: String?
     }
 
+    struct BaseplateKey: Hashable, Sendable {
+        let scaleMilli: Int
+        let cornerRadiusMilli: Int
+        let isDark: Bool
+    }
+
     struct SunkTextureKey: Hashable, Sendable {
         let previewKey: PreviewKey
         let cornerRadiusMilli: Int
@@ -40,6 +46,9 @@ final class FolderPreviewCompositeCache {
         let totalSizePt: CGFloat
     }
 
+    private static let canonicalPlatePt: CGFloat = 104.0
+    private static let canonicalIconPt: CGFloat = 128.0
+
     private static let linearDisplayP3: CGColorSpace = {
         CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3)
             ?? CGColorSpace(name: CGColorSpace.displayP3)
@@ -52,13 +61,15 @@ final class FolderPreviewCompositeCache {
     }()
 
     private var previewCache: [PreviewKey: CGImage] = [:]
+    private var baseplateCache: [BaseplateKey: CGImage] = [:]
     private var sunkTextureCache: [SunkTextureKey: SunkFolderTextureEntry] = [:]
-    private let maxEntries = 96
+    private let maxEntries = 128
 
     private init() {}
 
     func clear() {
         previewCache.removeAll(keepingCapacity: true)
+        baseplateCache.removeAll(keepingCapacity: true)
         sunkTextureCache.removeAll(keepingCapacity: true)
     }
 
@@ -70,11 +81,9 @@ final class FolderPreviewCompositeCache {
         incomingDropAppID: String?,
         appearanceName: String
     ) -> PreviewKey {
-        let side = min(boundsSize.width, boundsSize.height)
-        let effectiveIconSize = iconSize > 0 ? iconSize : (side / 0.8125)
-        let pxW = max(1, Int((boundsSize.width * scale).rounded()))
-        let pxH = max(1, Int((boundsSize.height * scale).rounded()))
-        let iconPx = max(1, Int((effectiveIconSize * scale).rounded()))
+        let pxW = max(1, Int((Self.canonicalPlatePt * scale).rounded()))
+        let pxH = pxW
+        let iconPx = max(1, Int((Self.canonicalIconPt * scale).rounded()))
         let scaleMilli = Int((scale * 1000).rounded())
         let memberKeys = displayMembers.map { MemberKey(id: $0.id, sourcePath: $0.resourceSourcePath) }
         return PreviewKey(
@@ -129,9 +138,9 @@ final class FolderPreviewCompositeCache {
         ctx.clear(CGRect(x: 0, y: 0, width: pxW, height: pxH))
         ctx.interpolationQuality = .high
 
-        let side = min(boundsSize.width, boundsSize.height)
+        let side = Self.canonicalPlatePt
         let folderCenter = CGPoint(x: side * 0.5, y: side * 0.5)
-        let effectiveIconSize = iconSize > 0 ? iconSize : (side / 0.8125)
+        let effectiveIconSize = Self.canonicalIconPt
         let miniSize = FolderPreviewLayout.miniSize(in: effectiveIconSize)
 
         let shadowColor = NSColor.black.withAlphaComponent(0.24).cgColor
@@ -172,6 +181,100 @@ final class FolderPreviewCompositeCache {
         return image
     }
 
+    private func sunkBaseplateTemplateImage(
+        totalPx: Int,
+        platePx: Int,
+        outsetPx: Int,
+        scale: CGFloat,
+        scaleMilli: Int,
+        cornerRadiusPt: CGFloat,
+        cornerRadiusMilli: Int,
+        isDark: Bool
+    ) -> CGImage? {
+        let key = BaseplateKey(
+            scaleMilli: scaleMilli,
+            cornerRadiusMilli: cornerRadiusMilli,
+            isDark: isDark
+        )
+        if let cached = baseplateCache[key] {
+            return cached
+        }
+
+        let bytesPerComponent = MemoryLayout<Float16>.size
+        let bytesPerRow = totalPx * 4 * bytesPerComponent
+        let bitmapInfo = CGBitmapInfo.floatComponents.rawValue
+            | CGBitmapInfo.byteOrder16Little.rawValue
+            | CGImageAlphaInfo.premultipliedLast.rawValue
+
+        guard let ctx = CGContext(
+            data: nil,
+            width: totalPx,
+            height: totalPx,
+            bitsPerComponent: 16,
+            bytesPerRow: bytesPerRow,
+            space: Self.linearDisplayP3,
+            bitmapInfo: bitmapInfo
+        ) else {
+            return nil
+        }
+
+        ctx.clear(CGRect(x: 0, y: 0, width: totalPx, height: totalPx))
+        ctx.interpolationQuality = .high
+
+        let plateRect = CGRect(x: outsetPx, y: outsetPx, width: platePx, height: platePx)
+        let maxRadius = min(plateRect.width, plateRect.height) * 0.5
+        let radiusPx = min(maxRadius, max(0, cornerRadiusPt * scale))
+        let platePath = CGPath(
+            roundedRect: plateRect,
+            cornerWidth: radiusPx,
+            cornerHeight: radiusPx,
+            transform: nil
+        )
+
+        // 1. Outer shadow matching sunkContainerView.layer (shadowOpacity = 0.18, offset = (0, -2), radius = 8.0)
+        let shadowOffsetY = -2.0 * scale
+        let shadowBlur = 8.0 * scale
+        let offscreenShiftY = CGFloat(totalPx * 2)
+        var shiftTransform = CGAffineTransform(translationX: 0, y: offscreenShiftY)
+        if let shiftedPath = platePath.copy(using: &shiftTransform) {
+            ctx.saveGState()
+            ctx.setShadow(
+                offset: CGSize(width: 0, height: -offscreenShiftY + shadowOffsetY),
+                blur: shadowBlur,
+                color: NSColor.black.withAlphaComponent(0.18).cgColor
+            )
+            ctx.setFillColor(NSColor.black.cgColor)
+            ctx.addPath(shiftedPath)
+            ctx.fillPath()
+            ctx.restoreGState()
+        }
+
+        // 2. Sunk baseplate fill & inner 0.5pt border matching sunkPlateView.layer
+        ctx.saveGState()
+        ctx.addPath(platePath)
+        ctx.clip()
+
+        let fillColor = isDark
+            ? NSColor(white: 0.34, alpha: 0.55).cgColor
+            : NSColor(white: 1.0, alpha: 0.42).cgColor
+        ctx.setFillColor(fillColor)
+        ctx.addPath(platePath)
+        ctx.fillPath()
+
+        let borderColor = isDark
+            ? NSColor(white: 1.0, alpha: 0.18).cgColor
+            : NSColor(white: 1.0, alpha: 0.45).cgColor
+        ctx.setStrokeColor(borderColor)
+        ctx.setLineWidth(1.0 * scale)
+        ctx.addPath(platePath)
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        guard let img = ctx.makeImage() else { return nil }
+        baseplateCache[key] = img
+        return img
+    }
+
     func sunkFolderTexture(
         device: MTLDevice,
         plate: FolderPlateModel,
@@ -186,18 +289,20 @@ final class FolderPreviewCompositeCache {
         guard plateSizePt >= 1 else { return nil }
 
         let displayMembers = Array(plate.members.prefix(FolderPreviewLayout.capacity))
-        let platePx = max(1, Int((plateSizePt * scale).rounded()))
-        let outsetPx = max(4, Int((18.0 * (plateSizePt / 104.0) * scale).rounded()))
+        let canonicalSizePt = Self.canonicalPlatePt
+        let platePx = max(1, Int((canonicalSizePt * scale).rounded()))
+        let outsetPx = max(4, Int((18.0 * scale).rounded()))
         let totalPx = platePx + outsetPx * 2
-        let totalSizePt = CGFloat(totalPx) / scale
-        let normalizedBoundsSize = CGSize(width: CGFloat(platePx) / scale, height: CGFloat(platePx) / scale)
-        let effectiveIconSize = plate.iconSize > 0 ? plate.iconSize : (plateSizePt / 0.8125)
-        let cornerRadiusPt = plate.customCornerRadius ?? (plateSizePt * 0.225)
-        let cornerRadiusMilli = Int((cornerRadiusPt * 1000).rounded())
+        let totalToPlateRatio = CGFloat(totalPx) / CGFloat(max(platePx, 1))
+        let totalSizePt = plateSizePt * totalToPlateRatio
+        let canonicalBoundsSize = CGSize(width: canonicalSizePt, height: canonicalSizePt)
+        let cornerRadiusRatio = (plate.customCornerRadius ?? (plateSizePt * 0.225)) / max(plateSizePt, 1.0)
+        let canonicalCornerRadiusPt = canonicalSizePt * cornerRadiusRatio
+        let cornerRadiusMilli = Int((canonicalCornerRadiusPt * 1000).rounded())
 
         let previewKey = makePreviewKey(
-            boundsSize: normalizedBoundsSize,
-            iconSize: effectiveIconSize,
+            boundsSize: canonicalBoundsSize,
+            iconSize: Self.canonicalIconPt,
             scale: scale,
             displayMembers: displayMembers,
             incomingDropAppID: plate.incomingDropAppID,
@@ -211,7 +316,7 @@ final class FolderPreviewCompositeCache {
             deviceID: ObjectIdentifier(device)
         )
         if let cached = sunkTextureCache[sunkKey] {
-            return cached
+            return SunkFolderTextureEntry(texture: cached.texture, totalSizePt: totalSizePt)
         }
 
         var previewImage: CGImage? = previewCache[previewKey]
@@ -236,8 +341,8 @@ final class FolderPreviewCompositeCache {
                 }
             }
             previewImage = previewCompositeImage(
-                boundsSize: normalizedBoundsSize,
-                iconSize: effectiveIconSize,
+                boundsSize: canonicalBoundsSize,
+                iconSize: Self.canonicalIconPt,
                 scale: scale,
                 displayMembers: displayMembers,
                 incomingDropAppID: plate.incomingDropAppID,
@@ -267,56 +372,20 @@ final class FolderPreviewCompositeCache {
         ctx.clear(CGRect(x: 0, y: 0, width: totalPx, height: totalPx))
         ctx.interpolationQuality = .high
 
-        let plateRect = CGRect(x: outsetPx, y: outsetPx, width: platePx, height: platePx)
-        let maxRadius = min(plateRect.width, plateRect.height) * 0.5
-        let radiusPx = min(maxRadius, max(0, cornerRadiusPt * scale))
-        let platePath = CGPath(
-            roundedRect: plateRect,
-            cornerWidth: radiusPx,
-            cornerHeight: radiusPx,
-            transform: nil
-        )
-
-        // 1. Outer shadow matching sunkContainerView.layer (shadowOpacity = 0.18, offset = (0, -2), radius = 8.0)
-        let shadowScale = plateSizePt / 104.0
-        let shadowOffsetY = -2.0 * scale * shadowScale
-        let shadowBlur = 8.0 * scale * shadowScale
-        let offscreenShiftY = CGFloat(totalPx * 2)
-        var shiftTransform = CGAffineTransform(translationX: 0, y: offscreenShiftY)
-        if let shiftedPath = platePath.copy(using: &shiftTransform) {
-            ctx.saveGState()
-            ctx.setShadow(
-                offset: CGSize(width: 0, height: -offscreenShiftY + shadowOffsetY),
-                blur: shadowBlur,
-                color: NSColor.black.withAlphaComponent(0.18).cgColor
-            )
-            ctx.setFillColor(NSColor.black.cgColor)
-            ctx.addPath(shiftedPath)
-            ctx.fillPath()
-            ctx.restoreGState()
+        if let baseplateImage = sunkBaseplateTemplateImage(
+            totalPx: totalPx,
+            platePx: platePx,
+            outsetPx: outsetPx,
+            scale: scale,
+            scaleMilli: previewKey.scaleMilli,
+            cornerRadiusPt: canonicalCornerRadiusPt,
+            cornerRadiusMilli: cornerRadiusMilli,
+            isDark: isDark
+        ) {
+            ctx.draw(baseplateImage, in: CGRect(x: 0, y: 0, width: totalPx, height: totalPx))
         }
 
-        // 2. Sunk baseplate fill & inner 0.5pt border matching sunkPlateView.layer
-        ctx.saveGState()
-        ctx.addPath(platePath)
-        ctx.clip()
-
-        let fillColor = isDark
-            ? NSColor(white: 0.34, alpha: 0.55).cgColor
-            : NSColor(white: 0.80, alpha: 0.28).cgColor
-        ctx.setFillColor(fillColor)
-        ctx.addPath(platePath)
-        ctx.fillPath()
-
-        let borderColor = isDark
-            ? NSColor(white: 1.0, alpha: 0.18).cgColor
-            : NSColor(white: 1.0, alpha: 0.35).cgColor
-        ctx.setStrokeColor(borderColor)
-        ctx.setLineWidth(1.0 * scale)
-        ctx.addPath(platePath)
-        ctx.strokePath()
-        ctx.restoreGState()
-
+        let plateRect = CGRect(x: outsetPx, y: outsetPx, width: platePx, height: platePx)
         // 3. Cached 3x3 mini-icon + drop shadow composite
         if let previewImage, plate.previewVisible {
             ctx.draw(previewImage, in: plateRect)
@@ -940,8 +1009,8 @@ private final class FolderGlassPlateItemView: NSView {
                 sunkPlateView.layer?.backgroundColor = NSColor(white: 0.34, alpha: 0.55).cgColor
                 sunkPlateView.layer?.borderColor = NSColor(white: 1.0, alpha: 0.18).cgColor
             } else {
-                sunkPlateView.layer?.backgroundColor = NSColor(white: 0.80, alpha: 0.28).cgColor
-                sunkPlateView.layer?.borderColor = NSColor(white: 1.0, alpha: 0.35).cgColor
+                sunkPlateView.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.42).cgColor
+                sunkPlateView.layer?.borderColor = NSColor(white: 1.0, alpha: 0.45).cgColor
             }
             sunkPlateView.layer?.borderWidth = 0.5
 
@@ -1099,11 +1168,16 @@ private final class FolderGlassPlateItemView: NSView {
         let memberIDs = displayMembers.map(\.id)
         let appearanceName = effectiveAppearance.name.rawValue
 
-        let contentUnchanged = currentBounds.size == lastPreviewBoundsSize
+        let isCompositeActive = !compositePreviewLayer.isHidden && compositePreviewLayer.contents != nil
+        let boundsMatch = isCompositeActive || (
+            abs(currentBounds.width - lastPreviewBoundsSize.width) < 0.05
+                && abs(currentBounds.height - lastPreviewBoundsSize.height) < 0.05
+                && abs(iconSize - lastIconSize) < 0.05
+        )
+        let contentUnchanged = boundsMatch
             && memberIDs == lastMemberIDs
             && previewVisible == lastPreviewVisible
-            && iconSize == lastIconSize
-            && scale == lastScale
+            && abs(scale - lastScale) < 0.001
             && incomingDropAppID == lastIncomingDropAppID
             && appearanceName == lastAppearanceName
 
@@ -1391,7 +1465,10 @@ private final class FolderGlassPlateItemView: NSView {
                 let glassAlpha = 1.0 - smoothT
                 glassEffectView?.alphaValue = glassAlpha
                 glassEffectView?.isHidden = (currentMaterialStyle == .regular)
-                contentView.alphaValue = glassAlpha
+                // Keep contentView at 1.0 so backdropView (above, opacity smoothT)
+                // composites over contentView with exact partition of unity:
+                // smoothT + (1 - smoothT) == 1.0.
+                contentView.alphaValue = 1.0
                 contentView.isHidden = false
                 sunkContainerView.isHidden = false
             }
