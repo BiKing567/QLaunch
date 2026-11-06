@@ -248,11 +248,8 @@
 "settings.appIcon.title" = "QLaunch アイコン";
 "settings.appIcon.generalDetail" = "Dockやバージョン情報に表示されるアイコンを変更";
 "settings.appIcon.default" = "オリジナル";
-"settings.appIcon.dark" = "ダークグラス";
-"settings.appIcon.clearDark" = "クリアダーク";
-"settings.appIcon.clearLight" = "クリアライト";
-"settings.appIcon.glass" = "すりガラス";
-"settings.appIcon.tinted" = "ティンテッド";
+"settings.appIcon.system" = "macOS システム";
+"settings.appIcon.rocket" = "クラシックロケット";
 "settings.appIcon.custom" = "カスタム";
 "settings.appIcon.chooseCustom" = "画像を選択…";
 "settings.appIcon.pasteFromClipboard" = "クリップボードから貼り付け";

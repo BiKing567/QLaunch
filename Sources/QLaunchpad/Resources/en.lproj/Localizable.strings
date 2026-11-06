@@ -248,11 +248,8 @@
 "settings.appIcon.title" = "QLaunch Icon";
 "settings.appIcon.generalDetail" = "Customize the icon displayed in the Dock and About window";
 "settings.appIcon.default" = "Original";
-"settings.appIcon.dark" = "Dark Glass";
-"settings.appIcon.clearDark" = "Clear Dark";
-"settings.appIcon.clearLight" = "Clear Light";
-"settings.appIcon.glass" = "Glass Pad";
-"settings.appIcon.tinted" = "Tinted";
+"settings.appIcon.system" = "macOS Apps";
+"settings.appIcon.rocket" = "Classic Rocket";
 "settings.appIcon.custom" = "Custom";
 "settings.appIcon.chooseCustom" = "Choose Image…";
 "settings.appIcon.pasteFromClipboard" = "Paste from Clipboard";

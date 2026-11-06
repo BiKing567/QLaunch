@@ -247,12 +247,9 @@
 "settings.section.appIcon" = "应用图标";
 "settings.appIcon.title" = "QLaunch 图标";
 "settings.appIcon.generalDetail" = "更改在程序坞和关于页面中显示的应用图标";
-"settings.appIcon.default" = "经典原版";
-"settings.appIcon.dark" = "暗黑晶莹";
-"settings.appIcon.clearDark" = "深色透明";
-"settings.appIcon.clearLight" = "浅色晶莹";
-"settings.appIcon.glass" = "毛玻璃";
-"settings.appIcon.tinted" = "简约色调";
+"settings.appIcon.default" = "原版图标";
+"settings.appIcon.system" = "系统应用";
+"settings.appIcon.rocket" = "经典启动台";
 "settings.appIcon.custom" = "自定义";
 "settings.appIcon.chooseCustom" = "选择图片…";
 "settings.appIcon.pasteFromClipboard" = "从剪贴板粘贴";

@@ -10,11 +10,8 @@ extension Notification.Name {
 
 enum AppIconPreset: String, CaseIterable, Identifiable {
     case `default` = "default"
-    case dark = "dark"
-    case clearDark = "clearDark"
-    case clearLight = "clearLight"
-    case glass = "glass"
-    case tinted = "tinted"
+    case system = "system"
+    case rocket = "rocket"
     case custom = "custom"
 
     var id: String { rawValue }
@@ -22,11 +19,8 @@ enum AppIconPreset: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .default: L10n.tr("settings.appIcon.default")
-        case .dark: L10n.tr("settings.appIcon.dark")
-        case .clearDark: L10n.tr("settings.appIcon.clearDark")
-        case .clearLight: L10n.tr("settings.appIcon.clearLight")
-        case .glass: L10n.tr("settings.appIcon.glass")
-        case .tinted: L10n.tr("settings.appIcon.tinted")
+        case .system: L10n.tr("settings.appIcon.system")
+        case .rocket: L10n.tr("settings.appIcon.rocket")
         case .custom: L10n.tr("settings.appIcon.custom")
         }
     }
@@ -34,11 +28,8 @@ enum AppIconPreset: String, CaseIterable, Identifiable {
     var resourceName: String? {
         switch self {
         case .default: "QLaunchpadAppIcon"
-        case .dark: "AppIcon-Dark"
-        case .clearDark: "AppIcon-ClearDark"
-        case .clearLight: "AppIcon-ClearLight"
-        case .glass: "AppIcon-Glass"
-        case .tinted: "AppIcon-Tinted"
+        case .system: "AppIcon-System"
+        case .rocket: "AppIcon-Rocket"
         case .custom: nil
         }
     }
@@ -107,7 +98,7 @@ final class QLaunchpadSelfIconManager: ObservableObject {
             }
             return defaultAppIcon
 
-        case .dark, .clearDark, .clearLight, .glass, .tinted:
+        case .system, .rocket:
             guard let name = preset.resourceName,
                   let bundle = QLaunchpadResources.bundle,
                   let url = bundle.url(forResource: name, withExtension: "png"),

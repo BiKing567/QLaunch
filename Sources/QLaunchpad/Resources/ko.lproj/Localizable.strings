@@ -248,11 +248,8 @@
 "settings.appIcon.title" = "QLaunch 아이콘";
 "settings.appIcon.generalDetail" = "Dock 및 정보 페이지에 표시되는 앱 아이콘 사용자 지정";
 "settings.appIcon.default" = "오리지널";
-"settings.appIcon.dark" = "다크 글래스";
-"settings.appIcon.clearDark" = "클리어 다크";
-"settings.appIcon.clearLight" = "클리어 라이트";
-"settings.appIcon.glass" = "프로스트 글래스";
-"settings.appIcon.tinted" = "틴트";
+"settings.appIcon.system" = "macOS 시스템";
+"settings.appIcon.rocket" = "클래식 로켓";
 "settings.appIcon.custom" = "사용자 지정";
 "settings.appIcon.chooseCustom" = "이미지 선택…";
 "settings.appIcon.pasteFromClipboard" = "클립보드에서 붙여넣기";
