@@ -16,7 +16,7 @@
   <b>This branch is based on <a href="https://github.com/qzrzz/QLaunch">qzrzz/QLaunch</a>, featuring deep refactorings and optimizations for trackpad gestures, animation continuity, and stability.</b>
 </p>
 
-- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.3.3)](https://github.com/BiKing567/QLaunch/releases)
+- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.4.0)](https://github.com/BiKing567/QLaunch/releases)
 - 🏠 **Original Project Homepage**: [https://qzrzz.com/QLaunch/](https://qzrzz.com/QLaunch/)
 - 🔗 **Original Project Repository**: [https://github.com/qzrzz/QLaunch](https://github.com/qzrzz/QLaunch)
 
@@ -30,6 +30,12 @@
 ## 🌟 Key Improvements & Features in this Fork
 
 Built upon the excellent foundation of the original QLaunch, this fork deeply addresses multi-finger trackpad gestures, micro-interaction animation details, and system compatibility:
+
+### 🚀 Live Dark/Light Mode Icon Hot-Switching & Folder Boost (V1.4.0)
+- **Live Dark/Light Mode Icon Hot-Switching**: Real-time appearance tracking with an 180ms smooth bidirectional crossfade between dark and light icon variants, eliminating blank icon flashes during theme changes.
+- **Major Folder Open/Close Performance Boost**: Cached sunk baseplates, shadows, and 9-grid mini-icons into unified GPU textures, dropping open/close frame intervals with 8 background folders from 25ms down to ~7ms.
+- **Eliminated Folder Exit Flickering & Transition Hitches**: Corrected transition settlement timing to dismiss the depth backdrop atomically on the settle frame; streamlined resource prewarming during transitions.
+- **Refined Light Mode Folder Plate Visuals**: Enhanced the white frosted glass baseplate mask and border contrast for background folders when opened in light mode.
 
 ### ⚡️ Multi-Page Folder Rendering & Transition Hotfix (V1.3.3)
 - **Active-Page Transition Isolation**: Fixed an issue where open/close animations drew icons across all pages simultaneously, causing off-page icons to fly across the screen. Transitions now strictly animate the active page; closing from page > 0 smoothly collapses active items to center and crossfades the 9 root mini-icons during the latter half of collapse.

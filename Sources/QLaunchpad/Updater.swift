@@ -41,7 +41,7 @@ final class Updater: ObservableObject {
     }
 
     var currentVersionString: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.3.3"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.4.0"
     }
 
     private(set) var backgroundTimer: Timer?
