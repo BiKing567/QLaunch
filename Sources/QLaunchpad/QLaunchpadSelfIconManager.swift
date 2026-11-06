@@ -46,11 +46,53 @@ final class QLaunchpadSelfIconManager: ObservableObject {
 
     private var customIconCache: NSImage?
     private var presetImageCache: [AppIconPreset: NSImage] = [:]
+    private var systemDynamicImage: NSImage?
+    private var systemLightImage: NSImage?
+    private var systemDarkImage: NSImage?
 
     private init() {
         let savedRaw = UserDefaults.standard.string(forKey: QLaunchpadPreferences.selfAppIconPresetKey) ?? AppIconPreset.default.rawValue
         self.currentPreset = AppIconPreset(rawValue: savedRaw) ?? .default
         self.hasCustomIcon = FileManager.default.fileExists(atPath: customIconFileURL.path)
+        setupAppearanceObservers()
+    }
+
+    private func setupAppearanceObservers() {
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleAppearanceChange()
+            }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleAppearanceChange()
+            }
+        }
+    }
+
+    private func handleAppearanceChange() {
+        if currentPreset == .system {
+            applyToSystem(preset: .system)
+        }
+        objectWillChange.send()
+        NotificationCenter.default.post(name: .qlaunchpadSelfIconChanged, object: nil)
+    }
+
+    /// Whether macOS is currently operating in Dark Mode
+    var isSystemDarkMode: Bool {
+        if let app = NSApp {
+            return app.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        }
+        return UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
     }
 
     var customIconFileURL: URL {
@@ -63,7 +105,7 @@ final class QLaunchpadSelfIconManager: ObservableObject {
 
     /// The active display icon for QLaunchpad (for About view, Settings, etc.)
     var currentAppIcon: NSImage {
-        image(for: currentPreset) ?? defaultAppIcon
+        image(for: currentPreset, isDark: isSystemDarkMode) ?? defaultAppIcon
     }
 
     /// The default application icon
@@ -76,17 +118,58 @@ final class QLaunchpadSelfIconManager: ObservableObject {
         return NSApplication.shared.applicationIconImage
     }
 
-    /// Retrieves the image for a specific preset
-    func image(for preset: AppIconPreset) -> NSImage? {
-        if let cached = presetImageCache[preset] {
-            return cached
+    /// Returns the system-style launcher icon, adapting automatically to light/dark appearance
+    func systemIcon(isDark: Bool? = nil) -> NSImage {
+        loadSystemIconsIfNeeded()
+        let dark = isDark ?? isSystemDarkMode
+        if dark, let darkImg = systemDarkImage {
+            return darkImg
+        }
+        if !dark, let lightImg = systemLightImage {
+            return lightImg
+        }
+        return systemDynamicImage ?? defaultAppIcon
+    }
+
+    private func loadSystemIconsIfNeeded() {
+        if systemDynamicImage != nil { return }
+        guard let bundle = QLaunchpadResources.bundle else { return }
+
+        let lightURL = bundle.url(forResource: "AppIcon-System-Light", withExtension: "png")
+            ?? bundle.url(forResource: "AppIcon-System", withExtension: "png")
+        let darkURL = bundle.url(forResource: "AppIcon-System-Dark", withExtension: "png")
+            ?? bundle.url(forResource: "AppIcon-System", withExtension: "png")
+
+        if let lightURL, let img = NSImage(contentsOf: lightURL) {
+            systemLightImage = img
+        }
+        if let darkURL, let img = NSImage(contentsOf: darkURL) {
+            systemDarkImage = img
         }
 
+        let light = systemLightImage
+        let dark = systemDarkImage
+
+        let dynamic = NSImage(size: NSSize(width: 1024, height: 1024), flipped: false) { [weak self] rect in
+            let appearance = NSAppearance.currentDrawing()
+            let isDark: Bool
+            if let match = appearance.bestMatch(from: [.darkAqua, .aqua]) {
+                isDark = (match == .darkAqua)
+            } else {
+                isDark = self?.isSystemDarkMode ?? false
+            }
+            let target = isDark ? (dark ?? light) : (light ?? dark)
+            target?.draw(in: rect)
+            return true
+        }
+        systemDynamicImage = dynamic
+    }
+
+    /// Retrieves the image for a specific preset, optionally specifying the appearance mode
+    func image(for preset: AppIconPreset, isDark: Bool? = nil) -> NSImage? {
         switch preset {
         case .default:
-            let img = defaultAppIcon
-            presetImageCache[.default] = img
-            return img
+            return defaultAppIcon
 
         case .custom:
             if let customIconCache {
@@ -98,14 +181,20 @@ final class QLaunchpadSelfIconManager: ObservableObject {
             }
             return defaultAppIcon
 
-        case .system, .rocket:
+        case .system:
+            return systemIcon(isDark: isDark)
+
+        case .rocket:
+            if let cached = presetImageCache[.rocket] {
+                return cached
+            }
             guard let name = preset.resourceName,
                   let bundle = QLaunchpadResources.bundle,
                   let url = bundle.url(forResource: name, withExtension: "png"),
                   let img = NSImage(contentsOf: url) else {
                 return defaultAppIcon
             }
-            presetImageCache[preset] = img
+            presetImageCache[.rocket] = img
             return img
         }
     }
@@ -184,11 +273,15 @@ final class QLaunchpadSelfIconManager: ObservableObject {
             if isPackagedApp {
                 // Restore Assets.car CFBundleIconName rendering for Dock
                 NSApp.applicationIconImage = nil
+                NSWorkspace.shared.setIcon(nil, forFile: bundlePath, options: [])
             } else {
                 NSApp.applicationIconImage = defaultAppIcon
             }
+        } else if preset == .system {
+            let img = systemIcon(isDark: isSystemDarkMode)
+            NSApp.applicationIconImage = img
             if isPackagedApp {
-                NSWorkspace.shared.setIcon(nil, forFile: bundlePath, options: [])
+                NSWorkspace.shared.setIcon(img, forFile: bundlePath, options: [])
             }
         } else {
             if let img = image(for: preset) {

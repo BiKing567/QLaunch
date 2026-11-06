@@ -443,6 +443,7 @@ private struct AppearanceSettingsView: View {
 
 private struct AppIconGalleryView: View {
     @ObservedObject private var iconManager = QLaunchpadSelfIconManager.shared
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isDropTargeted = false
 
     var body: some View {
@@ -454,7 +455,7 @@ private struct AppIconGalleryView: View {
                             preset: preset,
                             isSelected: iconManager.currentPreset == preset,
                             hasCustomIcon: iconManager.hasCustomIcon,
-                            image: iconManager.image(for: preset)
+                            image: iconManager.image(for: preset, isDark: colorScheme == .dark)
                         ) {
                             if preset == .custom && !iconManager.hasCustomIcon {
                                 chooseCustomAppIcon()
@@ -1342,8 +1343,10 @@ private struct AboutSettingsView: View {
         return "v\(short) (\(build))"
     }
 
+    @Environment(\.colorScheme) private var colorScheme
+
     private var appIcon: NSImage {
-        iconManager.currentAppIcon
+        iconManager.image(for: iconManager.currentPreset, isDark: colorScheme == .dark) ?? iconManager.defaultAppIcon
     }
 
     var body: some View {
