@@ -69,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildLaunchpadPanel()
+        QLaunchpadSelfIconManager.shared.restoreSavedIconOnLaunch()
         DistributedNotificationCenter.default().addObserver(
             self,
             selector: #selector(layoutDidChangeExternally(_:)),
@@ -682,10 +683,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func applyDockIconPreference() {
-        // Do not assign applicationIconImage here. Packaged builds rely on
-        // Assets.car via CFBundleIconName; a raster override is what made
-        // the Dock icon intermittently blurry.
         NSApp.setActivationPolicy(showDockIconPreference ? .regular : .accessory)
+        QLaunchpadSelfIconManager.shared.restoreSavedIconOnLaunch()
     }
 
     @objc private func hotKeyRecordingChanged(_ note: Notification) {

@@ -244,3 +244,17 @@
 "error.icon.generate" = "无法生成图标图片。";
 "error.icon.invalidImage" = "无法读取所选图片，请选择有效的图片文件。";
 "error.icon.clipboardNoImage" = "剪贴板中没有有效的图片。";
+"settings.section.appIcon" = "应用图标";
+"settings.appIcon.title" = "QLaunch 图标";
+"settings.appIcon.generalDetail" = "更改在程序坞和关于页面中显示的应用图标";
+"settings.appIcon.default" = "经典原版";
+"settings.appIcon.dark" = "暗黑晶莹";
+"settings.appIcon.clearDark" = "深色透明";
+"settings.appIcon.clearLight" = "浅色晶莹";
+"settings.appIcon.glass" = "毛玻璃";
+"settings.appIcon.tinted" = "简约色调";
+"settings.appIcon.custom" = "自定义";
+"settings.appIcon.chooseCustom" = "选择图片…";
+"settings.appIcon.pasteFromClipboard" = "从剪贴板粘贴";
+"settings.appIcon.resetDefault" = "恢复默认";
+"settings.appIcon.hint" = "更改应用图标将实时更新程序坞图标与关于窗口展示。";

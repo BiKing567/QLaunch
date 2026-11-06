@@ -244,3 +244,17 @@
 "error.icon.generate" = "The icon image could not be generated.";
 "error.icon.invalidImage" = "Unable to read selected image. Please choose a valid image file.";
 "error.icon.clipboardNoImage" = "No valid image found on the clipboard.";
+"settings.section.appIcon" = "App Icon";
+"settings.appIcon.title" = "QLaunch Icon";
+"settings.appIcon.generalDetail" = "Customize the icon displayed in the Dock and About window";
+"settings.appIcon.default" = "Original";
+"settings.appIcon.dark" = "Dark Glass";
+"settings.appIcon.clearDark" = "Clear Dark";
+"settings.appIcon.clearLight" = "Clear Light";
+"settings.appIcon.glass" = "Glass Pad";
+"settings.appIcon.tinted" = "Tinted";
+"settings.appIcon.custom" = "Custom";
+"settings.appIcon.chooseCustom" = "Choose Image…";
+"settings.appIcon.pasteFromClipboard" = "Paste from Clipboard";
+"settings.appIcon.resetDefault" = "Reset to Default";
+"settings.appIcon.hint" = "Changing the icon updates the Dock and About window in real time.";

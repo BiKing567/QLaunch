@@ -244,3 +244,17 @@
 "error.icon.generate" = "아이콘 이미지를 생성할 수 없습니다.";
 "error.icon.invalidImage" = "선택한 이미지를 읽을 수 없습니다. 올바른 이미지 파일을 선택해 주세요.";
 "error.icon.clipboardNoImage" = "클립보드에 올바른 이미지가 없습니다.";
+"settings.section.appIcon" = "앱 아이콘";
+"settings.appIcon.title" = "QLaunch 아이콘";
+"settings.appIcon.generalDetail" = "Dock 및 정보 페이지에 표시되는 앱 아이콘 사용자 지정";
+"settings.appIcon.default" = "오리지널";
+"settings.appIcon.dark" = "다크 글래스";
+"settings.appIcon.clearDark" = "클리어 다크";
+"settings.appIcon.clearLight" = "클리어 라이트";
+"settings.appIcon.glass" = "프로스트 글래스";
+"settings.appIcon.tinted" = "틴트";
+"settings.appIcon.custom" = "사용자 지정";
+"settings.appIcon.chooseCustom" = "이미지 선택…";
+"settings.appIcon.pasteFromClipboard" = "클립보드에서 붙여넣기";
+"settings.appIcon.resetDefault" = "기본값으로 복원";
+"settings.appIcon.hint" = "앱 아이콘을 변경하면 Dock 아이콘과 정보 창이 실시간으로 업데이트됩니다.";

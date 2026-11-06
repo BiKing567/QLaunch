@@ -94,6 +94,7 @@ struct SettingsView: View {
 
 private struct GeneralSettingsView: View {
     @ObservedObject private var language = LocalizationManager.shared
+    @ObservedObject private var iconManager = QLaunchpadSelfIconManager.shared
     @AppStorage(QLaunchpadPreferences.showMenuBarIconKey)
     private var showMenuBarIcon = QLaunchpadPreferences.defaultShowMenuBarIcon
     @AppStorage(QLaunchpadPreferences.showDockIconKey)
@@ -150,6 +151,28 @@ private struct GeneralSettingsView: View {
                 .toggleStyle(.switch)
                 .onChange(of: showDockIcon) { _, _ in
                     notifyAppearanceChanged()
+                }
+
+                if showDockIcon {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.tr("settings.appIcon.title"))
+                            Text(L10n.tr("settings.appIcon.generalDetail"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Picker("", selection: Binding(
+                            get: { iconManager.currentPreset },
+                            set: { iconManager.applyPreset($0) }
+                        )) {
+                            ForEach(AppIconPreset.allCases) { preset in
+                                Text(preset.title).tag(preset)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 140)
+                    }
                 }
 
                 Toggle(L10n.tr("settings.menuBarIcon"), isOn: $showMenuBarIcon)
@@ -365,6 +388,10 @@ private struct AppearanceSettingsView: View {
                     )
                 }
             }
+
+            Section(L10n.tr("settings.section.appIcon")) {
+                AppIconGalleryView()
+            }
         }
         .formStyle(.grouped)
     }
@@ -414,7 +441,192 @@ private struct AppearanceSettingsView: View {
     }
 }
 
-// MARK: - 3. 布局 (Layout)
+private struct AppIconGalleryView: View {
+    @ObservedObject private var iconManager = QLaunchpadSelfIconManager.shared
+    @State private var isDropTargeted = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 16) {
+                    ForEach(AppIconPreset.allCases) { preset in
+                        AppIconCard(
+                            preset: preset,
+                            isSelected: iconManager.currentPreset == preset,
+                            hasCustomIcon: iconManager.hasCustomIcon,
+                            image: iconManager.image(for: preset)
+                        ) {
+                            if preset == .custom && !iconManager.hasCustomIcon {
+                                chooseCustomAppIcon()
+                            } else {
+                                iconManager.applyPreset(preset)
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 4)
+            }
+
+            HStack(spacing: 10) {
+                Button(L10n.tr("settings.appIcon.chooseCustom")) {
+                    chooseCustomAppIcon()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button(L10n.tr("settings.appIcon.pasteFromClipboard")) {
+                    pasteCustomAppIcon()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                if iconManager.currentPreset != .default || iconManager.hasCustomIcon {
+                    Button(L10n.tr("settings.appIcon.resetDefault")) {
+                        iconManager.resetToDefault()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+
+                Spacer()
+            }
+
+            Text(L10n.tr("settings.appIcon.hint"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .onDrop(of: [.fileURL, .image], isTargeted: $isDropTargeted) { providers in
+            handleDrop(providers)
+        }
+    }
+
+    private func chooseCustomAppIcon() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.image]
+        panel.prompt = L10n.tr("common.choose")
+
+        presentSettingsFilePanel(panel) { url in
+            guard let url else { return }
+            _ = iconManager.setCustomIcon(from: url)
+        }
+    }
+
+    private func pasteCustomAppIcon() {
+        let pb = NSPasteboard.general
+        if let images = pb.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
+           let img = images.first {
+            _ = iconManager.setCustomIcon(from: img)
+            return
+        }
+        if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           let first = urls.first,
+           let img = NSImage(contentsOf: first) {
+            _ = iconManager.setCustomIcon(from: img)
+            return
+        }
+        presentSettingsAlert(title: L10n.tr("error.icon.clipboardNoImage"))
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                guard let data = item as? Data,
+                      let url = URL(dataRepresentation: data, relativeTo: nil),
+                      let img = NSImage(contentsOf: url) else { return }
+                DispatchQueue.main.async {
+                    _ = iconManager.setCustomIcon(from: img)
+                }
+            }
+            return true
+        } else if provider.canLoadObject(ofClass: NSImage.self) {
+            _ = provider.loadObject(ofClass: NSImage.self) { object, _ in
+                guard let img = object as? NSImage else { return }
+                DispatchQueue.main.async {
+                    _ = iconManager.setCustomIcon(from: img)
+                }
+            }
+            return true
+        }
+        return false
+    }
+}
+
+private struct AppIconCard: View {
+    let preset: AppIconPreset
+    let isSelected: Bool
+    let hasCustomIcon: Bool
+    let image: NSImage?
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                ZStack {
+                    if preset == .custom && !hasCustomIcon {
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 58, height: 58)
+                            .background(
+                                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                            )
+                            .overlay(
+                                Image(systemName: "photo.badge.plus")
+                                    .font(.system(size: 20))
+                                    .foregroundStyle(.secondary)
+                            )
+                    } else if let image {
+                        Image(nsImage: image)
+                            .resizable()
+                            .interpolation(.high)
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 58, height: 58)
+                            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                            .shadow(color: Color.black.opacity(0.12), radius: 3, x: 0, y: 1.5)
+                    } else {
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .fill(Color.gray.opacity(0.2))
+                            .frame(width: 58, height: 58)
+                    }
+
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 15, style: .continuous)
+                            .stroke(Color.accentColor, lineWidth: 2.5)
+                            .frame(width: 64, height: 64)
+
+                        VStack {
+                            HStack {
+                                Spacer()
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 15, weight: .bold))
+                                    .foregroundStyle(.white, Color.accentColor)
+                                    .shadow(radius: 2)
+                                    .offset(x: 4, y: -4)
+                            }
+                            Spacer()
+                        }
+                        .frame(width: 64, height: 64)
+                    }
+                }
+                .frame(width: 66, height: 66)
+
+                Text(preset.title)
+                    .font(.caption)
+                    .fontWeight(isSelected ? .semibold : .regular)
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .lineLimit(1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
 
 private struct LayoutSettingsView: View {
     @ObservedObject var store: AppStore
@@ -1116,6 +1328,7 @@ private struct ApplicationSettingsView: View {
 /// 关于页（版本、检查更新、作者与社区链接、版权）。
 private struct AboutSettingsView: View {
     @ObservedObject private var updater = Updater.shared
+    @ObservedObject private var iconManager = QLaunchpadSelfIconManager.shared
 
     private static let githubURL = "https://github.com/qzrzz/QLaunch"
     private static let myGithubURL = "https://github.com/BiKing567/QLaunch"
@@ -1129,16 +1342,8 @@ private struct AboutSettingsView: View {
         return "v\(short) (\(build))"
     }
 
-    /// Prefer the system-rendered app icon (Assets.car / icns → 投影与圆角).
     private var appIcon: NSImage {
-        let bundleURL = Bundle.main.bundleURL
-        if bundleURL.pathExtension == "app" {
-            let systemIcon = NSWorkspace.shared.icon(forFile: bundleURL.path)
-            if systemIcon.size.width > 0 {
-                return systemIcon
-            }
-        }
-        return QLaunchpadAppIcon.image ?? NSApplication.shared.applicationIconImage
+        iconManager.currentAppIcon
     }
 
     var body: some View {
@@ -1162,6 +1367,8 @@ private struct AboutSettingsView: View {
                 .interpolation(.high)
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 96, height: 96)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .shadow(color: Color.black.opacity(0.12), radius: 4, x: 0, y: 2)
 
             Text("QLaunch")
                 .font(.title.weight(.bold))
@@ -1427,10 +1634,12 @@ private struct AboutSettingsView: View {
 
 // MARK: - 7. 通用辅助组件与函数
 
-private func presentSettingsAlert(title: String, message: String) {
+private func presentSettingsAlert(title: String, message: String = "") {
     let alert = NSAlert()
     alert.messageText = title
-    alert.informativeText = message
+    if !message.isEmpty {
+        alert.informativeText = message
+    }
     alert.addButton(withTitle: L10n.tr("common.ok"))
     presentSettingsAlert(alert)
 }

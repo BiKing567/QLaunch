@@ -12,12 +12,14 @@ enum QLaunchpadPreferences {
     static let showDockIconKey = "showDockIcon"
     static let loopPagesKey = "loopPages"
     static let showDockInLaunchpadKey = "showDockInLaunchpad"
+    static let selfAppIconPresetKey = "selfAppIconPreset"
 
     // Default to a Dock-visible app. The menu bar icon is opt-in.
     static let defaultShowMenuBarIcon = false
     static let defaultShowDockIcon = true
     static let defaultLoopPages = true
     static let defaultShowDockInLaunchpad = false
+    static let defaultSelfAppIconPreset = "default"
 }
 
 extension LaunchpadSafeInsets {

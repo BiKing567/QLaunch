@@ -244,3 +244,17 @@
 "error.icon.generate" = "アイコン画像を生成できません。";
 "error.icon.invalidImage" = "選択した画像を読み込めませんでした。有効な画像ファイルを選択してください。";
 "error.icon.clipboardNoImage" = "クリップボードに有効な画像がありません。";
+"settings.section.appIcon" = "アプリアイコン";
+"settings.appIcon.title" = "QLaunch アイコン";
+"settings.appIcon.generalDetail" = "Dockやバージョン情報に表示されるアイコンを変更";
+"settings.appIcon.default" = "オリジナル";
+"settings.appIcon.dark" = "ダークグラス";
+"settings.appIcon.clearDark" = "クリアダーク";
+"settings.appIcon.clearLight" = "クリアライト";
+"settings.appIcon.glass" = "すりガラス";
+"settings.appIcon.tinted" = "ティンテッド";
+"settings.appIcon.custom" = "カスタム";
+"settings.appIcon.chooseCustom" = "画像を選択…";
+"settings.appIcon.pasteFromClipboard" = "クリップボードから貼り付け";
+"settings.appIcon.resetDefault" = "デフォルトに戻す";
+"settings.appIcon.hint" = "アプリアイコンを変更すると、Dockアイコンとバージョン情報画面がリアルタイムに更新されます。";
