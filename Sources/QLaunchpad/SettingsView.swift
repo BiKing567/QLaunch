@@ -1452,7 +1452,7 @@ private struct AboutSettingsView: View {
 
                 linkRow(
                     title: L10n.tr("about.xiaohongshu"),
-                    subtitle: "qzrzz",
+                    subtitle: "ML",
                     url: Self.xiaohongshuURL,
                     icon: templateIcon("RemixXiaohongshu", systemFallback: "book.fill", tint: .red)
                 )
