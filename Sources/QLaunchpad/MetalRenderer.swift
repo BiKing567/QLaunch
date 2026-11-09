@@ -545,7 +545,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private let folderOpenDuration: CFTimeInterval = 0.46
     private let folderCloseDuration: CFTimeInterval = 0.38
     private let materialHandoffDuration: CFTimeInterval = 0.08
-    private let closingHandoffEndLead: CFTimeInterval = 0.12
+    private let closingHandoffEndLead: CFTimeInterval = 0.0
 
     private struct PendingFolderOpen {
         let folderID: String

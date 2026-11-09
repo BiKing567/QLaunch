@@ -290,14 +290,14 @@ final class FolderPreviewCompositeCache {
         ctx.clip()
 
         let fillColor = isDark
-            ? NSColor(white: 0.34, alpha: 0.55).cgColor
+            ? NSColor(white: 0.34, alpha: 0.40).cgColor
             : NSColor(white: 1.0, alpha: 0.42).cgColor
         ctx.setFillColor(fillColor)
         ctx.addPath(platePath)
         ctx.fillPath()
 
         let borderColor = isDark
-            ? NSColor(white: 1.0, alpha: 0.18).cgColor
+            ? NSColor(white: 1.0, alpha: 0.15).cgColor
             : NSColor(white: 1.0, alpha: 0.45).cgColor
         ctx.setStrokeColor(borderColor)
         ctx.setLineWidth(1.0 * scale)
@@ -1078,8 +1078,8 @@ private final class FolderGlassPlateItemView: NSView {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             if isDark {
-                sunkPlateView.layer?.backgroundColor = NSColor(white: 0.34, alpha: 0.55).cgColor
-                sunkPlateView.layer?.borderColor = NSColor(white: 1.0, alpha: 0.18).cgColor
+                sunkPlateView.layer?.backgroundColor = NSColor(white: 0.34, alpha: 0.40).cgColor
+                sunkPlateView.layer?.borderColor = NSColor(white: 1.0, alpha: 0.15).cgColor
             } else {
                 sunkPlateView.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.42).cgColor
                 sunkPlateView.layer?.borderColor = NSColor(white: 1.0, alpha: 0.45).cgColor
@@ -1647,10 +1647,7 @@ private final class FolderGlassPlateItemView: NSView {
                 let glassAlpha = 1.0 - smoothT
                 glassEffectView?.alphaValue = glassAlpha
                 glassEffectView?.isHidden = (currentMaterialStyle == .regular)
-                // Keep contentView at 1.0 so backdropView (above, opacity smoothT)
-                // composites over contentView with exact partition of unity:
-                // smoothT + (1 - smoothT) == 1.0.
-                contentView.alphaValue = 1.0
+                contentView.alphaValue = glassAlpha
                 contentView.isHidden = false
                 sunkContainerView.isHidden = false
             }
