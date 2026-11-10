@@ -16,7 +16,7 @@
   <b>This branch is based on <a href="https://github.com/qzrzz/QLaunch">qzrzz/QLaunch</a>, featuring deep refactorings and optimizations for trackpad gestures, animation continuity, and stability.</b>
 </p>
 
-- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.4.0)](https://github.com/BiKing567/QLaunch/releases)
+- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.4.1)](https://github.com/BiKing567/QLaunch/releases)
 - 🏠 **Original Project Homepage**: [https://qzrzz.com/QLaunch/](https://qzrzz.com/QLaunch/)
 - 🔗 **Original Project Repository**: [https://github.com/qzrzz/QLaunch](https://github.com/qzrzz/QLaunch)
 
@@ -30,6 +30,11 @@
 ## 🌟 Key Improvements & Features in this Fork
 
 Built upon the excellent foundation of the original QLaunch, this fork deeply addresses multi-finger trackpad gestures, micro-interaction animation details, and system compatibility:
+
+### 🎨 Custom App Icons, QLaunch Self-Icon Presets & Folder Transition Polish (V1.4.1)
+- **6-Page Settings Redesign & Custom App Icon Management**: Reorganized the Settings window into 6 clean sidebar sections and added a dedicated Icon Management page to customize individual app icons or restore defaults at any time.
+- **Adaptive QLaunch App Icon Presets**: Added built-in QLaunch self-icon customization with 3 crafted presets (Default, System Apps Style, and Classic Launchpad Rocket) plus custom image support. Built-in presets feature G2 continuous superellipse squircle corners, native drop shadows, and automatic Dark/Light mode adaptation.
+- **Refined Dark Mode Folder Mask & Seamless Thumbnail Handover**: Lightened the background folder sunken baseplate mask in Dark Mode for cleaner contrast, synchronized live 9-grid thumbnail opacity with the frosted glass fade curve during folder open/close transitions to eliminate abrupt jumps, and fixed stale thumbnail caching across theme switches.
 
 ### 🚀 Live Dark/Light Mode Icon Hot-Switching & Folder Boost (V1.4.0)
 - **Live Dark/Light Mode Icon Hot-Switching**: Real-time appearance tracking with an 180ms smooth bidirectional crossfade between dark and light icon variants, eliminating blank icon flashes during theme changes.
