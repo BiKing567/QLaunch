@@ -16,7 +16,7 @@
   <b>本分支基于 <a href="https://github.com/qzrzz/QLaunch">qzrzz/QLaunch</a> 进行了多项手势、动画与稳定性的深度重构优化。</b>
 </p>
 
-- 📦 **本分支最新下载**：[BiKing567/QLaunch Releases (V1.4.1)](https://github.com/BiKing567/QLaunch/releases)
+- 📦 **本分支最新下载**：[BiKing567/QLaunch Releases (V1.4.2)](https://github.com/BiKing567/QLaunch/releases)
 - 🏠 **原项目主页**：[https://qzrzz.com/QLaunch/](https://qzrzz.com/QLaunch/)
 - 🔗 **原项目仓库**：[https://github.com/qzrzz/QLaunch](https://github.com/qzrzz/QLaunch)
 
@@ -30,6 +30,9 @@
 ## 🌟 本分支重点改进与优化
 
 本项目在原版 QLaunch 的优秀基础上，针对触控板多指手势、动画交互细节、系统原生兼容性进行了全面深度优化与修复：
+
+### ✨ 优化 macOS 26 的液态玻璃效果 (V1.4.2)
+- 优化 macOS 26 的液态玻璃效果。
 
 ### 🎨 自定义图标管理、启动台自身图标切换与文件夹过渡优化 (V1.4.1)
 - **设置窗口 6 栏重构与应用图标自定义**：将设置面板精炼重构为 6 个清晰的侧栏分页，新增「图标管理」专页，支持为任意应用单独更换自定义图标并随时一键恢复默认。

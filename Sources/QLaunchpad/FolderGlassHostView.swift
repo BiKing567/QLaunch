@@ -944,7 +944,10 @@ private final class FolderGlassPlateItemView: NSView {
 
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView(frame: bounds)
-            glass.style = .regular
+            let isMacOS26 =
+                ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 26
+
+            glass.style = isMacOS26 ? .clear : .regular
             if #available(macOS 27.0, *) {
                 glass.effectIsInteractive = false
             }
