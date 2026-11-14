@@ -154,6 +154,9 @@
 "layout.auto" = "自動レイアウト";
 "layout.profile.default" = "デフォルト";
 "layout.profile.new" = "新規レイアウト";
+"layout.pagination.title" = "ページネーション";
+"layout.pagination.continuous" = "連続ページ";
+"layout.pagination.customPages" = "カスタムページ";
 "layout.name" = "レイアウト名";
 "layout.create.title" = "新規レイアウト";
 "layout.create.detail" = "新しいレイアウトに現在の並び順とグループをコピーします。";

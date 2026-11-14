@@ -154,6 +154,9 @@
 "layout.auto" = "Automatic Layouts";
 "layout.profile.default" = "Default";
 "layout.profile.new" = "New Layout";
+"layout.pagination.title" = "Pagination";
+"layout.pagination.continuous" = "Continuous";
+"layout.pagination.customPages" = "Custom Pages";
 "layout.name" = "Layout Name";
 "layout.create.title" = "New Layout";
 "layout.create.detail" = "The new layout will copy the current order and groups.";

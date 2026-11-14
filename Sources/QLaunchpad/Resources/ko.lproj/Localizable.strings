@@ -154,6 +154,9 @@
 "layout.auto" = "자동 레이아웃";
 "layout.profile.default" = "기본";
 "layout.profile.new" = "새 레이아웃";
+"layout.pagination.title" = "페이지 매김";
+"layout.pagination.continuous" = "연속 페이지";
+"layout.pagination.customPages" = "사용자 지정 페이지";
 "layout.name" = "레이아웃 이름";
 "layout.create.title" = "새 레이아웃";
 "layout.create.detail" = "새 레이아웃에 현재 순서와 그룹을 복사합니다.";

@@ -15,7 +15,13 @@ public enum LaunchpadLayoutImporter {
         scanned: [LaunchpadKnownApp],
         currentHidden: Set<String>
     ) throws -> (
-        layout: (folders: [AppFolder], order: [String], hidden: Set<String>),
+        layout: (
+            folders: [AppFolder],
+            order: [String],
+            hidden: Set<String>,
+            paginationType: LaunchpadLayoutPaginationType,
+            pages: [LaunchpadCustomPage]?
+        ),
         report: LaunchpadLayoutReport
     ) {
         try validate(document)
@@ -134,8 +140,15 @@ public enum LaunchpadLayoutImporter {
             unhiddenByClaim: unhiddenByClaim,
             newlyHiddenByReplace: newlyHiddenByReplace
         )
+        let paginationType = document.paginationType ?? .continuous
         return (
-            layout: (folders: reconciled.folders, order: reconciled.order, hidden: finalHidden),
+            layout: (
+                folders: reconciled.folders,
+                order: reconciled.order,
+                hidden: finalHidden,
+                paginationType: paginationType,
+                pages: document.pages
+            ),
             report: report
         )
     }
@@ -144,7 +157,7 @@ public enum LaunchpadLayoutImporter {
         if document.kind != LaunchpadLayoutKind.current {
             throw LaunchpadLayoutError.invalidKind(document.kind)
         }
-        if document.schemaVersion != LaunchpadLayoutKind.schemaVersion {
+        if document.schemaVersion < 1 || document.schemaVersion > LaunchpadLayoutKind.schemaVersion {
             throw LaunchpadLayoutError.unsupportedSchemaVersion(document.schemaVersion)
         }
         if document.items.count > maxItems {

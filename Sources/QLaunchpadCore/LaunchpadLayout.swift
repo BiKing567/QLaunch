@@ -2,7 +2,22 @@ import Foundation
 
 public enum LaunchpadLayoutKind {
     public static let current = "qlaunchpad.layout"
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
+}
+
+public enum LaunchpadLayoutPaginationType: String, Codable, Sendable, CaseIterable {
+    case continuous
+    case customPages
+}
+
+public struct LaunchpadCustomPage: Equatable, Codable, Sendable, Identifiable {
+    public var id: String
+    public var itemIDs: [String]
+
+    public init(id: String = UUID().uuidString, itemIDs: [String] = []) {
+        self.id = id
+        self.itemIDs = itemIDs
+    }
 }
 
 public struct LaunchpadLayoutDocument: Equatable, Sendable {
@@ -11,6 +26,8 @@ public struct LaunchpadLayoutDocument: Equatable, Sendable {
     public var exportedAt: Date?
     public var appVersion: String?
     public var grid: LaunchpadLayoutGrid?
+    public var paginationType: LaunchpadLayoutPaginationType?
+    public var pages: [LaunchpadCustomPage]?
     public var items: [LaunchpadLayoutItem]
     public var hidden: [String]?
     public var catalog: [LaunchpadLayoutCatalogEntry]?
@@ -21,6 +38,8 @@ public struct LaunchpadLayoutDocument: Equatable, Sendable {
         exportedAt: Date? = nil,
         appVersion: String? = nil,
         grid: LaunchpadLayoutGrid? = nil,
+        paginationType: LaunchpadLayoutPaginationType? = nil,
+        pages: [LaunchpadCustomPage]? = nil,
         items: [LaunchpadLayoutItem],
         hidden: [String]? = nil,
         catalog: [LaunchpadLayoutCatalogEntry]? = nil
@@ -30,6 +49,8 @@ public struct LaunchpadLayoutDocument: Equatable, Sendable {
         self.exportedAt = exportedAt
         self.appVersion = appVersion
         self.grid = grid
+        self.paginationType = paginationType
+        self.pages = pages
         self.items = items
         self.hidden = hidden
         self.catalog = catalog
@@ -155,6 +176,8 @@ extension LaunchpadLayoutDocument: Codable {
         case exportedAt
         case appVersion
         case grid
+        case paginationType
+        case pages
         case items
         case hidden
         case catalog
@@ -167,7 +190,9 @@ extension LaunchpadLayoutDocument: Codable {
         exportedAt = try container.decodeIfPresent(Date.self, forKey: .exportedAt)
         appVersion = try container.decodeIfPresent(String.self, forKey: .appVersion)
         grid = try container.decodeIfPresent(LaunchpadLayoutGrid.self, forKey: .grid)
-        items = try container.decode([LaunchpadLayoutItem].self, forKey: .items)
+        paginationType = try container.decodeIfPresent(LaunchpadLayoutPaginationType.self, forKey: .paginationType)
+        pages = try container.decodeIfPresent([LaunchpadCustomPage].self, forKey: .pages)
+        items = try container.decodeIfPresent([LaunchpadLayoutItem].self, forKey: .items) ?? []
         hidden = try container.decodeIfPresent([String].self, forKey: .hidden)
         catalog = try container.decodeIfPresent([LaunchpadLayoutCatalogEntry].self, forKey: .catalog)
     }
@@ -179,6 +204,8 @@ extension LaunchpadLayoutDocument: Codable {
         try container.encodeIfPresent(exportedAt, forKey: .exportedAt)
         try container.encodeIfPresent(appVersion, forKey: .appVersion)
         try container.encodeIfPresent(grid, forKey: .grid)
+        try container.encodeIfPresent(paginationType, forKey: .paginationType)
+        try container.encodeIfPresent(pages, forKey: .pages)
         try container.encode(items, forKey: .items)
         try container.encodeIfPresent(hidden, forKey: .hidden)
         try container.encodeIfPresent(catalog, forKey: .catalog)

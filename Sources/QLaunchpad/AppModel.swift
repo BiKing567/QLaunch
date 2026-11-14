@@ -538,6 +538,8 @@ final class AppStore: ObservableObject {
     @Published private(set) var customApplicationSourcePaths: [String]
     @Published private(set) var layoutProfiles: [LaunchpadLayoutProfile]
     @Published private(set) var activeLayoutProfileID: String
+    @Published private(set) var paginationType: LaunchpadLayoutPaginationType = .continuous
+    @Published private(set) var customPages: [LaunchpadCustomPage] = []
     @Published private(set) var layoutMode: LaunchpadLayoutMode
     @Published var showHiddenAppsInSearch: Bool {
         didSet {
@@ -647,6 +649,15 @@ final class AppStore: ObservableObject {
     /// refreshed outside a presentation animation (currently recent launches).
     private var deferredAutoLayoutKinds = Set<LaunchpadAutoLayoutKind>()
 
+    private struct DragLayoutSnapshot {
+        let itemOrderIDs: [String]
+        let customPages: [LaunchpadCustomPage]
+        let folders: [AppFolder]
+    }
+    private var dragLayoutSnapshot: DragLayoutSnapshot?
+    private(set) var isDragSessionActive = false
+    private(set) var tentativePageID: String?
+
     private static var preferenceDomain: String {
         let domain = Bundle.main.bundleIdentifier ?? (kCFPreferencesCurrentApplication as String)
         if domain == LaunchpadPreferenceStore.releaseDomain || domain == LaunchpadPreferenceStore.developmentDomain {
@@ -661,6 +672,7 @@ final class AppStore: ObservableObject {
         hiddenAppIDs = Set(layout.hiddenIDs)
         itemOrderIDs = layout.itemOrder
         folders = (try? LaunchpadPreferenceStore.decodeFolders(layout.foldersData)) ?? []
+        paginationType = layout.paginationType
         let profileIndex = LaunchpadLayoutProfileStore.loadIndex(domain: Self.preferenceDomain)
         layoutProfiles = profileIndex.profiles
         activeLayoutProfileID = profileIndex.activeID
@@ -676,6 +688,16 @@ final class AppStore: ObservableObject {
             recentLaunchDates = rawDates.mapValues { Date(timeIntervalSince1970: $0) }
         } else {
             recentLaunchDates = [:]
+        }
+
+        if let pagesData = layout.pagesData,
+           let decoded = try? LaunchpadPreferenceStore.decodePages(pagesData) {
+            customPages = decoded
+        } else if paginationType == .customPages {
+            customPages = LaunchpadCustomPageReconciler.chunkItems(
+                itemOrderIDs,
+                capacity: pageCapacity
+            )
         }
 
         // Restore cached catalog snapshot before building items so initial
@@ -710,8 +732,15 @@ final class AppStore: ObservableObject {
         autoLayoutTasks.values.forEach { $0.cancel() }
     }
 
+    var isCustomPagingActive: Bool {
+        openedFolderID == nil && !isSearching && layoutMode.isUser && paginationType == .customPages
+    }
+
     var pageCount: Int {
-        max(1, Int(ceil(Double(max(activeDisplayItems.count, 1)) / Double(pageCapacity))))
+        if isCustomPagingActive {
+            return max(1, customPages.count)
+        }
+        return max(1, Int(ceil(Double(max(activeDisplayItems.count, 1)) / Double(pageCapacity))))
     }
 
     var currentPage: Int {
@@ -957,6 +986,14 @@ final class AppStore: ObservableObject {
             : nil
         let preset = GridLayoutPreset.current
         let exportedRows = preset.exportedRows(itemCount: items.count)
+        let exportedPages: [LaunchpadCustomPage]? = isCustomPagingActive
+            ? customPages.map { page in
+                LaunchpadCustomPage(
+                    id: page.id,
+                    itemIDs: page.itemIDs.map(sanitize)
+                )
+            }
+            : nil
         return LaunchpadLayoutDocument(
             exportedAt: Date(),
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
@@ -966,6 +1003,8 @@ final class AppStore: ObservableObject {
                 rows: exportedRows,
                 pageCapacity: preset.columns * exportedRows
             ),
+            paginationType: isCustomPagingActive ? .customPages : .continuous,
+            pages: exportedPages,
             items: items,
             hidden: hiddenAppIDs.map(sanitize).sorted(),
             catalog: catalog
@@ -1030,17 +1069,36 @@ final class AppStore: ObservableObject {
             writeLayoutBackupFailOpen()
         }
         let hiddenBeforeImport = hiddenAppIDs
+        paginationType = applied.paginationType
+        if let importedPages = applied.pages, paginationType == .customPages {
+            customPages = LaunchpadCustomPageReconciler.reconcile(
+                pages: importedPages,
+                rootItemIDs: applied.order,
+                capacity: pageCapacity
+            )
+            itemOrderIDs = customPages.flatMap(\.itemIDs)
+        } else if paginationType == .customPages {
+            customPages = LaunchpadCustomPageReconciler.chunkItems(applied.order, capacity: pageCapacity)
+            itemOrderIDs = customPages.flatMap(\.itemIDs)
+        } else {
+            customPages = []
+            itemOrderIDs = applied.order
+        }
+        let pagesData = paginationType == .customPages
+            ? try? LaunchpadPreferenceStore.encodePages(customPages)
+            : nil
         let foldersData = try LaunchpadPreferenceStore.encodeFolders(applied.folders)
         LaunchpadPreferenceStore.writeLayout(
             domain: Self.preferenceDomain,
             LaunchpadPersistedLayout(
-                itemOrder: applied.order,
+                itemOrder: itemOrderIDs,
                 foldersData: foldersData,
-                hiddenIDs: Array(applied.hidden)
+                hiddenIDs: Array(applied.hidden),
+                paginationType: paginationType,
+                pagesData: pagesData
             )
         )
         folders = applied.folders
-        itemOrderIDs = applied.order
         hiddenAppIDs = applied.hidden
         layoutMode = .user
         if hiddenAppIDs != hiddenBeforeImport {
@@ -1156,12 +1214,28 @@ final class AppStore: ObservableObject {
         persistRecentLaunches()
     }
 
-    func createLayoutProfile(named name: String) throws {
+    func createLayoutProfile(
+        named name: String,
+        paginationType: LaunchpadLayoutPaginationType = .continuous
+    ) throws {
         guard let name = LaunchpadLayoutProfileStore.normalizedName(name) else {
             throw LaunchpadLayoutProfileError.emptyName
         }
         try snapshotActiveLayoutProfile()
-        let profile = LaunchpadLayoutProfile(id: UUID().uuidString, name: name)
+        let profile = LaunchpadLayoutProfile(
+            id: UUID().uuidString,
+            name: name,
+            paginationType: paginationType
+        )
+        self.paginationType = paginationType
+        if paginationType == .customPages && customPages.isEmpty {
+            customPages = LaunchpadCustomPageReconciler.chunkItems(
+                itemOrderIDs,
+                capacity: pageCapacity
+            )
+        } else if paginationType == .continuous {
+            customPages = []
+        }
         try LaunchpadLayoutProfileStore.writeDocument(
             exportLayout(),
             in: layoutProfilesDirectory,
@@ -1172,6 +1246,27 @@ final class AppStore: ObservableObject {
         layoutMode = .user
         persistLayoutMode()
         try persistLayoutProfileIndex()
+        persistLayout()
+        rebuildLaunchpadItems()
+        NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
+    }
+
+    func setPaginationType(_ newType: LaunchpadLayoutPaginationType) {
+        guard allowsUserLayoutEditing, paginationType != newType else { return }
+        paginationType = newType
+        if newType == .customPages {
+            customPages = LaunchpadCustomPageReconciler.chunkItems(itemOrderIDs, capacity: pageCapacity)
+        } else {
+            itemOrderIDs = customPages.flatMap(\.itemIDs)
+            customPages = []
+        }
+        if let profileIndex = layoutProfiles.firstIndex(where: { $0.id == activeLayoutProfileID }) {
+            layoutProfiles[profileIndex].paginationType = newType
+            try? persistLayoutProfileIndex()
+        }
+        persistLayout()
+        rebuildLaunchpadItems()
+        NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
     }
 
     func deleteLayoutProfile(_ id: String) throws {
@@ -1315,6 +1410,15 @@ final class AppStore: ObservableObject {
     }
 
     func applyGridLayoutChange() {
+        if paginationType == .customPages {
+            customPages = LaunchpadCustomPageReconciler.reconcile(
+                pages: customPages,
+                rootItemIDs: itemOrderIDs,
+                capacity: pageCapacity
+            )
+            itemOrderIDs = customPages.flatMap(\.itemIDs)
+            persistLayout()
+        }
         pageOffset = 0
         targetPage = 0
         pageVelocity = 0
@@ -1377,6 +1481,11 @@ final class AppStore: ObservableObject {
     }
 
     func focusFirstAppOnCurrentPage() {
+        if isCustomPagingActive {
+            keyboardFocusID = items(onPage: currentPage).first?.id
+            NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
+            return
+        }
         let items = activeDisplayItems
         guard !items.isEmpty else {
             keyboardFocusID = nil
@@ -1388,6 +1497,87 @@ final class AppStore: ObservableObject {
     }
 
     func moveKeyboardFocus(_ direction: GridNavigationDirection) {
+        if isCustomPagingActive {
+            let pageItems = items(onPage: currentPage)
+            guard !pageItems.isEmpty else {
+                keyboardFocusID = nil
+                isKeyboardNavigationActive = false
+                return
+            }
+            if !isKeyboardNavigationActive {
+                isKeyboardNavigationActive = true
+                keyboardFocusID = pageItems.first?.id
+                NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
+                return
+            }
+            let currentLocal = keyboardFocusID.flatMap { id in
+                pageItems.firstIndex(where: { $0.id == id })
+            } ?? 0
+            let navigationColumns = GridMetrics.columns
+            let row = currentLocal / navigationColumns
+            let column = currentLocal % navigationColumns
+
+            switch direction {
+            case .left:
+                if column > 0 {
+                    keyboardFocusID = pageItems[currentLocal - 1].id
+                } else if currentPage > 0 {
+                    let prevPage = currentPage - 1
+                    let prevItems = items(onPage: prevPage)
+                    if !prevItems.isEmpty {
+                        let targetSlot = min(row * navigationColumns + navigationColumns - 1, prevItems.count - 1)
+                        keyboardFocusID = prevItems[targetSlot].id
+                        goToPage(prevPage)
+                        return
+                    }
+                } else if loopPages && pageCount > 1 {
+                    let lastPage = pageCount - 1
+                    let lastItems = items(onPage: lastPage)
+                    if !lastItems.isEmpty {
+                        let targetSlot = min(row * navigationColumns + navigationColumns - 1, lastItems.count - 1)
+                        keyboardFocusID = lastItems[targetSlot].id
+                        goToPage(lastPage)
+                        return
+                    }
+                }
+            case .right:
+                if column + 1 < navigationColumns, currentLocal + 1 < pageItems.count {
+                    keyboardFocusID = pageItems[currentLocal + 1].id
+                } else if currentPage + 1 < pageCount {
+                    let nextPage = currentPage + 1
+                    let nextItems = items(onPage: nextPage)
+                    if !nextItems.isEmpty {
+                        let targetSlot = min(row * navigationColumns, nextItems.count - 1)
+                        keyboardFocusID = nextItems[targetSlot].id
+                        goToPage(nextPage)
+                        return
+                    }
+                } else if loopPages && pageCount > 1 {
+                    let nextItems = items(onPage: 0)
+                    if !nextItems.isEmpty {
+                        let targetSlot = min(row * navigationColumns, nextItems.count - 1)
+                        keyboardFocusID = nextItems[targetSlot].id
+                        goToPage(0)
+                        return
+                    }
+                }
+            case .up:
+                if row > 0 {
+                    let target = currentLocal - navigationColumns
+                    if pageItems.indices.contains(target) {
+                        keyboardFocusID = pageItems[target].id
+                    }
+                }
+            case .down:
+                let target = currentLocal + navigationColumns
+                if pageItems.indices.contains(target) {
+                    keyboardFocusID = pageItems[target].id
+                }
+            }
+            NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
+            return
+        }
+
         let items = activeDisplayItems
         guard !items.isEmpty else {
             keyboardFocusID = nil
@@ -1849,6 +2039,18 @@ final class AppStore: ObservableObject {
     }
 
     private func ensureKeyboardFocus(onPage page: Int) {
+        if isCustomPagingActive {
+            let pageItems = items(onPage: page)
+            guard !pageItems.isEmpty else {
+                keyboardFocusID = nil
+                return
+            }
+            if let id = keyboardFocusID, pageItems.contains(where: { $0.id == id }) {
+                return
+            }
+            keyboardFocusID = pageItems.first?.id
+            return
+        }
         let items = activeDisplayItems
         guard !items.isEmpty else {
             keyboardFocusID = nil
@@ -1861,6 +2063,170 @@ final class AppStore: ObservableObject {
         }
         let start = min(page * pageCapacity, items.count - 1)
         keyboardFocusID = items[start].id
+    }
+
+    // MARK: Centralized Queries
+
+    func item(withID id: String) -> LaunchpadItem? {
+        if let folder = folder(withID: id) { return .folder(folder) }
+        if let app = app(withID: id) { return .app(app) }
+        return nil
+    }
+
+    func items(onPage page: Int) -> [LaunchpadItem] {
+        if isCustomPagingActive {
+            guard customPages.indices.contains(page) else { return [] }
+            return customPages[page].itemIDs.compactMap { item(withID: $0) }
+        }
+        let items = activeDisplayItems
+        let start = page * pageCapacity
+        guard start < items.count else { return [] }
+        let end = min(start + pageCapacity, items.count)
+        return Array(items[start..<end])
+    }
+
+    func gridPosition(for itemID: String) -> (page: Int, slot: Int)? {
+        if isCustomPagingActive {
+            for (pageIndex, page) in customPages.enumerated() {
+                if let slot = page.itemIDs.firstIndex(of: itemID) {
+                    return (page: pageIndex, slot: slot)
+                }
+            }
+            return nil
+        }
+        let items = activeDisplayItems
+        guard let index = items.firstIndex(where: { $0.id == itemID }) else { return nil }
+        return (page: index / pageCapacity, slot: index % pageCapacity)
+    }
+
+    func item(atPage page: Int, slot: Int) -> LaunchpadItem? {
+        guard slot >= 0 && slot < pageCapacity else { return nil }
+        if isCustomPagingActive {
+            guard customPages.indices.contains(page) else { return nil }
+            let page = customPages[page]
+            guard slot < page.itemIDs.count else { return nil }
+            return item(withID: page.itemIDs[slot])
+        }
+        let index = page * pageCapacity + slot
+        let items = activeDisplayItems
+        guard items.indices.contains(index) else { return nil }
+        return items[index]
+    }
+
+    func gridSlotIndex(for itemID: String) -> Int? {
+        guard let pos = gridPosition(for: itemID) else { return nil }
+        return pos.page * pageCapacity + pos.slot
+    }
+
+    // MARK: Drag Session
+
+    func beginDragSession() {
+        guard dragLayoutSnapshot == nil else { return }
+        dragLayoutSnapshot = DragLayoutSnapshot(
+            itemOrderIDs: itemOrderIDs,
+            customPages: customPages,
+            folders: folders
+        )
+        isDragSessionActive = true
+        tentativePageID = nil
+    }
+
+    func appendTentativePage() {
+        guard isCustomPagingActive else { return }
+        guard tentativePageID == nil else { return }
+        let newPage = LaunchpadCustomPage()
+        tentativePageID = newPage.id
+        customPages.append(newPage)
+        NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
+    }
+
+    func previewMoveItem(id: String, toPage targetPage: Int, targetSlot: Int) {
+        guard isCustomPagingActive,
+              customPages.indices.contains(targetPage) else { return }
+        guard let sourcePos = gridPosition(for: id) else { return }
+        let sourcePage = sourcePos.page
+        let sourceSlot = sourcePos.slot
+
+        let clampedTargetSlot = min(max(0, targetSlot), customPages[targetPage].itemIDs.count)
+        if sourcePage == targetPage && sourceSlot == clampedTargetSlot { return }
+
+        customPages[sourcePage].itemIDs.remove(at: sourceSlot)
+        let insertionIndex = min(clampedTargetSlot, customPages[targetPage].itemIDs.count)
+        customPages[targetPage].itemIDs.insert(id, at: insertionIndex)
+
+        LaunchpadCustomPageReconciler.cascadeOverflow(
+            pages: &customPages,
+            startingAt: targetPage,
+            capacity: pageCapacity
+        )
+        itemOrderIDs = customPages.flatMap(\.itemIDs)
+        rebuildLaunchpadItems()
+        NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
+    }
+
+    func previewMoveItems(_ selectedIDs: [String], toPage targetPage: Int, targetSlot: Int) {
+        guard isCustomPagingActive,
+              customPages.indices.contains(targetPage),
+              !selectedIDs.isEmpty else { return }
+
+        let set = Set(selectedIDs)
+        var orderedSelected: [String] = []
+        for p in 0..<customPages.count {
+            let extracted = customPages[p].itemIDs.filter { set.contains($0) }
+            orderedSelected.append(contentsOf: extracted)
+            customPages[p].itemIDs.removeAll { set.contains($0) }
+        }
+        guard !orderedSelected.isEmpty else { return }
+
+        let insertionIndex = min(max(0, targetSlot), customPages[targetPage].itemIDs.count)
+        customPages[targetPage].itemIDs.insert(contentsOf: orderedSelected, at: insertionIndex)
+
+        LaunchpadCustomPageReconciler.cascadeOverflow(
+            pages: &customPages,
+            startingAt: targetPage,
+            capacity: pageCapacity
+        )
+        itemOrderIDs = customPages.flatMap(\.itemIDs)
+        rebuildLaunchpadItems()
+        NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
+    }
+
+    func endDragSession(committed: Bool) {
+        guard isDragSessionActive else { return }
+        isDragSessionActive = false
+        defer {
+            dragLayoutSnapshot = nil
+            tentativePageID = nil
+        }
+        guard let snapshot = dragLayoutSnapshot else { return }
+
+        if !committed {
+            itemOrderIDs = snapshot.itemOrderIDs
+            customPages = snapshot.customPages
+            folders = snapshot.folders
+            rebuildLaunchpadItems()
+            clampPageOffsetToCatalogBounds()
+            NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
+            return
+        }
+
+        if isCustomPagingActive {
+            let activeID = customPages.indices.contains(currentPage) ? customPages[currentPage].id : nil
+            let (pruned, newIndex) = LaunchpadCustomPageReconciler.pruneEmptyPages(
+                pages: customPages,
+                activePageID: activeID,
+                fallbackIndex: currentPage
+            )
+            customPages = pruned
+            itemOrderIDs = customPages.flatMap(\.itemIDs)
+            targetPage = Double(newIndex)
+            pageOffset = Double(newIndex)
+        }
+
+        persistLayout()
+        rebuildLaunchpadItems()
+        clampPageOffsetToCatalogBounds()
+        NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
     }
 
     // MARK: Reorder
@@ -1877,8 +2243,10 @@ final class AppStore: ObservableObject {
         let item = ids.remove(at: source)
         ids.insert(item, at: min(destination, ids.endIndex))
         itemOrderIDs = ids
-        persistItemOrder()
-        reconcileLaunchpadItems()
+        if !isDragSessionActive {
+            persistItemOrder()
+        }
+        reconcileLaunchpadItems(persist: !isDragSessionActive)
         NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
     }
 
@@ -1906,9 +2274,11 @@ final class AppStore: ObservableObject {
             remaining.insert(contentsOf: block, at: insertion)
             guard remaining != ids else { return }
             itemOrderIDs = remaining
-            persistItemOrder()
+            if !isDragSessionActive {
+                persistItemOrder()
+            }
         }
-        reconcileLaunchpadItems()
+        reconcileLaunchpadItems(persist: !isDragSessionActive)
         NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
     }
 
@@ -2270,6 +2640,18 @@ final class AppStore: ObservableObject {
         itemOrderIDs = layout.itemOrder
         hiddenAppIDs = Set(layout.hiddenIDs)
         folders = (try? LaunchpadPreferenceStore.decodeFolders(layout.foldersData)) ?? []
+        paginationType = layout.paginationType
+        if let pagesData = layout.pagesData,
+           let decoded = try? LaunchpadPreferenceStore.decodePages(pagesData) {
+            customPages = decoded
+        } else if paginationType == .customPages {
+            customPages = LaunchpadCustomPageReconciler.chunkItems(
+                itemOrderIDs,
+                capacity: pageCapacity
+            )
+        } else {
+            customPages = []
+        }
     }
 
     private func writeLayoutBackupFailOpen() {
@@ -2284,6 +2666,9 @@ final class AppStore: ObservableObject {
     }
 
     private func cancelActiveDrag() {
+        if isDragSessionActive {
+            endDragSession(committed: false)
+        }
         isDraggingFolderApp = false
         isFolderRemovalTargeted = false
         dragGeneration += 1
@@ -2297,7 +2682,16 @@ final class AppStore: ObservableObject {
             hidden: hiddenAppIDs
         )
         folders = result.folders
-        itemOrderIDs = result.order
+        if paginationType == .customPages {
+            customPages = LaunchpadCustomPageReconciler.reconcile(
+                pages: customPages,
+                rootItemIDs: result.order,
+                capacity: pageCapacity
+            )
+            itemOrderIDs = customPages.flatMap(\.itemIDs)
+        } else {
+            itemOrderIDs = result.order
+        }
         if persist {
             persistLayout()
         }
@@ -2329,12 +2723,17 @@ final class AppStore: ObservableObject {
         // a reconcile of `apps = []` would write an empty grid over a live import.
         guard !apps.isEmpty else { return }
         guard let foldersData = try? LaunchpadPreferenceStore.encodeFolders(folders) else { return }
+        let pagesData = paginationType == .customPages
+            ? try? LaunchpadPreferenceStore.encodePages(customPages)
+            : nil
         LaunchpadPreferenceStore.writeLayout(
             domain: Self.preferenceDomain,
             LaunchpadPersistedLayout(
                 itemOrder: itemOrderIDs,
                 foldersData: foldersData,
-                hiddenIDs: hiddenAppIDs.sorted()
+                hiddenIDs: hiddenAppIDs.sorted(),
+                paginationType: paginationType,
+                pagesData: pagesData
             )
         )
     }

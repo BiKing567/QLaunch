@@ -747,6 +747,20 @@ private struct LayoutSettingsView: View {
                                 || !store.canDeleteActiveLayoutProfile
                         )
                 }
+
+                if store.layoutMode.isUser {
+                    Picker(
+                        L10n.tr("layout.pagination.title"),
+                        selection: Binding(
+                            get: { store.paginationType },
+                            set: { store.setPaginationType($0) }
+                        )
+                    ) {
+                        Text(L10n.tr("layout.pagination.continuous")).tag(LaunchpadLayoutPaginationType.continuous)
+                        Text(L10n.tr("layout.pagination.customPages")).tag(LaunchpadLayoutPaginationType.customPages)
+                    }
+                    .pickerStyle(.segmented)
+                }
             }
 
             Section(L10n.tr("settings.section.importExport")) {
@@ -817,17 +831,35 @@ private struct LayoutSettingsView: View {
         alert.addButton(withTitle: L10n.tr("common.create"))
         alert.addButton(withTitle: L10n.tr("common.cancel"))
 
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 56))
+
         let field = NSTextField(string: suggestedNewLayoutName())
         field.placeholderString = L10n.tr("layout.name")
-        field.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+        field.frame = NSRect(x: 0, y: 32, width: 260, height: 24)
         field.isEditable = true
         field.bezelStyle = .roundedBezel
-        alert.accessoryView = field
+        container.addSubview(field)
+
+        let segmented = NSSegmentedControl(
+            labels: [
+                L10n.tr("layout.pagination.continuous"),
+                L10n.tr("layout.pagination.customPages")
+            ],
+            trackingMode: .selectOne,
+            target: nil,
+            action: nil
+        )
+        segmented.selectedSegment = store.paginationType == .customPages ? 1 : 0
+        segmented.frame = NSRect(x: 0, y: 0, width: 260, height: 24)
+        container.addSubview(segmented)
+
+        alert.accessoryView = container
 
         let complete: (NSApplication.ModalResponse) -> Void = { response in
             guard response == .alertFirstButtonReturn else { return }
             do {
-                try self.store.createLayoutProfile(named: field.stringValue)
+                let pagination: LaunchpadLayoutPaginationType = segmented.selectedSegment == 1 ? .customPages : .continuous
+                try self.store.createLayoutProfile(named: field.stringValue, paginationType: pagination)
             } catch {
                 presentSettingsAlert(title: L10n.tr("error.layout.create"), message: self.profileErrorMessage(error))
             }

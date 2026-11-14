@@ -360,6 +360,74 @@ final class LaunchpadLayoutTests: XCTestCase {
         XCTAssertEqual(resolved?.id, "com.example.Foo#/Users/alice/Applications/Foo Copy.app")
     }
 
+    func testDocumentSchemaV2RoundTripWithCustomPages() throws {
+        let page1 = LaunchpadCustomPage(id: "page-1", itemIDs: ["com.example.App1", "com.example.App2"])
+        let page2 = LaunchpadCustomPage(id: "page-2", itemIDs: ["com.example.App3"])
+        let doc = LaunchpadLayoutDocument(
+            paginationType: .customPages,
+            pages: [page1, page2],
+            items: [
+                .app(id: "com.example.App1"),
+                .app(id: "com.example.App2"),
+                .app(id: "com.example.App3")
+            ]
+        )
+        let encoder = LaunchpadLayoutDocument.makeEncoder(pretty: false)
+        let data = try encoder.encode(doc)
+        let decoder = LaunchpadLayoutDocument.makeDecoder()
+        let decoded = try decoder.decode(LaunchpadLayoutDocument.self, from: data)
+
+        XCTAssertEqual(decoded.schemaVersion, 2)
+        XCTAssertEqual(decoded.paginationType, .customPages)
+        XCTAssertEqual(decoded.pages, [page1, page2])
+        XCTAssertNoThrow(try LaunchpadLayoutImporter.validate(decoded))
+    }
+
+    func testDocumentSchemaV1AcceptedAndDefaultsToContinuous() throws {
+        let json = """
+        {
+          "kind": "qlaunchpad.layout",
+          "schemaVersion": 1,
+          "items": [
+            { "type": "app", "id": "com.example.A" }
+          ]
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let doc = try LaunchpadLayoutDocument.makeDecoder().decode(LaunchpadLayoutDocument.self, from: data)
+        XCTAssertEqual(doc.schemaVersion, 1)
+        XCTAssertNil(doc.paginationType)
+        XCTAssertNil(doc.pages)
+        XCTAssertNoThrow(try LaunchpadLayoutImporter.validate(doc))
+
+        let scanned = known(("com.example.A", "App A", "/Applications/A.app"))
+        let result = try LaunchpadLayoutImporter.apply(
+            document: doc,
+            mode: .merge,
+            strict: false,
+            scanned: scanned,
+            currentHidden: []
+        )
+        XCTAssertEqual(result.layout.paginationType, .continuous)
+        XCTAssertNil(result.layout.pages)
+        XCTAssertEqual(result.layout.order, ["com.example.A"])
+    }
+
+    func testDocumentSchemaV3Rejected() throws {
+        let json = """
+        {
+          "kind": "qlaunchpad.layout",
+          "schemaVersion": 3,
+          "items": []
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let doc = try LaunchpadLayoutDocument.makeDecoder().decode(LaunchpadLayoutDocument.self, from: data)
+        XCTAssertThrowsError(try LaunchpadLayoutImporter.validate(doc)) { error in
+            XCTAssertEqual(error as? LaunchpadLayoutError, .unsupportedSchemaVersion(3))
+        }
+    }
+
     private func known(_ items: (String, String, String)...) -> [LaunchpadKnownApp] {
         items
             .map { LaunchpadKnownApp(id: $0.0, bundleIdentifier: $0.0, name: $0.1, path: $0.2) }

@@ -5,11 +5,21 @@ public struct LaunchpadPersistedLayout: Equatable, Sendable {
     public var itemOrder: [String]
     public var foldersData: Data
     public var hiddenIDs: [String]
+    public var paginationType: LaunchpadLayoutPaginationType
+    public var pagesData: Data?
 
-    public init(itemOrder: [String], foldersData: Data, hiddenIDs: [String]) {
+    public init(
+        itemOrder: [String],
+        foldersData: Data,
+        hiddenIDs: [String],
+        paginationType: LaunchpadLayoutPaginationType = .continuous,
+        pagesData: Data? = nil
+    ) {
         self.itemOrder = itemOrder
         self.foldersData = foldersData
         self.hiddenIDs = hiddenIDs
+        self.paginationType = paginationType
+        self.pagesData = pagesData
     }
 }
 
@@ -25,6 +35,14 @@ public enum LaunchpadPreferenceStore {
         try LaunchpadPersistence.decodeFolders(data)
     }
 
+    public static func encodePages(_ pages: [LaunchpadCustomPage]) throws -> Data {
+        try LaunchpadPersistence.encodePages(pages)
+    }
+
+    public static func decodePages(_ data: Data) throws -> [LaunchpadCustomPage] {
+        try LaunchpadPersistence.decodePages(data)
+    }
+
     /// Missing key (`Data()`) is empty folders. Non-empty undecodable bytes throw.
     public static func decodePersistedFolders(_ data: Data) throws -> [AppFolder] {
         if data.isEmpty {
@@ -33,15 +51,20 @@ public enum LaunchpadPreferenceStore {
         return try decodeFolders(data)
     }
 
-    /// Synchronizes the domain, then copies the three layout keys. Missing keys
+    /// Synchronizes the domain, then copies the layout keys. Missing keys
     /// are empty arrays / empty `Data`.
     public static func readLayout(domain: String) -> LaunchpadPersistedLayout {
         let applicationID = domain as CFString
         CFPreferencesAppSynchronize(applicationID)
+        let paginationRaw = copyString(key: LaunchpadPersistence.paginationTypeKey, applicationID: applicationID)
+        let paginationType = paginationRaw.flatMap(LaunchpadLayoutPaginationType.init(rawValue:)) ?? .continuous
+        let pagesData = copyData(key: LaunchpadPersistence.pagesKey, applicationID: applicationID)
         return LaunchpadPersistedLayout(
             itemOrder: copyStringArray(key: LaunchpadPersistence.itemOrderKey, applicationID: applicationID),
             foldersData: copyData(key: LaunchpadPersistence.foldersKey, applicationID: applicationID),
-            hiddenIDs: copyStringArray(key: LaunchpadPersistence.hiddenAppsKey, applicationID: applicationID)
+            hiddenIDs: copyStringArray(key: LaunchpadPersistence.hiddenAppsKey, applicationID: applicationID),
+            paginationType: paginationType,
+            pagesData: pagesData.isEmpty ? nil : pagesData
         )
     }
 
@@ -54,7 +77,9 @@ public enum LaunchpadPreferenceStore {
         let next = LaunchpadPersistedLayout(
             itemOrder: layout.itemOrder,
             foldersData: layout.foldersData,
-            hiddenIDs: layout.hiddenIDs.sorted()
+            hiddenIDs: layout.hiddenIDs.sorted(),
+            paginationType: layout.paginationType,
+            pagesData: layout.pagesData
         )
         let current = readLayout(domain: domain)
         var changed = false
@@ -81,6 +106,30 @@ public enum LaunchpadPreferenceStore {
                 next.hiddenIDs as CFArray,
                 applicationID
             )
+            changed = true
+        }
+        if next.paginationType != current.paginationType {
+            CFPreferencesSetAppValue(
+                LaunchpadPersistence.paginationTypeKey as CFString,
+                next.paginationType.rawValue as CFString,
+                applicationID
+            )
+            changed = true
+        }
+        if next.pagesData != current.pagesData {
+            if let pagesData = next.pagesData {
+                CFPreferencesSetAppValue(
+                    LaunchpadPersistence.pagesKey as CFString,
+                    pagesData as CFData,
+                    applicationID
+                )
+            } else {
+                CFPreferencesSetAppValue(
+                    LaunchpadPersistence.pagesKey as CFString,
+                    nil,
+                    applicationID
+                )
+            }
             changed = true
         }
         if changed {
@@ -131,6 +180,12 @@ public enum LaunchpadPreferenceStore {
         UserDefaults.standard.set(layout.itemOrder, forKey: LaunchpadPersistence.itemOrderKey)
         UserDefaults.standard.set(layout.foldersData, forKey: LaunchpadPersistence.foldersKey)
         UserDefaults.standard.set(hidden, forKey: LaunchpadPersistence.hiddenAppsKey)
+        UserDefaults.standard.set(layout.paginationType.rawValue, forKey: LaunchpadPersistence.paginationTypeKey)
+        if let pagesData = layout.pagesData {
+            UserDefaults.standard.set(pagesData, forKey: LaunchpadPersistence.pagesKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: LaunchpadPersistence.pagesKey)
+        }
     }
 
     public static func layoutBackupFileURL(domain: String) -> URL {
@@ -188,5 +243,12 @@ public enum LaunchpadPreferenceStore {
             return data
         }
         return Data()
+    }
+
+    private static func copyString(key: String, applicationID: CFString) -> String? {
+        guard let value = CFPreferencesCopyAppValue(key as CFString, applicationID) else {
+            return nil
+        }
+        return value as? String
     }
 }

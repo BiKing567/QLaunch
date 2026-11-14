@@ -10,6 +10,8 @@ public enum LaunchpadPersistence {
     public static let layoutModeKey = "launchpadLayoutMode"
     public static let recentLaunchDatesKey = "recentAppLaunchDates"
     public static let iconSizeTierKey = "launchpadIconSizeTier"
+    public static let paginationTypeKey = "launchpadPaginationType"
+    public static let pagesKey = "launchpadPages"
 
     /// Compact `[{id,name,appIDs}]`. Key order is fixed so persist-if-changed
     /// can compare encoded `Data` without false dirty writes.
@@ -40,5 +42,16 @@ public enum LaunchpadPersistence {
 
     public static func decodeFolders(_ data: Data) throws -> [AppFolder] {
         try JSONDecoder().decode([AppFolder].self, from: data)
+    }
+
+    public static func encodePages(_ pages: [LaunchpadCustomPage]) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(pages)
+    }
+
+    public static func decodePages(_ data: Data) throws -> [LaunchpadCustomPage] {
+        if data.isEmpty { return [] }
+        return try JSONDecoder().decode([LaunchpadCustomPage].self, from: data)
     }
 }

@@ -154,6 +154,9 @@
 "layout.auto" = "自动布局";
 "layout.profile.default" = "默认";
 "layout.profile.new" = "新布局";
+"layout.pagination.title" = "分页方式";
+"layout.pagination.continuous" = "连续分页";
+"layout.pagination.customPages" = "自定义分页";
 "layout.name" = "布局名称";
 "layout.create.title" = "新建布局";
 "layout.create.detail" = "新布局会复制当前排序和分组。";
