@@ -1120,6 +1120,7 @@ final class AppStore: ObservableObject {
     }
 
     func selectLayoutProfile(_ id: String) throws {
+        cancelActiveDrag()
         guard layoutProfiles.contains(where: { $0.id == id }) else {
             throw LaunchpadLayoutProfileError.profileNotFound(id)
         }
@@ -1252,6 +1253,7 @@ final class AppStore: ObservableObject {
     }
 
     func setPaginationType(_ newType: LaunchpadLayoutPaginationType) {
+        cancelActiveDrag()
         guard allowsUserLayoutEditing, paginationType != newType else { return }
         paginationType = newType
         if newType == .customPages {
@@ -1410,6 +1412,7 @@ final class AppStore: ObservableObject {
     }
 
     func applyGridLayoutChange() {
+        cancelActiveDrag()
         if paginationType == .customPages {
             customPages = LaunchpadCustomPageReconciler.reconcile(
                 pages: customPages,
@@ -2549,6 +2552,7 @@ final class AppStore: ObservableObject {
     }
 
     func markHidden() {
+        cancelActiveDrag()
         presentation = .hidden
         presentationProgress = 0
         isKeyboardNavigationActive = false
@@ -2675,6 +2679,7 @@ final class AppStore: ObservableObject {
     }
 
     private func reconcileLaunchpadItems(persist: Bool = true) {
+        guard !apps.isEmpty else { return }
         let result = LaunchpadLayoutReconciler.reconcile(
             apps: knownApps(),
             folders: folders,

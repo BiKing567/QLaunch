@@ -813,6 +813,9 @@ final class LaunchpadContainerView: NSView {
                 store.exitFolder()
                 return
             }
+            if metalView.cancelActiveDrag() {
+                return
+            }
             NotificationCenter.default.post(name: .qlaunchpadDismiss, object: nil)
             return
         }

@@ -6373,6 +6373,15 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         store.setFolderDragState(isDragging: false)
     }
 
+    @discardableResult
+    func cancelActiveDrag() -> Bool {
+        guard didDrag || draggedAppID != nil || store.isDragSessionActive else { return false }
+        discardCancelledDrag()
+        startDisplayLink()
+        needsDisplay = true
+        return true
+    }
+
     private func selectionRect(from start: CGPoint, to end: CGPoint) -> CGRect {
         CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
                width: abs(start.x - end.x), height: abs(start.y - end.y))
@@ -7479,6 +7488,50 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 // User dropped without dwelling for a folder -> REORDER gesture ("换一个地方").
                 // If dropping quickly onto an icon (where reorder was paused to await dwell intent),
                 // commit the destination slot move now so the item settles in the new spot.
+                if store.isCustomPagingActive {
+                    var targetPage: Int?
+                    var targetSlot: Int?
+
+                    if let candidateID = groupingCandidateID,
+                       let pos = store.gridPosition(for: candidateID) {
+                        targetPage = pos.page
+                        targetSlot = pos.slot
+                    } else if let pending = pendingReorderDestination {
+                        let cap = store.pageCapacity
+                        targetPage = pending / cap
+                        targetSlot = pending % cap
+                    } else {
+                        let draggedCenter = CGPoint(
+                            x: dragPoint.x - dragGrabOffset.x,
+                            y: dragPoint.y - dragGrabOffset.y
+                        )
+                        let metrics = GridMetrics(size: bounds.size, safeInsets: store.safeInsets)
+                        if let slot = metrics.cellSlot(topPoint: draggedCenter, pageOffset: interactionPageOffset),
+                           slot.page >= 0 && slot.page < store.pageCount {
+                            targetPage = slot.page
+                            targetSlot = slot.localIndex
+                        } else if store.currentPage >= 0 && store.currentPage < store.pageCount {
+                            targetPage = store.currentPage
+                            targetSlot = store.items(onPage: store.currentPage).count
+                        }
+                    }
+
+                    if let targetPage, let targetSlot,
+                       targetPage >= 0 && targetPage < store.pageCount {
+                        let currentPos = store.gridPosition(for: draggedAppID)
+                        if currentPos?.page != targetPage || currentPos?.slot != targetSlot {
+                            if reorderVisualSlots.isEmpty {
+                                resetReorderVisualSlots(to: displayedItems)
+                            }
+                            store.previewMoveItem(id: draggedAppID, toPage: targetPage, targetSlot: targetSlot)
+                            applyAnimatedLayout(store.activeDisplayItems)
+                        }
+                    }
+                    store.endDragSession(committed: true)
+                    beginDragReleaseAnimation(itemID: draggedAppID)
+                    return
+                }
+
                 if let source = dragSource, displayedItems.indices.contains(source) {
                     var destination: Int?
                     if let candidateID = groupingCandidateID,
@@ -7509,14 +7562,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                         if reorderVisualSlots.isEmpty {
                             resetReorderVisualSlots(to: displayedItems)
                         }
-                        if store.isCustomPagingActive {
-                            let cap = store.pageCapacity
-                            let targetPage = destination / cap
-                            let targetSlot = destination % cap
-                            store.previewMoveItem(id: draggedAppID, toPage: targetPage, targetSlot: targetSlot)
-                        } else {
-                            store.moveItem(from: source, to: destination)
-                        }
+                        store.moveItem(from: source, to: destination)
                         applyAnimatedLayout(store.activeDisplayItems)
                         dragSource = destination
                         dragDestination = destination

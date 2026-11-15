@@ -520,6 +520,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.store.exitFolder()
                     return nil
                 }
+                if self.containerView.metal.cancelActiveDrag() {
+                    return nil
+                }
                 self.dismissLaunchpad()
                 return nil
             case 123: // Left
