@@ -742,11 +742,14 @@ final class AppStore: ObservableObject {
     }
 
     var isCustomPagingActive: Bool {
-        openedFolderID == nil && !isSearching && isRootCustomPaging
+        openedFolderID == nil && !isSearching && !GridLayoutPreset.current.isInfiniteCanvas && isRootCustomPaging
     }
 
     var rootPageCount: Int {
-        if isRootCustomPaging && !isSearching {
+        if GridLayoutPreset.current.isInfiniteCanvas {
+            return 1
+        }
+        if isCustomPagingActive {
             return max(1, customPages.count)
         }
         return max(1, Int(ceil(Double(max(displayItems.count, 1)) / Double(pageCapacity))))
@@ -2094,7 +2097,7 @@ final class AppStore: ObservableObject {
     }
 
     func rootItems(onPage page: Int) -> [LaunchpadItem] {
-        if isRootCustomPaging && !isSearching {
+        if isCustomPagingActive {
             guard customPages.indices.contains(page) else { return [] }
             return customPages[page].itemIDs.compactMap { item(withID: $0) }
         }
@@ -2118,7 +2121,7 @@ final class AppStore: ObservableObject {
 
     /// Root custom pages layout query: returns (page, slot) in the root custom pages layout.
     func rootGridPosition(for itemID: String) -> (page: Int, slot: Int)? {
-        if isRootCustomPaging {
+        if isCustomPagingActive {
             for (pageIndex, page) in customPages.enumerated() {
                 if let slot = page.itemIDs.firstIndex(of: itemID) {
                     return (page: pageIndex, slot: slot)
@@ -2154,7 +2157,7 @@ final class AppStore: ObservableObject {
             guard let index = items.firstIndex(where: { $0.id == itemID }) else { return nil }
             return (page: index / pageCapacity, slot: index % pageCapacity)
         }
-        if isRootCustomPaging {
+        if isCustomPagingActive {
             return rootGridPosition(for: itemID)
         }
         let items = activeDisplayItems
@@ -2172,7 +2175,7 @@ final class AppStore: ObservableObject {
             guard let pos = gridPosition(for: itemID) else { return nil }
             return pos.slot
         }
-        if isRootCustomPaging {
+        if isCustomPagingActive {
             return rootGridSlotIndex(for: itemID)
         }
         guard let pos = gridPosition(for: itemID) else { return nil }
@@ -2187,7 +2190,7 @@ final class AppStore: ObservableObject {
             guard items.indices.contains(index) else { return nil }
             return items[index]
         }
-        if isRootCustomPaging {
+        if isCustomPagingActive {
             guard customPages.indices.contains(page) else { return nil }
             let page = customPages[page]
             guard slot < page.itemIDs.count else { return nil }

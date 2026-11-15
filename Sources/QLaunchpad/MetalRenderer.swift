@@ -1467,7 +1467,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         if let activeTargetID,
            canGroup(sourceID: draggedAppID, targetID: activeTargetID),
            let activeIndex = displayedItems.firstIndex(where: { $0.id == activeTargetID }) {
-            let activeSlot = store.gridSlotIndex(for: activeTargetID) ?? activeIndex
+            let activeSlot = slotIndex(for: activeTargetID, in: displayedItems, fallbackIndex: activeIndex)
             let visualIndex = reorderVisualSlots[activeTargetID] ?? Double(activeSlot)
             let center = interactionIconCenter(globalIndex: visualIndex, metrics: metrics)
             let distance = hypot(draggedCenter.x - center.x, draggedCenter.y - center.y)
@@ -1499,7 +1499,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         var nearestCandidate: (id: String, distance: CGFloat)?
         for (index, item) in displayedItems.enumerated() where item.id != draggedAppID {
             guard canGroup(sourceID: draggedAppID, targetID: item.id) else { continue }
-            let itemSlot = store.gridSlotIndex(for: item.id) ?? index
+            let itemSlot = slotIndex(for: item.id, in: displayedItems, fallbackIndex: index)
             let visualIndex = reorderVisualSlots[item.id] ?? Double(itemSlot)
             let center = interactionIconCenter(globalIndex: visualIndex, metrics: metrics)
             let distance = hypot(draggedCenter.x - center.x, draggedCenter.y - center.y)
@@ -2715,10 +2715,23 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         return x * x * (3 - 2 * x)
     }
 
+    private func isRootDisplayCollection(_ items: [LaunchpadItem]) -> Bool {
+        if store.isSearching { return false }
+        if displayedFolderID != nil { return false }
+        return true
+    }
+
+    private func slotIndex(for itemID: String, in items: [LaunchpadItem], fallbackIndex: Int) -> Int {
+        if isRootDisplayCollection(items) {
+            return store.rootGridSlotIndex(for: itemID) ?? fallbackIndex
+        }
+        return store.gridSlotIndex(for: itemID) ?? fallbackIndex
+    }
+
     private func resetReorderVisualSlots(to items: [LaunchpadItem]) {
         reorderVisualSlots = Dictionary(
             uniqueKeysWithValues: items.enumerated().map { index, item in
-                let slot = store.gridSlotIndex(for: item.id) ?? index
+                let slot = slotIndex(for: item.id, in: items, fallbackIndex: index)
                 return (item.id, Double(slot))
             }
         )
@@ -2729,7 +2742,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let ids = Set(items.map(\.id))
         reorderVisualSlots = reorderVisualSlots.filter { ids.contains($0.key) }
         for (index, item) in items.enumerated() where reorderVisualSlots[item.id] == nil {
-            let slot = store.gridSlotIndex(for: item.id) ?? index
+            let slot = slotIndex(for: item.id, in: items, fallbackIndex: index)
             reorderVisualSlots[item.id] = Double(slot)
         }
     }
@@ -2751,7 +2764,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
         synchronizeReorderVisualSlots(with: items)
         isReorderAnimationActive = items.enumerated().contains { index, item in
-            let slot = Double(store.gridSlotIndex(for: item.id) ?? index)
+            let slot = Double(slotIndex(for: item.id, in: items, fallbackIndex: index))
             return abs((reorderVisualSlots[item.id] ?? slot) - slot) >= 0.001
         }
         if isReorderAnimationActive { startDisplayLink() }
@@ -2767,7 +2780,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let step = 1 - exp(-dt * reorderAnimationRate)
         var active = false
         for (index, item) in displayedItems.enumerated() {
-            let slot = store.gridSlotIndex(for: item.id) ?? index
+            let slot = slotIndex(for: item.id, in: displayedItems, fallbackIndex: index)
             let target = Double(slot)
             let current = reorderVisualSlots[item.id] ?? target
             let distance = target - current
@@ -3497,7 +3510,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         guard let index = items.firstIndex(where: { $0.id == folderID }) else {
             return nil
         }
-        let slotIndex = (GridLayoutPreset.current.isInfiniteCanvas ? store.gridSlotIndex(for: folderID) : store.rootGridSlotIndex(for: folderID)) ?? index
+        let slotIndex = store.rootGridSlotIndex(for: folderID) ?? index
         let visualIndex = useVisualSlots
             ? (reorderVisualSlots[folderID] ?? Double(slotIndex))
             : Double(slotIndex)
@@ -6411,7 +6424,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let metrics = GridMetrics(size: bounds.size, safeInsets: store.safeInsets)
         let size = interactionIconPointSize(metrics: metrics)
         let hitIDs = Set(displayedItems.enumerated().compactMap { index, item -> String? in
-            let itemSlot = store.gridSlotIndex(for: item.id) ?? index
+            let itemSlot = slotIndex(for: item.id, in: displayedItems, fallbackIndex: index)
             let visualIndex = reorderVisualSlots[item.id] ?? Double(itemSlot)
             let center = interactionIconCenter(globalIndex: visualIndex, metrics: metrics)
             let iconRect = CGRect(x: center.x - size / 2, y: center.y - size / 2,
@@ -6589,7 +6602,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 }
                 dragSource = index
                 draggedAppID = item.id
-                let globalIndex = Double(store.gridSlotIndex(for: item.id) ?? index)
+                let globalIndex = Double(slotIndex(for: item.id, in: displayedItems, fallbackIndex: index))
                 let iconCenter = interactionIconCenter(globalIndex: globalIndex, metrics: metrics)
                 dragGrabOffset = CGPoint(
                     x: dragPoint.x - iconCenter.x,
