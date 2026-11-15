@@ -517,6 +517,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         var destinationLayout: (centers: [CGPoint], iconSize: CGFloat, cardMetrics: FolderCardMetrics)? = nil
         var retainedPreviewImages: [CGImage] = []
         var retainedPreviewImagesByAppID: [String: CGImage] = [:]
+        var rootCustomPages: [LaunchpadCustomPage]? = nil
     }
 
     private struct FolderSourceSnapshot {
@@ -1467,7 +1468,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         if let activeTargetID,
            canGroup(sourceID: draggedAppID, targetID: activeTargetID),
            let activeIndex = displayedItems.firstIndex(where: { $0.id == activeTargetID }) {
-            let visualIndex = reorderVisualSlots[activeTargetID] ?? Double(activeIndex)
+            let activeSlot = store.gridSlotIndex(for: activeTargetID) ?? activeIndex
+            let visualIndex = reorderVisualSlots[activeTargetID] ?? Double(activeSlot)
             let center = interactionIconCenter(globalIndex: visualIndex, metrics: metrics)
             let distance = hypot(draggedCenter.x - center.x, draggedCenter.y - center.y)
 
@@ -1498,7 +1500,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         var nearestCandidate: (id: String, distance: CGFloat)?
         for (index, item) in displayedItems.enumerated() where item.id != draggedAppID {
             guard canGroup(sourceID: draggedAppID, targetID: item.id) else { continue }
-            let visualIndex = reorderVisualSlots[item.id] ?? Double(index)
+            let itemSlot = store.gridSlotIndex(for: item.id) ?? index
+            let visualIndex = reorderVisualSlots[item.id] ?? Double(itemSlot)
             let center = interactionIconCenter(globalIndex: visualIndex, metrics: metrics)
             let distance = hypot(draggedCenter.x - center.x, draggedCenter.y - center.y)
             guard distance <= groupingAcquireRadius else { continue }
@@ -3148,7 +3151,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             targetProgress: 1,
             progress: 0,
             startMaterialProgress: 0,
-            currentMaterialProgress: 0
+            currentMaterialProgress: 0,
+            rootCustomPages: store.isRootCustomPaging ? store.customPages : nil
         )
         folderTransitionGeneration &+= 1
         prepareFolderTransitionResources(folderID: folderID, folderItems: target, prewarmItems: target)
@@ -3211,7 +3215,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             targetProgress: 0,
             progress: 1,
             startMaterialProgress: 1,
-            currentMaterialProgress: 1
+            currentMaterialProgress: 1,
+            rootCustomPages: store.isRootCustomPaging ? store.customPages : nil
         )
         folderTransitionGeneration &+= 1
         prepareFolderTransitionResources(folderID: folderID, folderItems: displayedItems, prewarmItems: target)
@@ -5015,6 +5020,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
 
         let infiniteCanvas = GridLayoutPreset.current.isInfiniteCanvas && activeCardMetrics == nil
+        let useCustomPaging = store.isRootCustomPaging && !isOpenedFolder && !infiniteCanvas && !store.isSearching
         let cap = if let cardMetrics = activeCardMetrics {
             cardMetrics.pageCapacity
         } else if infiniteCanvas {
@@ -5026,9 +5032,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         } else {
             GridLayoutPreset.current.columns * GridLayoutPreset.current.exportedRows(itemCount: items.count)
         }
-        let pages = infiniteCanvas
-            ? 1
-            : max(1, Int(ceil(Double(items.count) / Double(cap))))
+        let pages = if infiniteCanvas {
+            1
+        } else if useCustomPaging {
+            max(1, store.rootPageCount)
+        } else {
+            max(1, Int(ceil(Double(items.count) / Double(cap))))
+        }
         let canvasMetrics = infiniteCanvas
             ? infiniteCanvasMetrics(itemCount: items.count)
             : nil
@@ -5047,16 +5057,26 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         // than one page away from its current catalog slot.
         if let draggedAppID,
            let draggedIndex = items.firstIndex(where: { $0.id == draggedAppID }) {
-            let draggedPage = draggedIndex / cap
+            let draggedPage = if useCustomPaging {
+                store.gridPosition(for: draggedAppID)?.page ?? (draggedIndex / cap)
+            } else {
+                draggedIndex / cap
+            }
             first = min(first, draggedPage)
             last = max(last, draggedPage)
         }
         if let returningID = dragReleaseAnimation?.itemID,
            let returningIndex = items.firstIndex(where: { $0.id == returningID }) {
-            let returningPage = returningIndex / cap
+            let returningPage = if useCustomPaging {
+                store.gridPosition(for: returningID)?.page ?? (returningIndex / cap)
+            } else {
+                returningIndex / cap
+            }
             first = min(first, returningPage)
             last = max(last, returningPage)
         }
+        first = max(0, min(first, pages - 1))
+        last = max(first, min(pages - 1, last))
         let showLabels = UserDefaults.standard.object(forKey: "showLabels") as? Bool ?? true
         // Full-image UV for per-icon textures.
         let fullUV = SIMD4<Float>(0, 0, 1, 1)
@@ -5069,8 +5089,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         for page in first...last {
             let pageItems: [LaunchpadItem]
-            if store.isCustomPagingActive && !isOpenedFolder {
-                pageItems = store.items(onPage: page)
+            if useCustomPaging {
+                pageItems = store.rootItems(onPage: page)
             } else {
                 let start = page * cap
                 let end = min(start + cap, items.count)
@@ -6394,7 +6414,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let metrics = GridMetrics(size: bounds.size, safeInsets: store.safeInsets)
         let size = interactionIconPointSize(metrics: metrics)
         let hitIDs = Set(displayedItems.enumerated().compactMap { index, item -> String? in
-            let visualIndex = reorderVisualSlots[item.id] ?? Double(index)
+            let itemSlot = store.gridSlotIndex(for: item.id) ?? index
+            let visualIndex = reorderVisualSlots[item.id] ?? Double(itemSlot)
             let center = interactionIconCenter(globalIndex: visualIndex, metrics: metrics)
             let iconRect = CGRect(x: center.x - size / 2, y: center.y - size / 2,
                                   width: size, height: size)
@@ -6571,7 +6592,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 }
                 dragSource = index
                 draggedAppID = item.id
-                let iconCenter = interactionIconCenter(globalIndex: Double(index), metrics: metrics)
+                let globalIndex = Double(store.gridSlotIndex(for: item.id) ?? index)
+                let iconCenter = interactionIconCenter(globalIndex: globalIndex, metrics: metrics)
                 dragGrabOffset = CGPoint(
                     x: dragPoint.x - iconCenter.x,
                     y: dragPoint.y - iconCenter.y
@@ -7242,7 +7264,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             if !didDrag {
                 didDrag = true
                 hasCreatedTentativePageDuringDrag = false
-                if store.allowsUserLayoutEditing {
+                let isRootIconDrag = draggedAppID != nil
+                    && store.openedFolderID == nil
+                    && marqueeStart == nil
+                    && !pageIndicatorClick
+                    && !isPanningPage
+                    && !isSpacePanning
+                if isRootIconDrag && store.allowsUserLayoutEditing {
                     store.beginDragSession()
                 }
             }
@@ -7302,6 +7330,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     override func mouseUp(with event: NSEvent) {
         isMouseDown = false
         defer {
+            if store.isDragSessionActive {
+                store.endDragSession(committed: false)
+            }
             dragSource = nil
             draggedAppID = nil
             dragDestination = nil

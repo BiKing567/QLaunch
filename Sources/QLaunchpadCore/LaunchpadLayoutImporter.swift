@@ -140,6 +140,26 @@ public enum LaunchpadLayoutImporter {
             unhiddenByClaim: unhiddenByClaim,
             newlyHiddenByReplace: newlyHiddenByReplace
         )
+        var rootIDMap: [String: String] = [:]
+        for (rawID, resolved) in resolvedByRawID {
+            rootIDMap[rawID] = resolved.id
+        }
+        for item in document.items {
+            if case .folder(let rawID, _, _) = item {
+                if let rawID {
+                    let folderID = normalizedFolderID(rawID)
+                    rootIDMap[rawID] = folderID
+                    rootIDMap[folderID] = folderID
+                }
+            }
+        }
+        let mappedPages: [LaunchpadCustomPage]? = document.pages?.map { page in
+            let mappedItems = page.itemIDs.compactMap { rawID -> String? in
+                rootIDMap[rawID] ?? (scannedIDs.contains(rawID) || folderIDs.contains(rawID) ? rawID : nil)
+            }
+            return LaunchpadCustomPage(id: page.id, itemIDs: mappedItems)
+        }
+
         let paginationType = document.paginationType ?? .continuous
         return (
             layout: (
@@ -147,7 +167,7 @@ public enum LaunchpadLayoutImporter {
                 order: reconciled.order,
                 hidden: finalHidden,
                 paginationType: paginationType,
-                pages: document.pages
+                pages: mappedPages
             ),
             report: report
         )

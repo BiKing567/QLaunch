@@ -732,15 +732,26 @@ final class AppStore: ObservableObject {
         autoLayoutTasks.values.forEach { $0.cancel() }
     }
 
+    var isRootCustomPaging: Bool {
+        layoutMode.isUser && paginationType == .customPages
+    }
+
     var isCustomPagingActive: Bool {
-        openedFolderID == nil && !isSearching && layoutMode.isUser && paginationType == .customPages
+        openedFolderID == nil && !isSearching && isRootCustomPaging
+    }
+
+    var rootPageCount: Int {
+        if isRootCustomPaging && !isSearching {
+            return max(1, customPages.count)
+        }
+        return max(1, Int(ceil(Double(max(displayItems.count, 1)) / Double(pageCapacity))))
     }
 
     var pageCount: Int {
-        if isCustomPagingActive {
-            return max(1, customPages.count)
+        if openedFolderID != nil {
+            return max(1, Int(ceil(Double(max(activeDisplayItems.count, 1)) / Double(pageCapacity))))
         }
-        return max(1, Int(ceil(Double(max(activeDisplayItems.count, 1)) / Double(pageCapacity))))
+        return rootPageCount
     }
 
     var currentPage: Int {
@@ -986,7 +997,8 @@ final class AppStore: ObservableObject {
             : nil
         let preset = GridLayoutPreset.current
         let exportedRows = preset.exportedRows(itemCount: items.count)
-        let exportedPages: [LaunchpadCustomPage]? = isCustomPagingActive
+        let isCustomPaging = paginationType == .customPages
+        let exportedPages: [LaunchpadCustomPage]? = isCustomPaging
             ? customPages.map { page in
                 LaunchpadCustomPage(
                     id: page.id,
@@ -1003,7 +1015,7 @@ final class AppStore: ObservableObject {
                 rows: exportedRows,
                 pageCapacity: preset.columns * exportedRows
             ),
-            paginationType: isCustomPagingActive ? .customPages : .continuous,
+            paginationType: isCustomPaging ? .customPages : .continuous,
             pages: exportedPages,
             items: items,
             hidden: hiddenAppIDs.map(sanitize).sorted(),
@@ -1055,6 +1067,7 @@ final class AppStore: ObservableObject {
         mode: LaunchpadLayoutImportMode,
         writeBackup: Bool = true
     ) throws -> LaunchpadLayoutReport {
+        cancelActiveDrag()
         guard !isLoading, !apps.isEmpty else {
             throw LaunchpadLayoutError.malformed("application catalog is empty")
         }
@@ -1106,7 +1119,6 @@ final class AppStore: ObservableObject {
         }
         persistLayoutMode()
         rebuildLaunchpadItems()
-        cancelActiveDrag()
         layoutGeneration += 1
         if let openedFolderID, folder(withID: openedFolderID) == nil {
             exitFolder()
@@ -1290,6 +1302,7 @@ final class AppStore: ObservableObject {
     }
 
     func reloadPersistedLayout() {
+        cancelActiveDrag()
         layoutGeneration += 1
         let hiddenBeforeReload = hiddenAppIDs
         adoptPersistedLayout()
@@ -1298,7 +1311,6 @@ final class AppStore: ObservableObject {
         } else {
             reconcileLaunchpadItems(persist: false)
         }
-        cancelActiveDrag()
         if let openedFolderID, folder(withID: openedFolderID) == nil {
             exitFolder()
         }
@@ -2076,26 +2088,36 @@ final class AppStore: ObservableObject {
         return nil
     }
 
-    func items(onPage page: Int) -> [LaunchpadItem] {
-        if isCustomPagingActive {
+    func rootItems(onPage page: Int) -> [LaunchpadItem] {
+        if isRootCustomPaging && !isSearching {
             guard customPages.indices.contains(page) else { return [] }
             return customPages[page].itemIDs.compactMap { item(withID: $0) }
         }
-        let items = activeDisplayItems
+        let items = displayItems
         let start = page * pageCapacity
         guard start < items.count else { return [] }
         let end = min(start + pageCapacity, items.count)
         return Array(items[start..<end])
     }
 
+    func items(onPage page: Int) -> [LaunchpadItem] {
+        if openedFolderID != nil {
+            let items = activeDisplayItems
+            let start = page * pageCapacity
+            guard start < items.count else { return [] }
+            let end = min(start + pageCapacity, items.count)
+            return Array(items[start..<end])
+        }
+        return rootItems(onPage: page)
+    }
+
     func gridPosition(for itemID: String) -> (page: Int, slot: Int)? {
-        if isCustomPagingActive {
+        if isRootCustomPaging {
             for (pageIndex, page) in customPages.enumerated() {
                 if let slot = page.itemIDs.firstIndex(of: itemID) {
                     return (page: pageIndex, slot: slot)
                 }
             }
-            return nil
         }
         let items = activeDisplayItems
         guard let index = items.firstIndex(where: { $0.id == itemID }) else { return nil }
@@ -2104,7 +2126,13 @@ final class AppStore: ObservableObject {
 
     func item(atPage page: Int, slot: Int) -> LaunchpadItem? {
         guard slot >= 0 && slot < pageCapacity else { return nil }
-        if isCustomPagingActive {
+        if openedFolderID != nil {
+            let index = page * pageCapacity + slot
+            let items = activeDisplayItems
+            guard items.indices.contains(index) else { return nil }
+            return items[index]
+        }
+        if isRootCustomPaging && !isSearching {
             guard customPages.indices.contains(page) else { return nil }
             let page = customPages[page]
             guard slot < page.itemIDs.count else { return nil }

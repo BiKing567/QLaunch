@@ -428,6 +428,36 @@ final class LaunchpadLayoutTests: XCTestCase {
         }
     }
 
+    func testImportResolvesCustomPageAppIDs() throws {
+        let scanned = known(
+            ("com.example.A", "AppA", "/Applications/AppA.app"),
+            ("com.example.B", "AppB", "/Applications/AppB.app")
+        )
+        let rawIDA = "com.example.A#/OldPath/AppA.app"
+        let rawIDB = "com.example.B#/OldPath/AppB.app"
+        let doc = LaunchpadLayoutDocument(
+            schemaVersion: 2,
+            paginationType: .customPages,
+            pages: [
+                LaunchpadCustomPage(id: "p1", itemIDs: [rawIDA]),
+                LaunchpadCustomPage(id: "p2", itemIDs: [rawIDB])
+            ],
+            items: [.app(id: rawIDA), .app(id: rawIDB)]
+        )
+        let result = try LaunchpadLayoutImporter.apply(
+            document: doc,
+            mode: .merge,
+            strict: false,
+            scanned: scanned,
+            currentHidden: []
+        )
+        XCTAssertEqual(result.layout.paginationType, .customPages)
+        let pages = try XCTUnwrap(result.layout.pages)
+        XCTAssertEqual(pages.count, 2)
+        XCTAssertEqual(pages[0].itemIDs, ["com.example.A"])
+        XCTAssertEqual(pages[1].itemIDs, ["com.example.B"])
+    }
+
     private func known(_ items: (String, String, String)...) -> [LaunchpadKnownApp] {
         items
             .map { LaunchpadKnownApp(id: $0.0, bundleIdentifier: $0.0, name: $0.1, path: $0.2) }
