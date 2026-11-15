@@ -591,6 +591,11 @@ final class AppStore: ObservableObject {
         return preset.columns * preset.exportedRows(itemCount: activeDisplayItems.count)
     }
 
+    var rootPageCapacity: Int {
+        let preset = GridLayoutPreset.current
+        return preset.columns * preset.exportedRows(itemCount: launchpadItems.count)
+    }
+
     func setApplyingRenderQuality(_ applying: Bool) {
         if isApplyingRenderQuality != applying {
             isApplyingRenderQuality = applying
@@ -2111,7 +2116,8 @@ final class AppStore: ObservableObject {
         return rootItems(onPage: page)
     }
 
-    func gridPosition(for itemID: String) -> (page: Int, slot: Int)? {
+    /// Root custom pages layout query: returns (page, slot) in the root custom pages layout.
+    func rootGridPosition(for itemID: String) -> (page: Int, slot: Int)? {
         if isRootCustomPaging {
             for (pageIndex, page) in customPages.enumerated() {
                 if let slot = page.itemIDs.firstIndex(of: itemID) {
@@ -2119,20 +2125,69 @@ final class AppStore: ObservableObject {
                 }
             }
         }
+        let items = launchpadItems
+        guard let index = items.firstIndex(where: { $0.id == itemID }) else { return nil }
+        let cap = rootPageCapacity
+        return (page: index / cap, slot: index % cap)
+    }
+
+    /// Root custom pages layout query: returns global slot index on the root grid using rootPageCapacity.
+    func rootGridSlotIndex(for itemID: String) -> Int? {
+        guard let pos = rootGridPosition(for: itemID) else { return nil }
+        return pos.page * rootPageCapacity + pos.slot
+    }
+
+    /// Current view query: returns (page, slot) in the currently active view (search, infinite canvas, folder, or root).
+    func gridPosition(for itemID: String) -> (page: Int, slot: Int)? {
+        if isSearching {
+            let items = activeDisplayItems
+            guard let index = items.firstIndex(where: { $0.id == itemID }) else { return nil }
+            return (page: index / pageCapacity, slot: index % pageCapacity)
+        }
+        if GridLayoutPreset.current.isInfiniteCanvas && openedFolderID == nil {
+            let items = activeDisplayItems
+            guard let index = items.firstIndex(where: { $0.id == itemID }) else { return nil }
+            return (page: 0, slot: index)
+        }
+        if openedFolderID != nil {
+            let items = activeDisplayItems
+            guard let index = items.firstIndex(where: { $0.id == itemID }) else { return nil }
+            return (page: index / pageCapacity, slot: index % pageCapacity)
+        }
+        if isRootCustomPaging {
+            return rootGridPosition(for: itemID)
+        }
         let items = activeDisplayItems
         guard let index = items.firstIndex(where: { $0.id == itemID }) else { return nil }
         return (page: index / pageCapacity, slot: index % pageCapacity)
     }
 
+    /// Current view query: returns the visual slot index in the currently active view.
+    func gridSlotIndex(for itemID: String) -> Int? {
+        if isSearching || openedFolderID != nil {
+            guard let pos = gridPosition(for: itemID) else { return nil }
+            return pos.page * pageCapacity + pos.slot
+        }
+        if GridLayoutPreset.current.isInfiniteCanvas && openedFolderID == nil {
+            guard let pos = gridPosition(for: itemID) else { return nil }
+            return pos.slot
+        }
+        if isRootCustomPaging {
+            return rootGridSlotIndex(for: itemID)
+        }
+        guard let pos = gridPosition(for: itemID) else { return nil }
+        return pos.page * pageCapacity + pos.slot
+    }
+
     func item(atPage page: Int, slot: Int) -> LaunchpadItem? {
         guard slot >= 0 && slot < pageCapacity else { return nil }
-        if openedFolderID != nil {
+        if openedFolderID != nil || isSearching {
             let index = page * pageCapacity + slot
             let items = activeDisplayItems
             guard items.indices.contains(index) else { return nil }
             return items[index]
         }
-        if isRootCustomPaging && !isSearching {
+        if isRootCustomPaging {
             guard customPages.indices.contains(page) else { return nil }
             let page = customPages[page]
             guard slot < page.itemIDs.count else { return nil }
@@ -2142,11 +2197,6 @@ final class AppStore: ObservableObject {
         let items = activeDisplayItems
         guard items.indices.contains(index) else { return nil }
         return items[index]
-    }
-
-    func gridSlotIndex(for itemID: String) -> Int? {
-        guard let pos = gridPosition(for: itemID) else { return nil }
-        return pos.page * pageCapacity + pos.slot
     }
 
     // MARK: Drag Session
@@ -2174,7 +2224,7 @@ final class AppStore: ObservableObject {
     func previewMoveItem(id: String, toPage targetPage: Int, targetSlot: Int) {
         guard isCustomPagingActive,
               customPages.indices.contains(targetPage) else { return }
-        guard let sourcePos = gridPosition(for: id) else { return }
+        guard let sourcePos = rootGridPosition(for: id) else { return }
         let sourcePage = sourcePos.page
         let sourceSlot = sourcePos.slot
 
@@ -2188,7 +2238,7 @@ final class AppStore: ObservableObject {
         LaunchpadCustomPageReconciler.cascadeOverflow(
             pages: &customPages,
             startingAt: targetPage,
-            capacity: pageCapacity
+            capacity: rootPageCapacity
         )
         itemOrderIDs = customPages.flatMap(\.itemIDs)
         rebuildLaunchpadItems()
@@ -2215,7 +2265,7 @@ final class AppStore: ObservableObject {
         LaunchpadCustomPageReconciler.cascadeOverflow(
             pages: &customPages,
             startingAt: targetPage,
-            capacity: pageCapacity
+            capacity: rootPageCapacity
         )
         itemOrderIDs = customPages.flatMap(\.itemIDs)
         rebuildLaunchpadItems()

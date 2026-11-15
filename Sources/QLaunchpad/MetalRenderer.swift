@@ -517,7 +517,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         var destinationLayout: (centers: [CGPoint], iconSize: CGFloat, cardMetrics: FolderCardMetrics)? = nil
         var retainedPreviewImages: [CGImage] = []
         var retainedPreviewImagesByAppID: [String: CGImage] = [:]
-        var rootCustomPages: [LaunchpadCustomPage]? = nil
     }
 
     private struct FolderSourceSnapshot {
@@ -1564,7 +1563,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 pendingReorderDestination = nil
                 return
             }
-            let currentSlotIndex = store.gridSlotIndex(for: draggedAppID)
+            let currentSlotIndex = store.rootGridSlotIndex(for: draggedAppID)
             if currentSlotIndex == destination {
                 pendingReorderDestination = nil
                 return
@@ -3151,8 +3150,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             targetProgress: 1,
             progress: 0,
             startMaterialProgress: 0,
-            currentMaterialProgress: 0,
-            rootCustomPages: store.isRootCustomPaging ? store.customPages : nil
+            currentMaterialProgress: 0
         )
         folderTransitionGeneration &+= 1
         prepareFolderTransitionResources(folderID: folderID, folderItems: target, prewarmItems: target)
@@ -3215,8 +3213,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             targetProgress: 0,
             progress: 1,
             startMaterialProgress: 1,
-            currentMaterialProgress: 1,
-            rootCustomPages: store.isRootCustomPaging ? store.customPages : nil
+            currentMaterialProgress: 1
         )
         folderTransitionGeneration &+= 1
         prepareFolderTransitionResources(folderID: folderID, folderItems: displayedItems, prewarmItems: target)
@@ -3500,7 +3497,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         guard let index = items.firstIndex(where: { $0.id == folderID }) else {
             return nil
         }
-        let slotIndex = store.gridSlotIndex(for: folderID) ?? index
+        let slotIndex = (GridLayoutPreset.current.isInfiniteCanvas ? store.gridSlotIndex(for: folderID) : store.rootGridSlotIndex(for: folderID)) ?? index
         let visualIndex = useVisualSlots
             ? (reorderVisualSlots[folderID] ?? Double(slotIndex))
             : Double(slotIndex)
@@ -5058,7 +5055,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         if let draggedAppID,
            let draggedIndex = items.firstIndex(where: { $0.id == draggedAppID }) {
             let draggedPage = if useCustomPaging {
-                store.gridPosition(for: draggedAppID)?.page ?? (draggedIndex / cap)
+                store.rootGridPosition(for: draggedAppID)?.page ?? (draggedIndex / cap)
             } else {
                 draggedIndex / cap
             }
@@ -5068,7 +5065,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         if let returningID = dragReleaseAnimation?.itemID,
            let returningIndex = items.firstIndex(where: { $0.id == returningID }) {
             let returningPage = if useCustomPaging {
-                store.gridPosition(for: returningID)?.page ?? (returningIndex / cap)
+                store.rootGridPosition(for: returningID)?.page ?? (returningIndex / cap)
             } else {
                 returningIndex / cap
             }
@@ -7524,7 +7521,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     var targetSlot: Int?
 
                     if let candidateID = groupingCandidateID,
-                       let pos = store.gridPosition(for: candidateID) {
+                       let pos = store.rootGridPosition(for: candidateID) {
                         targetPage = pos.page
                         targetSlot = pos.slot
                     } else if let pending = pendingReorderDestination {
@@ -7549,7 +7546,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
                     if let targetPage, let targetSlot,
                        targetPage >= 0 && targetPage < store.pageCount {
-                        let currentPos = store.gridPosition(for: draggedAppID)
+                        let currentPos = store.rootGridPosition(for: draggedAppID)
                         if currentPos?.page != targetPage || currentPos?.slot != targetSlot {
                             if reorderVisualSlots.isEmpty {
                                 resetReorderVisualSlots(to: displayedItems)
