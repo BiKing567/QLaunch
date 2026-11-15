@@ -738,21 +738,21 @@ final class AppStore: ObservableObject {
     }
 
     var isRootCustomPaging: Bool {
-        layoutMode.isUser && paginationType == .customPages
+        !GridLayoutPreset.current.isInfiniteCanvas && layoutMode.isUser && paginationType == .customPages
     }
 
     var isCustomPagingActive: Bool {
-        openedFolderID == nil && !isSearching && !GridLayoutPreset.current.isInfiniteCanvas && isRootCustomPaging
+        openedFolderID == nil && !isSearching && isRootCustomPaging
     }
 
     var rootPageCount: Int {
         if GridLayoutPreset.current.isInfiniteCanvas {
             return 1
         }
-        if isCustomPagingActive {
+        if isRootCustomPaging {
             return max(1, customPages.count)
         }
-        return max(1, Int(ceil(Double(max(displayItems.count, 1)) / Double(pageCapacity))))
+        return max(1, Int(ceil(Double(max(launchpadItems.count, 1)) / Double(rootPageCapacity))))
     }
 
     var pageCount: Int {
@@ -2097,14 +2097,14 @@ final class AppStore: ObservableObject {
     }
 
     func rootItems(onPage page: Int) -> [LaunchpadItem] {
-        if isCustomPagingActive {
+        if isRootCustomPaging {
             guard customPages.indices.contains(page) else { return [] }
             return customPages[page].itemIDs.compactMap { item(withID: $0) }
         }
-        let items = displayItems
-        let start = page * pageCapacity
+        let items = launchpadItems
+        let start = page * rootPageCapacity
         guard start < items.count else { return [] }
-        let end = min(start + pageCapacity, items.count)
+        let end = min(start + rootPageCapacity, items.count)
         return Array(items[start..<end])
     }
 
@@ -2121,7 +2121,7 @@ final class AppStore: ObservableObject {
 
     /// Root custom pages layout query: returns (page, slot) in the root custom pages layout.
     func rootGridPosition(for itemID: String) -> (page: Int, slot: Int)? {
-        if isCustomPagingActive {
+        if isRootCustomPaging {
             for (pageIndex, page) in customPages.enumerated() {
                 if let slot = page.itemIDs.firstIndex(of: itemID) {
                     return (page: pageIndex, slot: slot)
@@ -2157,12 +2157,7 @@ final class AppStore: ObservableObject {
             guard let index = items.firstIndex(where: { $0.id == itemID }) else { return nil }
             return (page: index / pageCapacity, slot: index % pageCapacity)
         }
-        if isCustomPagingActive {
-            return rootGridPosition(for: itemID)
-        }
-        let items = activeDisplayItems
-        guard let index = items.firstIndex(where: { $0.id == itemID }) else { return nil }
-        return (page: index / pageCapacity, slot: index % pageCapacity)
+        return rootGridPosition(for: itemID)
     }
 
     /// Current view query: returns the visual slot index in the currently active view.
@@ -2175,29 +2170,26 @@ final class AppStore: ObservableObject {
             guard let pos = gridPosition(for: itemID) else { return nil }
             return pos.slot
         }
-        if isCustomPagingActive {
-            return rootGridSlotIndex(for: itemID)
-        }
-        guard let pos = gridPosition(for: itemID) else { return nil }
-        return pos.page * pageCapacity + pos.slot
+        return rootGridSlotIndex(for: itemID)
     }
 
     func item(atPage page: Int, slot: Int) -> LaunchpadItem? {
-        guard slot >= 0 && slot < pageCapacity else { return nil }
         if openedFolderID != nil || isSearching {
+            guard slot >= 0 && slot < pageCapacity else { return nil }
             let index = page * pageCapacity + slot
             let items = activeDisplayItems
             guard items.indices.contains(index) else { return nil }
             return items[index]
         }
-        if isCustomPagingActive {
+        guard slot >= 0 && slot < rootPageCapacity else { return nil }
+        if isRootCustomPaging {
             guard customPages.indices.contains(page) else { return nil }
             let page = customPages[page]
             guard slot < page.itemIDs.count else { return nil }
             return item(withID: page.itemIDs[slot])
         }
-        let index = page * pageCapacity + slot
-        let items = activeDisplayItems
+        let index = page * rootPageCapacity + slot
+        let items = launchpadItems
         guard items.indices.contains(index) else { return nil }
         return items[index]
     }
