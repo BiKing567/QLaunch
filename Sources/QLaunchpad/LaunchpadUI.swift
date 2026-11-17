@@ -385,11 +385,12 @@ final class LaunchpadContainerView: NSView {
         fullScreenDimView.layer?.backgroundColor = NSColor.black.cgColor
         fullScreenDimView.alphaValue = 0.0
         fullScreenDimView.isHidden = true
-        backgroundFolderHostView = FolderGlassHostView()
-        foregroundFolderHostView = FolderGlassHostView()
+        backgroundFolderHostView = FolderGlassHostView(usesGlassContainer: true)
+        backgroundFolderHostView.usesNativeGlassBlur = QLaunchpadPreferences.isExperimentalNativeFolderGlassBlurEnabled
+        foregroundFolderHostView = FolderGlassHostView(usesGlassContainer: false)
         foregroundFolderHostView.reusableSinglePlateID = "opened-folder"
         foregroundFolderHostView.prewarmPlate(id: "opened-folder")
-        dragFolderHostView = FolderGlassHostView()
+        dragFolderHostView = FolderGlassHostView(usesGlassContainer: false)
         metalView = LaunchpadMetalView(store: store)
         overlayView = PassthroughHostingView(rootView: LaunchpadOverlayView(store: store))
         folderTitleView = FolderTitleView(store: store)
