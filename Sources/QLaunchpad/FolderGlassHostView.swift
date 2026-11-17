@@ -1060,20 +1060,54 @@ private final class FolderGlassPlateItemView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if usesNativeGlassBlur {
-            if glass.superview !== sunkContainerView {
-                glass.removeFromSuperview()
-                sunkContainerView.addSubview(glass, positioned: .below, relativeTo: nil)
+            if #available(macOS 26.0, *), let glassView = glass as? NSGlassEffectView {
+                if glassView.superview !== self {
+                    glassView.removeFromSuperview()
+                    addSubview(glassView, positioned: .below, relativeTo: sunkContainerView)
+                }
+                if currentMaterialStyle == .glass {
+                    if glassView.contentView !== contentView {
+                        glassView.contentView = contentView
+                    }
+                    sunkContainerView.isHidden = true
+                } else {
+                    if glassView.contentView === contentView {
+                        glassView.contentView = nil
+                    }
+                    if contentView.superview !== sunkContainerView {
+                        sunkContainerView.addSubview(contentView, positioned: .above, relativeTo: sunkPlateView)
+                    }
+                    sunkContainerView.isHidden = false
+                }
+            } else {
+                if glass.superview !== sunkContainerView {
+                    glass.removeFromSuperview()
+                    sunkContainerView.addSubview(glass, positioned: .below, relativeTo: nil)
+                }
+                if contentView.superview !== sunkContainerView {
+                    sunkContainerView.addSubview(contentView, positioned: .above, relativeTo: sunkPlateView)
+                }
+                sunkContainerView.isHidden = false
             }
-            sunkPlateView.isHidden = true
-            sunkPlateView.alphaValue = 0.0
+            sunkPlateView.isHidden = (currentMaterialStyle == .glass)
+            sunkPlateView.alphaValue = (currentMaterialStyle == .glass) ? 0.0 : 1.0
             glass.isHidden = (currentMaterialStyle == .regular)
-            glass.alphaValue = 1.0
+            glass.alphaValue = (currentMaterialStyle == .regular) ? 0.0 : 1.0
         } else {
+            if #available(macOS 26.0, *), let glassView = glass as? NSGlassEffectView {
+                if glassView.contentView === contentView {
+                    glassView.contentView = nil
+                }
+            }
+            if contentView.superview !== sunkContainerView {
+                sunkContainerView.addSubview(contentView, positioned: .above, relativeTo: sunkPlateView)
+            }
             if glass.superview !== self {
                 glass.removeFromSuperview()
                 addSubview(glass, positioned: .below, relativeTo: sunkContainerView)
             }
             sunkPlateView.isHidden = (currentMaterialStyle == .glass && glassEffectView != nil)
+            sunkContainerView.isHidden = false
         }
         CATransaction.commit()
     }
@@ -1703,20 +1737,18 @@ private final class FolderGlassPlateItemView: NSView {
                 glassEffectView?.isHidden = true
                 sunkPlateView.alphaValue = 1.0
                 sunkPlateView.isHidden = false
+                sunkContainerView.isHidden = false
                 sunkContainerView.layer?.shadowOpacity = 0.18
             } else {
                 glassEffectView?.alphaValue = 1.0
                 glassEffectView?.isHidden = false
                 sunkPlateView.alphaValue = 0.0
                 sunkPlateView.isHidden = true
+                sunkContainerView.isHidden = true
                 sunkContainerView.layer?.shadowOpacity = 0.0
             }
             contentView.alphaValue = 1.0
             contentView.isHidden = false
-            sunkContainerView.isHidden = false
-
-            let blurRadius = 16.0 * localProgress
-            applyBlurRadius(blurRadius)
 
             CATransaction.commit()
             return
@@ -1875,9 +1907,27 @@ final class FolderGlassHostView: NSView {
             guard usesNativeGlassBlur != oldValue else { return }
             CATransaction.begin()
             CATransaction.setDisableActions(true)
+            updateHierarchy()
             for item in itemsByID.values {
                 item.usesNativeGlassBlur = usesNativeGlassBlur
-                if !item.isHidden {
+                item.usesUnifiedBackdropBlur = usesUnifiedBackdropBlur
+            }
+            if !usesNativeGlassBlur {
+                hostBlurFilter = nil
+                lastHostBlurRadius = -1
+                blurContainerView?.layer?.filters = nil
+                for item in itemsByID.values {
+                    item.resetTransitionState()
+                }
+            } else {
+                updateContainerFrames()
+                if currentTransitionProgress > 0 {
+                    let blurRadius = 16.0 * min(max(currentTransitionProgress, 0), 1)
+                    applyHostBlurRadius(blurRadius)
+                } else {
+                    applyHostBlurRadius(0.0)
+                }
+                for item in itemsByID.values where !item.isHidden {
                     item.updateTransitionProgress(
                         progress: currentTransitionProgress,
                         materialProgress: currentMaterialProgress
@@ -1912,13 +1962,19 @@ final class FolderGlassHostView: NSView {
             }
         }
     }
-    private let usesGlassContainer: Bool
-    private let glassContainerView: NSView?
+
+    private var blurContainerView: FlippedContainerView?
+    private var glassContainerView: NSView?
     private let hostView = FlippedContainerView()
     private var itemsByID: [String: FolderGlassPlateItemView] = [:]
     private var currentRawSinkTransform: CATransform3D?
     private var currentTransitionProgress: CGFloat = 0
     private var currentMaterialProgress: CGFloat = 0
+    private var compactBounds: CGRect = .zero
+
+    private static let hostFilterName = "hostGlassBlur"
+    private var hostBlurFilter: CIFilter?
+    private var lastHostBlurRadius: CGFloat = -1
 
     func setMaterialStyle(_ style: FolderPlateMaterialStyle) {
         currentMaterialStyle = style
@@ -1927,41 +1983,109 @@ final class FolderGlassHostView: NSView {
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
-    init(frame: NSRect = .zero, usesGlassContainer: Bool = false) {
-        self.usesGlassContainer = usesGlassContainer
-        if usesGlassContainer, #available(macOS 26.0, *) {
-            let container = FlippedGlassEffectContainerView(frame: frame)
-            container.spacing = 0
-            container.wantsLayer = true
-            container.layer?.masksToBounds = false
-            self.glassContainerView = container
-        } else {
-            self.glassContainerView = nil
-        }
+    override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
         layer?.masksToBounds = false
         hostView.wantsLayer = true
         hostView.layer?.masksToBounds = false
-
-        if let glassContainerView {
-            addSubview(glassContainerView)
-            if #available(macOS 26.0, *), let container = glassContainerView as? NSGlassEffectContainerView {
-                container.contentView = hostView
-            } else {
-                glassContainerView.addSubview(hostView)
-            }
-        } else {
-            addSubview(hostView)
-        }
+        addSubview(hostView)
     }
 
-    convenience override init(frame: NSRect) {
-        self.init(frame: frame, usesGlassContainer: false)
+    convenience init() {
+        self.init(frame: .zero)
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    private func updateHierarchy() {
+        if usesNativeGlassBlur {
+            if blurContainerView == nil {
+                let blurContainer = FlippedContainerView(frame: bounds)
+                blurContainer.wantsLayer = true
+                blurContainer.layer?.masksToBounds = false
+
+                if #available(macOS 26.0, *) {
+                    let container = FlippedGlassEffectContainerView(frame: blurContainer.bounds)
+                    container.spacing = 0
+                    container.wantsLayer = true
+                    container.layer?.masksToBounds = false
+                    container.contentView = hostView
+                    blurContainer.addSubview(container)
+                    self.glassContainerView = container
+                } else {
+                    blurContainer.addSubview(hostView)
+                    self.glassContainerView = nil
+                }
+
+                if hostView.superview !== nil && hostView.superview !== glassContainerView && hostView.superview !== blurContainer {
+                    hostView.removeFromSuperview()
+                }
+                addSubview(blurContainer)
+                self.blurContainerView = blurContainer
+            }
+        } else {
+            if let blurContainer = blurContainerView {
+                blurContainer.layer?.filters = nil
+                blurContainer.removeFromSuperview()
+                blurContainerView = nil
+            }
+            glassContainerView?.removeFromSuperview()
+            glassContainerView = nil
+            if hostView.superview !== self {
+                hostView.removeFromSuperview()
+                addSubview(hostView)
+            }
+            hostView.frame = bounds
+        }
+    }
+
+    private func computeCompactBounds(for plates: [FolderPlateModel], in totalBounds: CGRect) -> CGRect {
+        guard totalBounds.width > 0, totalBounds.height > 0 else { return totalBounds }
+        var unionRect = CGRect.null
+        for plate in plates {
+            guard plate.rect.width >= 1, plate.rect.height >= 1, plate.alpha > 0.005, !plate.isIsolated else {
+                continue
+            }
+            unionRect = unionRect.union(plate.rect)
+        }
+        guard !unionRect.isNull, !unionRect.isEmpty else {
+            return totalBounds
+        }
+        let paddingX: CGFloat = 48
+        let paddingTop: CGFloat = 48
+        let paddingBottom: CGFloat = 74
+
+        let expanded = CGRect(
+            x: unionRect.minX - paddingX,
+            y: unionRect.minY - paddingTop,
+            width: unionRect.width + paddingX * 2,
+            height: unionRect.height + paddingTop + paddingBottom
+        )
+        return expanded.intersection(totalBounds).integral
+    }
+
+    private func updateContainerFrames() {
+        let effectiveCompact = (usesNativeGlassBlur && !compactBounds.isEmpty) ? compactBounds : bounds
+        if let blurContainer = blurContainerView {
+            blurContainer.frame = effectiveCompact
+            glassContainerView?.frame = blurContainer.bounds
+            hostView.frame = CGRect(
+                x: -effectiveCompact.minX,
+                y: -effectiveCompact.minY,
+                width: bounds.width,
+                height: bounds.height
+            )
+        } else {
+            hostView.frame = bounds
+        }
+        if let raw = currentRawSinkTransform {
+            hostView.layer?.sublayerTransform = centeredTransform(for: raw, in: bounds)
+        } else {
+            hostView.layer?.sublayerTransform = CATransform3DIdentity
+        }
     }
 
     private func centeredTransform(for transform: CATransform3D, in bounds: CGRect) -> CATransform3D {
@@ -1977,14 +2101,39 @@ final class FolderGlassHostView: NSView {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        glassContainerView?.frame = bounds
-        hostView.frame = bounds
-        if let raw = currentRawSinkTransform {
-            hostView.layer?.sublayerTransform = centeredTransform(for: raw, in: bounds)
-        } else {
-            hostView.layer?.sublayerTransform = CATransform3DIdentity
-        }
+        updateContainerFrames()
         CATransaction.commit()
+    }
+
+    private func applyHostBlurRadius(_ radius: CGFloat) {
+        guard let targetLayer = blurContainerView?.layer else { return }
+        let isZero = radius <= 0.001
+        if !isZero && abs(radius - lastHostBlurRadius) < 0.02 {
+            return
+        }
+        if isZero && lastHostBlurRadius == 0 {
+            return
+        }
+        lastHostBlurRadius = isZero ? 0 : radius
+
+        if isZero {
+            if targetLayer.filters != nil {
+                targetLayer.setValue(0.0, forKeyPath: "filters.\(Self.hostFilterName).inputRadius")
+            }
+            return
+        }
+
+        if targetLayer.filters == nil || targetLayer.filters?.isEmpty == true {
+            let filter = hostBlurFilter ?? CIFilter(name: "CIGaussianBlur")
+            hostBlurFilter = filter
+            filter?.name = Self.hostFilterName
+            filter?.setValue(radius, forKey: kCIInputRadiusKey)
+            if let filter {
+                targetLayer.filters = [filter]
+            }
+        } else {
+            targetLayer.setValue(radius, forKeyPath: "filters.\(Self.hostFilterName).inputRadius")
+        }
     }
 
     func prewarmPlate(id: String) {
@@ -2014,6 +2163,14 @@ final class FolderGlassHostView: NSView {
     ) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+
+        if usesNativeGlassBlur {
+            let newCompact = computeCompactBounds(for: plates, in: bounds)
+            if newCompact != compactBounds {
+                compactBounds = newCompact
+                updateContainerFrames()
+            }
+        }
 
         var activeIDs = Set<String>()
         for plate in plates {
@@ -2105,6 +2262,10 @@ final class FolderGlassHostView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         hostView.layer?.sublayerTransform = centeredTransform(for: transform, in: bounds)
+        if usesNativeGlassBlur {
+            let blurRadius = 16.0 * min(max(progress, 0), 1)
+            applyHostBlurRadius(blurRadius)
+        }
         for item in itemsByID.values where !item.isHidden {
             item.updateTransitionProgress(progress: progress, materialProgress: materialProgress)
         }
@@ -2121,6 +2282,9 @@ final class FolderGlassHostView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         hostView.layer?.sublayerTransform = CATransform3DIdentity
+        if usesNativeGlassBlur {
+            applyHostBlurRadius(0.0)
+        }
         for item in itemsByID.values {
             item.usesUnifiedBackdropBlur = false
             item.resetTransitionState()
@@ -2141,8 +2305,12 @@ final class FolderGlassHostView: NSView {
         currentRawSinkTransform = nil
         currentTransitionProgress = 0
         currentMaterialProgress = 0
+        compactBounds = .zero
         usesUnifiedBackdropBlur = false
         hostView.layer?.sublayerTransform = CATransform3DIdentity
+        if usesNativeGlassBlur {
+            applyHostBlurRadius(0.0)
+        }
         CATransaction.commit()
     }
 
