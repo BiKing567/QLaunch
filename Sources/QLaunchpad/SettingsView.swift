@@ -387,6 +387,24 @@ private struct AppearanceSettingsView: View {
                         object: nil
                     )
                 }
+
+                if iconRenderQuality == IconRenderQuality.quality.rawValue {
+                    Toggle("原生玻璃模糊试验 (免交接)", isOn: Binding(
+                        get: {
+                            UserDefaults.standard.object(forKey: QLaunchpadPreferences.experimentalNativeFolderGlassBlurKey) as? Bool
+                                ?? QLaunchpadPreferences.defaultExperimentalNativeFolderGlassBlur
+                        },
+                        set: { newValue in
+                            UserDefaults.standard.set(newValue, forKey: QLaunchpadPreferences.experimentalNativeFolderGlassBlurKey)
+                            NotificationCenter.default.post(
+                                name: .qlaunchpadRenderQualityChanged,
+                                object: nil
+                            )
+                        }
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
             }
 
             Section(L10n.tr("settings.section.appIcon")) {

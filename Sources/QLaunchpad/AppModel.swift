@@ -13,6 +13,7 @@ enum QLaunchpadPreferences {
     static let loopPagesKey = "loopPages"
     static let showDockInLaunchpadKey = "showDockInLaunchpad"
     static let selfAppIconPresetKey = "selfAppIconPreset"
+    static let experimentalNativeFolderGlassBlurKey = "experimentalNativeFolderGlassBlur"
 
     // Default to a Dock-visible app. The menu bar icon is opt-in.
     static let defaultShowMenuBarIcon = false
@@ -20,6 +21,13 @@ enum QLaunchpadPreferences {
     static let defaultLoopPages = true
     static let defaultShowDockInLaunchpad = false
     static let defaultSelfAppIconPreset = "default"
+    static let defaultExperimentalNativeFolderGlassBlur = true
+
+    static var isExperimentalNativeFolderGlassBlurEnabled: Bool {
+        guard IconRenderQuality.current == .quality else { return false }
+        return UserDefaults.standard.object(forKey: experimentalNativeFolderGlassBlurKey) as? Bool
+            ?? defaultExperimentalNativeFolderGlassBlur
+    }
 }
 
 extension LaunchpadSafeInsets {

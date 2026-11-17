@@ -850,6 +850,21 @@ private final class FolderGlassPlateItemView: NSView {
         }
     }
 
+    var usesNativeGlassBlur: Bool = false {
+        didSet {
+            guard usesNativeGlassBlur != oldValue else { return }
+            updateViewHierarchy()
+            lastTransitionProgress = -1
+            lastMaterialProgress = -1
+            if !usesNativeGlassBlur {
+                if let targetLayer = sunkContainerView.layer, lastBlurRadius <= 0.05 {
+                    targetLayer.setValue(0.0, forKeyPath: "filters.\(Self.filterName).inputRadius")
+                    targetLayer.filters = nil
+                }
+            }
+        }
+    }
+
     private var lastBoundsSize: CGSize = .zero
     private var lastPreviewBoundsSize: CGSize = .zero
     private var lastCornerRadius: CGFloat = -1
@@ -892,6 +907,11 @@ private final class FolderGlassPlateItemView: NSView {
         lastBlurRadius = -1
         lastTransitionProgress = -1
         lastMaterialProgress = -1
+        if let targetLayer = sunkContainerView.layer, targetLayer.filters != nil {
+            targetLayer.setValue(0.0, forKeyPath: "filters.\(Self.filterName).inputRadius")
+            targetLayer.filters = nil
+        }
+        blurFilter = nil
     }
 
     func previewImages() -> [String: CGImage] {
@@ -1016,6 +1036,32 @@ private final class FolderGlassPlateItemView: NSView {
             contentView.layer?.addSublayer(crossLayer)
             crossfadePreviewLayers.append(crossLayer)
         }
+
+        usesNativeGlassBlur = QLaunchpadPreferences.isExperimentalNativeFolderGlassBlurEnabled
+        updateViewHierarchy()
+    }
+
+    private func updateViewHierarchy() {
+        guard let glass = glassEffectView else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if usesNativeGlassBlur {
+            if glass.superview !== sunkContainerView {
+                glass.removeFromSuperview()
+                sunkContainerView.addSubview(glass, positioned: .below, relativeTo: nil)
+            }
+            sunkPlateView.isHidden = true
+            sunkPlateView.alphaValue = 0.0
+            glass.isHidden = (currentMaterialStyle == .regular)
+            glass.alphaValue = 1.0
+        } else {
+            if glass.superview !== self {
+                glass.removeFromSuperview()
+                addSubview(glass, positioned: .below, relativeTo: sunkContainerView)
+            }
+            sunkPlateView.isHidden = (currentMaterialStyle == .glass && glassEffectView != nil)
+        }
+        CATransaction.commit()
     }
 
     convenience override init(frame: NSRect) {
@@ -1031,18 +1077,26 @@ private final class FolderGlassPlateItemView: NSView {
         currentMaterialStyle = style
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        switch style {
-        case .glass:
+        if usesNativeGlassBlur {
+            updateViewHierarchy()
             updateTransitionProgress(
                 progress: lastTransitionProgress >= 0 ? lastTransitionProgress : 0,
                 materialProgress: lastMaterialProgress >= 0 ? lastMaterialProgress : 0
             )
-        case .regular:
-            glassEffectView?.alphaValue = 0.0
-            glassEffectView?.isHidden = true
-            sunkPlateView.alphaValue = 1.0
-            sunkPlateView.isHidden = false
-            sunkContainerView.layer?.shadowOpacity = 0.18
+        } else {
+            switch style {
+            case .glass:
+                updateTransitionProgress(
+                    progress: lastTransitionProgress >= 0 ? lastTransitionProgress : 0,
+                    materialProgress: lastMaterialProgress >= 0 ? lastMaterialProgress : 0
+                )
+            case .regular:
+                glassEffectView?.alphaValue = 0.0
+                glassEffectView?.isHidden = true
+                sunkPlateView.alphaValue = 1.0
+                sunkPlateView.isHidden = false
+                sunkContainerView.layer?.shadowOpacity = 0.18
+            }
         }
         CATransaction.commit()
     }
@@ -1614,6 +1668,10 @@ private final class FolderGlassPlateItemView: NSView {
                 lastTransitionProgress = localProgress
                 return
             }
+        } else if usesNativeGlassBlur {
+            if abs(localProgress - lastTransitionProgress) < 0.001 {
+                return
+            }
         } else {
             if abs(localProgress - lastTransitionProgress) < 0.001 && abs(localMaterial - lastMaterialProgress) < 0.001 {
                 return
@@ -1624,6 +1682,31 @@ private final class FolderGlassPlateItemView: NSView {
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+
+        if usesNativeGlassBlur {
+            if currentMaterialStyle == .regular {
+                glassEffectView?.alphaValue = 0.0
+                glassEffectView?.isHidden = true
+                sunkPlateView.alphaValue = 1.0
+                sunkPlateView.isHidden = false
+                sunkContainerView.layer?.shadowOpacity = 0.18
+            } else {
+                glassEffectView?.alphaValue = 1.0
+                glassEffectView?.isHidden = false
+                sunkPlateView.alphaValue = 0.0
+                sunkPlateView.isHidden = true
+                sunkContainerView.layer?.shadowOpacity = 0.0
+            }
+            contentView.alphaValue = 1.0
+            contentView.isHidden = false
+            sunkContainerView.isHidden = false
+
+            let blurRadius = 16.0 * localProgress
+            applyBlurRadius(blurRadius)
+
+            CATransaction.commit()
+            return
+        }
 
         if usesUnifiedBackdropBlur {
             // Sunk baseplate, outer shadow, and blurred 3x3 mini-icons are already rendered
@@ -1711,12 +1794,34 @@ private final class FolderGlassPlateItemView: NSView {
     }
 
     private func applyBlurRadius(_ blurRadius: CGFloat) {
-        if abs(blurRadius - lastBlurRadius) < 0.02 {
+        let isZero = blurRadius <= 0.001
+        if !isZero && abs(blurRadius - lastBlurRadius) < 0.02 {
             return
         }
-        lastBlurRadius = blurRadius
+        if isZero && lastBlurRadius == 0 {
+            return
+        }
+        lastBlurRadius = isZero ? 0 : blurRadius
 
         let targetLayer = sunkContainerView.layer
+        if usesNativeGlassBlur {
+            // Keep the filter mounted across the open/close cycle; set inputRadius to zero on close without repeatedly mounting/unmounting at the collapsed endpoint.
+            if targetLayer?.filters == nil || targetLayer?.filters?.isEmpty == true {
+                let filter = blurFilter ?? CIFilter(name: "CIGaussianBlur")
+                blurFilter = filter
+                filter?.name = Self.filterName
+                let effectiveRadius = isZero ? 0.0 : blurRadius
+                filter?.setValue(effectiveRadius, forKey: kCIInputRadiusKey)
+                if let filter {
+                    targetLayer?.filters = [filter]
+                }
+            } else {
+                let effectiveRadius = isZero ? 0.0 : blurRadius
+                targetLayer?.setValue(effectiveRadius, forKeyPath: "filters.\(Self.filterName).inputRadius")
+            }
+            return
+        }
+
         if blurRadius > 0.05 {
             if targetLayer?.filters == nil || targetLayer?.filters?.isEmpty == true {
                 let filter = blurFilter ?? CIFilter(name: "CIGaussianBlur")
@@ -1748,6 +1853,23 @@ private final class FolderGlassPlateItemView: NSView {
 @MainActor
 final class FolderGlassHostView: NSView {
     var reusableSinglePlateID: String? = nil
+    var usesNativeGlassBlur: Bool = QLaunchpadPreferences.isExperimentalNativeFolderGlassBlurEnabled {
+        didSet {
+            guard usesNativeGlassBlur != oldValue else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            for item in itemsByID.values {
+                item.usesNativeGlassBlur = usesNativeGlassBlur
+                if !item.isHidden {
+                    item.updateTransitionProgress(
+                        progress: currentTransitionProgress,
+                        materialProgress: currentMaterialProgress
+                    )
+                }
+            }
+            CATransaction.commit()
+        }
+    }
     var usesUnifiedBackdropBlur: Bool = false {
         didSet {
             guard usesUnifiedBackdropBlur != oldValue else { return }
@@ -1824,6 +1946,7 @@ final class FolderGlassHostView: NSView {
     func prewarmPlate(id: String) {
         if itemsByID[id] == nil {
             let item = FolderGlassPlateItemView(frame: .zero, materialStyle: currentMaterialStyle)
+            item.usesNativeGlassBlur = usesNativeGlassBlur
             item.usesUnifiedBackdropBlur = usesUnifiedBackdropBlur
             item.isHidden = true
             item.updateTransitionProgress(progress: currentTransitionProgress, materialProgress: currentMaterialProgress)
@@ -1864,6 +1987,7 @@ final class FolderGlassHostView: NSView {
                 hostView.addSubview(item)
                 itemsByID[plateID] = item
             }
+            item.usesNativeGlassBlur = usesNativeGlassBlur
             item.usesUnifiedBackdropBlur = usesUnifiedBackdropBlur
             item.updateTransitionProgress(progress: currentTransitionProgress, materialProgress: currentMaterialProgress)
 
@@ -1901,6 +2025,7 @@ final class FolderGlassHostView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if !isHidden {
+            item.usesNativeGlassBlur = usesNativeGlassBlur
             item.usesUnifiedBackdropBlur = usesUnifiedBackdropBlur
             item.updateTransitionProgress(
                 progress: currentTransitionProgress,
@@ -1916,6 +2041,7 @@ final class FolderGlassHostView: NSView {
         CATransaction.setDisableActions(true)
         for item in itemsByID.values {
             if !isHidden {
+                item.usesNativeGlassBlur = usesNativeGlassBlur
                 item.usesUnifiedBackdropBlur = usesUnifiedBackdropBlur
                 item.updateTransitionProgress(
                     progress: currentTransitionProgress,
@@ -1948,10 +2074,12 @@ final class FolderGlassHostView: NSView {
         currentMaterialProgress = 0
         currentMaterialStyle = .glass
         usesUnifiedBackdropBlur = false
+        usesNativeGlassBlur = QLaunchpadPreferences.isExperimentalNativeFolderGlassBlurEnabled
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         hostView.layer?.sublayerTransform = CATransform3DIdentity
         for item in itemsByID.values {
+            item.usesNativeGlassBlur = usesNativeGlassBlur
             item.usesUnifiedBackdropBlur = false
             item.updateTransitionProgress(progress: 0, materialProgress: 0)
         }
@@ -1972,6 +2100,7 @@ final class FolderGlassHostView: NSView {
         currentTransitionProgress = 0
         currentMaterialProgress = 0
         usesUnifiedBackdropBlur = false
+        usesNativeGlassBlur = QLaunchpadPreferences.isExperimentalNativeFolderGlassBlurEnabled
         hostView.layer?.sublayerTransform = CATransform3DIdentity
         CATransaction.commit()
     }

@@ -4799,6 +4799,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     func prewarmSunkFolderTextures(for plates: [FolderPlateModel]) {
+        guard !QLaunchpadPreferences.isExperimentalNativeFolderGlassBlurEnabled else { return }
         guard let device, !plates.isEmpty else { return }
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
         let isFloat16 = !IconRenderQuality.current.usesUnorm8Drawable
@@ -4898,6 +4899,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         let viewportRect = CGRect(origin: .zero, size: bounds.size)
         var visibleFolderPlates: [FolderPlateModel] = []
         visibleFolderPlates.reserveCapacity(folderPlates.count)
+        let excludeFolderSpritesFromBackdrop = QLaunchpadPreferences.isExperimentalNativeFolderGlassBlurEnabled
         for plate in folderPlates {
             guard !plate.id.hasPrefix("opened-folder"),
                   !plate.isIsolated,
@@ -4909,7 +4911,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 continue
             }
             visibleFolderPlates.append(plate)
-            if let sunk = FolderPreviewCompositeCache.shared.sunkFolderTexture(
+            if !excludeFolderSpritesFromBackdrop,
+               let sunk = FolderPreviewCompositeCache.shared.sunkFolderTexture(
                 device: device,
                 plate: plate,
                 scale: scale,

@@ -411,11 +411,14 @@ final class LaunchpadContainerView: NSView {
             let dragPlates = plates.filter { !$0.id.hasPrefix("opened-folder") && $0.isIsolated }
             let bgPlates = plates.filter { !$0.id.hasPrefix("opened-folder") && !$0.isIsolated }
 
+            let isNativeGlassBlur = QLaunchpadPreferences.isExperimentalNativeFolderGlassBlurEnabled
             if let pending = self.pendingBackdropPlates,
                pending.folderID == self.metalView.activeFolderTransitionID,
                !fgPlates.isEmpty,
                self.metalView.isFolderTransitionActive {
-                self.backgroundFolderHostView.usesUnifiedBackdropBlur = (IconRenderQuality.current == .quality)
+                self.backgroundFolderHostView.usesNativeGlassBlur = isNativeGlassBlur
+                self.backgroundFolderHostView.usesUnifiedBackdropBlur = !isNativeGlassBlur
+                    && (IconRenderQuality.current == .quality)
                     && self.backdropView.isReady && !self.backdropView.isHidden
                 self.backgroundFolderHostView.update(plates: pending.plates, removeUnused: true)
                 self.backgroundFolderHostView.setPlateHidden(true, for: pending.folderID)
@@ -493,20 +496,30 @@ final class LaunchpadContainerView: NSView {
                     canvasPan: canvasPan,
                     canvasAdaptive: canvasAdaptive
                 )
-                let maskRects = bgPlates.compactMap { plate -> CGRect? in
-                    guard !plate.id.hasPrefix("opened-folder"),
-                          !plate.isIsolated,
-                          plate.id != folderID,
-                          plate.rect.width >= 1,
-                          plate.rect.height >= 1,
-                          plate.alpha > 0.005 else {
-                        return nil
+                let isNativeGlassBlur = QLaunchpadPreferences.isExperimentalNativeFolderGlassBlurEnabled
+                let maskRects: [CGRect]
+                if isNativeGlassBlur {
+                    maskRects = []
+                } else {
+                    maskRects = bgPlates.compactMap { plate -> CGRect? in
+                        guard !plate.id.hasPrefix("opened-folder"),
+                              !plate.isIsolated,
+                              plate.id != folderID,
+                              plate.rect.width >= 1,
+                              plate.rect.height >= 1,
+                              plate.alpha > 0.005 else {
+                            return nil
+                        }
+                        return plate.rect
                     }
-                    return plate.rect
                 }
                 self.backdropView.setFolderMaskRects(maskRects)
                 if self.metalView.isFolderTransitionActive || !self.metalView.isPreparingFolderOpen {
                     if !bgPlates.isEmpty {
+                        self.backgroundFolderHostView.usesNativeGlassBlur = isNativeGlassBlur
+                        self.backgroundFolderHostView.usesUnifiedBackdropBlur = !isNativeGlassBlur
+                            && (IconRenderQuality.current == .quality)
+                            && self.backdropView.isReady && !self.backdropView.isHidden
                         self.backgroundFolderHostView.update(plates: bgPlates, removeUnused: true)
                         self.backgroundFolderHostView.setPlateHidden(true, for: folderID)
                     }
@@ -518,10 +531,15 @@ final class LaunchpadContainerView: NSView {
         metalView.onFolderTransitionProgress = { [weak self] progress, materialProgress in
             guard let self else { return }
             self.backdropView.updateProgress(progress, materialProgress: materialProgress)
-            let unified = (IconRenderQuality.current == .quality)
+            let isNativeGlassBlur = QLaunchpadPreferences.isExperimentalNativeFolderGlassBlurEnabled
+            let unified = !isNativeGlassBlur
+                && (IconRenderQuality.current == .quality)
                 && self.backdropView.isReady && !self.backdropView.isHidden
             if self.backgroundFolderHostView.usesUnifiedBackdropBlur != unified {
                 self.backgroundFolderHostView.usesUnifiedBackdropBlur = unified
+            }
+            if self.backgroundFolderHostView.usesNativeGlassBlur != isNativeGlassBlur {
+                self.backgroundFolderHostView.usesNativeGlassBlur = isNativeGlassBlur
             }
             let sink = FolderDepthBackdropView.sinkTransform(progress: progress)
             self.backgroundFolderHostView.applySinkTransform(
@@ -547,7 +565,10 @@ final class LaunchpadContainerView: NSView {
             if !isReady {
                 self.pendingBackdropPlates = nil
             }
-            self.backgroundFolderHostView.usesUnifiedBackdropBlur = isReady && (IconRenderQuality.current == .quality)
+            let isNativeGlassBlur = QLaunchpadPreferences.isExperimentalNativeFolderGlassBlurEnabled
+            self.backgroundFolderHostView.usesNativeGlassBlur = isNativeGlassBlur
+            self.backgroundFolderHostView.usesUnifiedBackdropBlur = !isNativeGlassBlur
+                && isReady && (IconRenderQuality.current == .quality)
             self.metalView.handleBackdropReady(isReady: isReady)
         }
         metalView.onFolderDepthBackdropDismiss = { [weak self] in
@@ -667,6 +688,12 @@ final class LaunchpadContainerView: NSView {
             name: .qlaunchpadGridLayoutChanged,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(renderQualityChangedNote),
+            name: .qlaunchpadRenderQualityChanged,
+            object: nil
+        )
     }
 
     required init?(coder: NSCoder) {
@@ -675,6 +702,14 @@ final class LaunchpadContainerView: NSView {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func renderQualityChangedNote() {
+        let isNativeGlassBlur = QLaunchpadPreferences.isExperimentalNativeFolderGlassBlurEnabled
+        backgroundFolderHostView.usesNativeGlassBlur = isNativeGlassBlur
+        backgroundFolderHostView.usesUnifiedBackdropBlur = !isNativeGlassBlur
+            && (IconRenderQuality.current == .quality)
+            && backdropView.isReady && !backdropView.isHidden
     }
 
     @objc private func presentationNote(_ note: Notification) {
