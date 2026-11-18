@@ -1965,6 +1965,7 @@ final class FolderGlassHostView: NSView {
 
     private var blurContainerView: FlippedContainerView?
     private var glassContainerView: NSView?
+    private var contentRootView: FlippedContainerView?
     private let hostView = FlippedContainerView()
     private var itemsByID: [String: FolderGlassPlateItemView] = [:]
     private var currentRawSinkTransform: CATransform3D?
@@ -2012,15 +2013,23 @@ final class FolderGlassHostView: NSView {
                     container.spacing = 0
                     container.wantsLayer = true
                     container.layer?.masksToBounds = false
-                    container.contentView = hostView
+
+                    let root = FlippedContainerView(frame: container.bounds)
+                    root.wantsLayer = true
+                    root.layer?.masksToBounds = false
+                    container.contentView = root
+                    root.addSubview(hostView)
+
                     blurContainer.addSubview(container)
                     self.glassContainerView = container
+                    self.contentRootView = root
                 } else {
                     blurContainer.addSubview(hostView)
                     self.glassContainerView = nil
+                    self.contentRootView = nil
                 }
 
-                if hostView.superview !== nil && hostView.superview !== glassContainerView && hostView.superview !== blurContainer {
+                if hostView.superview !== nil && hostView.superview !== contentRootView && hostView.superview !== blurContainer {
                     hostView.removeFromSuperview()
                 }
                 addSubview(blurContainer)
@@ -2034,6 +2043,8 @@ final class FolderGlassHostView: NSView {
             }
             glassContainerView?.removeFromSuperview()
             glassContainerView = nil
+            contentRootView?.removeFromSuperview()
+            contentRootView = nil
             if hostView.superview !== self {
                 hostView.removeFromSuperview()
                 addSubview(hostView)
@@ -2072,6 +2083,7 @@ final class FolderGlassHostView: NSView {
         if let blurContainer = blurContainerView {
             blurContainer.frame = effectiveCompact
             glassContainerView?.frame = blurContainer.bounds
+            contentRootView?.frame = blurContainer.bounds
             hostView.frame = CGRect(
                 x: -effectiveCompact.minX,
                 y: -effectiveCompact.minY,
