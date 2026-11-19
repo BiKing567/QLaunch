@@ -667,6 +667,14 @@ final class AppStore: ObservableObject {
         let customPages: [LaunchpadCustomPage]
         let folders: [AppFolder]
     }
+
+    struct DragSessionCommitResult {
+        let pagesPruned: Bool
+        let oldPageCount: Int
+        let newPageCount: Int
+        let activePageIndexDelta: Int
+        let pageShiftByPageID: [String: Int]
+    }
     private var dragLayoutSnapshot: DragLayoutSnapshot?
     private(set) var isDragSessionActive = false
     private(set) var tentativePageID: String?
@@ -2275,14 +2283,15 @@ final class AppStore: ObservableObject {
         NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
     }
 
-    func endDragSession(committed: Bool) {
-        guard isDragSessionActive else { return }
+    @discardableResult
+    func endDragSession(committed: Bool) -> DragSessionCommitResult? {
+        guard isDragSessionActive else { return nil }
         isDragSessionActive = false
         defer {
             dragLayoutSnapshot = nil
             tentativePageID = nil
         }
-        guard let snapshot = dragLayoutSnapshot else { return }
+        guard let snapshot = dragLayoutSnapshot else { return nil }
 
         if !committed {
             itemOrderIDs = snapshot.itemOrderIDs
@@ -2291,11 +2300,14 @@ final class AppStore: ObservableObject {
             rebuildLaunchpadItems()
             clampPageOffsetToCatalogBounds()
             NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
-            return
+            return nil
         }
 
+        var result: DragSessionCommitResult?
         if isCustomPagingActive {
             let activeID = customPages.indices.contains(currentPage) ? customPages[currentPage].id : nil
+            let oldPages = customPages
+            let oldIndex = currentPage
             let (pruned, newIndex) = LaunchpadCustomPageReconciler.pruneEmptyPages(
                 pages: customPages,
                 activePageID: activeID,
@@ -2305,12 +2317,29 @@ final class AppStore: ObservableObject {
             itemOrderIDs = customPages.flatMap(\.itemIDs)
             targetPage = Double(newIndex)
             pageOffset = Double(newIndex)
+
+            if pruned.count != oldPages.count {
+                var shifts: [String: Int] = [:]
+                for (newIdx, page) in pruned.enumerated() {
+                    if let oldIdx = oldPages.firstIndex(where: { $0.id == page.id }) {
+                        shifts[page.id] = newIdx - oldIdx
+                    }
+                }
+                result = DragSessionCommitResult(
+                    pagesPruned: true,
+                    oldPageCount: oldPages.count,
+                    newPageCount: pruned.count,
+                    activePageIndexDelta: newIndex - oldIndex,
+                    pageShiftByPageID: shifts
+                )
+            }
         }
 
         persistLayout()
         rebuildLaunchpadItems()
         clampPageOffsetToCatalogBounds()
         NotificationCenter.default.post(name: .qlaunchpadStoreChanged, object: nil)
+        return result
     }
 
     // MARK: Reorder

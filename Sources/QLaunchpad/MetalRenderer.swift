@@ -1183,6 +1183,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     private func beginDragReleaseAnimation(itemID: String) {
+        if let index = displayedItems.firstIndex(where: { $0.id == itemID }) {
+            let slot = slotIndex(for: itemID, in: displayedItems, fallbackIndex: index)
+            reorderVisualSlots[itemID] = Double(slot)
+        }
         dragReleaseAnimation = DragReleaseAnimation(
             itemID: itemID,
             from: CGPoint(
@@ -1192,6 +1196,38 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             startTime: CACurrentMediaTime()
         )
         startDisplayLink()
+    }
+
+    private func commitDragSession(draggedID: String?) {
+        let commitResult = store.endDragSession(committed: true)
+        if let commitResult, commitResult.pagesPruned {
+            let newMax = max(0, commitResult.newPageCount - 1)
+            let adjustedOffset = currentPageOffset + Double(commitResult.activePageIndexDelta)
+            currentPageOffset = max(0, min(Double(newMax), adjustedOffset))
+            frozenPageOffset = currentPageOffset
+            let cap = store.rootPageCapacity
+            for page in store.customPages {
+                guard let shift = commitResult.pageShiftByPageID[page.id], shift != 0 else { continue }
+                for itemID in page.itemIDs {
+                    if let slot = reorderVisualSlots[itemID] {
+                        reorderVisualSlots[itemID] = slot + Double(shift * cap)
+                    }
+                }
+            }
+        }
+        let items = store.activeDisplayItems
+        displayedItems = items
+        lastDisplaySignature = AppListSignature(items: items)
+        if let draggedID, let index = items.firstIndex(where: { $0.id == draggedID }) {
+            let slot = slotIndex(for: draggedID, in: items, fallbackIndex: index)
+            reorderVisualSlots[draggedID] = Double(slot)
+        }
+        for id in selectedItemIDs {
+            if let index = items.firstIndex(where: { $0.id == id }) {
+                let slot = slotIndex(for: id, in: items, fallbackIndex: index)
+                reorderVisualSlots[id] = Double(slot)
+            }
+        }
     }
 
     private func presentAutoLayoutReorderHintIfNeeded() {
@@ -5148,7 +5184,14 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 let folder: AppFolder? = if case .folder(let value) = item { value } else { nil }
                 let isOpeningAppTarget = !isShowingPresentation
                     && stationaryDismissedAppID == app?.id
-                let visualIndex = reorderVisualSlots[itemID] ?? Double(slotIndex)
+                let isReturning = dragReleaseAnimation?.itemID == itemID
+                let isExpandingSibling = multiReleaseStartedAt != nil
+                    && selectedItemIDs.contains(itemID)
+                    && dragReleaseAnimation?.itemID != itemID
+                let isReturningOrExpanding = isReturning || isExpandingSibling
+                let visualIndex = isReturningOrExpanding
+                    ? Double(slotIndex)
+                    : (reorderVisualSlots[itemID] ?? Double(slotIndex))
                 let canvasItemScale: CGFloat
                 var c: CGPoint
                 if let cardMetrics = activeCardMetrics {
@@ -5184,9 +5227,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     && draggedAppID == itemID
                 let isCollapsedSibling = didDrag && selectedItemIDs.count > 1
                     && selectedItemIDs.contains(itemID) && draggedAppID != itemID
-                let isExpandingSibling = multiReleaseStartedAt != nil
-                    && selectedItemIDs.contains(itemID)
-                    && dragReleaseAnimation?.itemID != itemID
                 let zoom = isOpeningAppTarget
                     ? (
                         opacity: Float(1),
@@ -5250,7 +5290,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 } else {
                     c = landingCenter
                 }
-                let isReturning = dragReleaseAnimation?.itemID == itemID
                 if let release = dragReleaseAnimation, isReturning {
                     let elapsed = CACurrentMediaTime() - release.startTime
                     let raw = CGFloat(elapsed / dragReleaseDuration)
@@ -7551,7 +7590,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
         if didDrag, let draggedAppID {
             if selectedItemIDs.count > 1 && selectedItemIDs.contains(draggedAppID) {
-                store.endDragSession(committed: true)
+                commitDragSession(draggedID: draggedAppID)
                 multiReleaseCenter = CGPoint(x: dragPoint.x - dragGrabOffset.x,
                                              y: dragPoint.y - dragGrabOffset.y)
                 multiReleaseStartedAt = CACurrentMediaTime()
@@ -7579,8 +7618,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                     break
                 }
                 if completedGrouping {
-                    store.endDragSession(committed: true)
-                    applyAnimatedLayout(store.activeDisplayItems)
+                    commitDragSession(draggedID: draggedAppID)
                 }
             }
             if !completedGrouping {
@@ -7626,7 +7664,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                             applyAnimatedLayout(store.activeDisplayItems)
                         }
                     }
-                    store.endDragSession(committed: true)
+                    commitDragSession(draggedID: draggedAppID)
                     beginDragReleaseAnimation(itemID: draggedAppID)
                     return
                 }
@@ -7667,7 +7705,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                         dragDestination = destination
                     }
                 }
-                store.endDragSession(committed: true)
+                commitDragSession(draggedID: draggedAppID)
                 beginDragReleaseAnimation(itemID: draggedAppID)
             }
             return
