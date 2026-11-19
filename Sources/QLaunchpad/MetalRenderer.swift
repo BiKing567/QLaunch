@@ -205,6 +205,11 @@ private final class SelectionOverlayView: NSView {
 
 // MARK: - Launchpad Metal view
 
+enum FolderTransitionDirection {
+    case opening
+    case closing
+}
+
 @MainActor
 final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private let folderDrawableProvider = FolderDrawableProvider()
@@ -449,8 +454,10 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     var isDepthBackdropActive: (() -> Bool)?
     var isDepthBackdropBaking: (() -> Bool)?
     var isDepthBackdropFailed: (() -> Bool)?
-    var areFolderPreviewsReady: ((String) -> Bool)?
+    var areFolderPreviewsReady: ((String, FolderTransitionDirection) -> Bool)?
     var onLookupFolderPreviewImages: ((String) -> [String: CGImage])?
+    var isFolderCloseInputLocked = false
+    private var isMouseDownSwallowedDuringLock = false
     private(set) var folderTransitionGeneration: UInt64 = 0
 
     var activeFolderTransitionID: String? {
@@ -490,10 +497,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     /// iOS SpringBoard-style folder morph. Progress 0 is the collapsed icon;
     /// 1 is the open grid.
     private struct FolderTransition {
-        enum Direction {
-            case opening
-            case closing
-        }
+        typealias Direction = FolderTransitionDirection
 
         var direction: Direction
         var folderID: String
@@ -1841,6 +1845,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             ?? (showing ? LaunchpadAnimationStyle.current : presentationStyle)
         presentationStyle = style
         isShowingPresentation = showing
+        isFolderCloseInputLocked = false
+        isMouseDownSwallowedDuringLock = false
         stationaryDismissedAppID = showing
             ? nil
             : note.userInfo?["openingAppID"] as? String
@@ -2040,6 +2046,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         isInteractivePresentationActive = false
         interactivePresentationUpdate = nil
         interactivePresentationCompletion = nil
+        isFolderCloseInputLocked = false
+        isMouseDownSwallowedDuringLock = false
         displayLink?.invalidate()
         displayLink = nil
     }
@@ -3145,6 +3153,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         contentTransitionAlpha = 1
         pendingDisplayItems = nil
         hasDrawnFolderFrame = false
+        isFolderCloseInputLocked = false
+        isMouseDownSwallowedDuringLock = false
         folderTransition = FolderTransition(
             direction: .opening,
             folderID: folderID,
@@ -3208,6 +3218,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         contentTransitionAlpha = 1
         pendingDisplayItems = nil
         hasDrawnFolderFrame = false
+        isFolderCloseInputLocked = true
         folderTransition = FolderTransition(
             direction: .closing,
             folderID: folderID,
@@ -3243,6 +3254,12 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         guard transition.direction != direction else { return }
         folderTransitionGeneration &+= 1
         transition.direction = direction
+        if direction == .closing {
+            isFolderCloseInputLocked = true
+        } else {
+            isFolderCloseInputLocked = false
+            isMouseDownSwallowedDuringLock = false
+        }
         let now = CACurrentMediaTime()
         let currentP = transition.progress
         transition.startProgress = currentP
@@ -3354,9 +3371,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             // then swap on the next tick. Switching on this frame made icons
             // flash as they jumped from the interpolator onto buildGrid.
             if transition.hasDrawnSettledFrame {
-                let nativeReady = transition.direction == .closing
-                    ? (areFolderPreviewsReady?(transition.folderID) ?? true)
-                    : true
+                let nativeReady = areFolderPreviewsReady?(transition.folderID, transition.direction) ?? true
                 if nativeReady {
                     finishFolderTransition()
                     return
@@ -3389,6 +3404,20 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         store.setFolderTransitionActive(false)
         pendingFolderTransitionEnd = true
         pendingFolderTransitionGeneration = folderTransitionGeneration
+        if !open {
+            isFolderCloseInputLocked = true
+            let gen = folderTransitionGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self else { return }
+                if self.isFolderCloseInputLocked, self.folderTransitionGeneration == gen {
+                    self.isFolderCloseInputLocked = false
+                    self.isMouseDownSwallowedDuringLock = false
+                }
+            }
+        } else {
+            isFolderCloseInputLocked = false
+            isMouseDownSwallowedDuringLock = false
+        }
         // Morph drawing does not record lazy-reveal misses. Drop any that
         // arrived mid-flight so the settled grid does not fade the same icons
         // in again and flash after they reach full size.
@@ -3849,7 +3878,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
                 let isPreviewIcon = (activePage == 0 && index < FolderPreviewLayout.capacity)
 
                 if isPreviewIcon && isAtSourceRest {
-                    let nativeReady = areFolderPreviewsReady?(transition.folderID) ?? true
+                    let nativeReady = areFolderPreviewsReady?(transition.folderID, transition.direction) ?? true
                     if nativeReady {
                         // At resting source position (local == 0), the folder plate's native
                         // CALayer preview layers render the 9 mini-icons, matching the desktop
@@ -4072,9 +4101,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
 
         if let transition = folderTransition, transition.hasDrawnSettledFrame {
-            let nativeReady = transition.direction == .closing
-                ? (areFolderPreviewsReady?(transition.folderID) ?? true)
-                : true
+            let nativeReady = areFolderPreviewsReady?(transition.folderID, transition.direction) ?? true
             if nativeReady {
                 finishFolderTransition()
             }
@@ -4317,9 +4344,6 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
         }
-        if isSettlingDesktop {
-            onFolderTransitionWillSettle?(pendingFolderTransitionGeneration)
-        }
         onUpdateFolderPlates?(folderPlates, backdropAlpha)
         onUpdateFolderTitleTransition?(currentFolderTitleState)
         refreshSelectionOverlay()
@@ -4442,6 +4466,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
         }
 
         encoder.endEncoding()
+        if isSettlingDesktop {
+            onFolderTransitionWillSettle?(pendingFolderTransitionGeneration)
+        }
         attachFirstFrameCompletion(to: commandBuffer)
         let frameSemaphore = frameSlot.availability
         commandBuffer.addCompletedHandler { _ in
@@ -4453,6 +4480,8 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
             drawable.addPresentedHandler { [weak self] _ in
                 Task { @MainActor [weak self] in
                     self?.onFolderTransitionEnd?(gen)
+                    self?.isFolderCloseInputLocked = false
+                    self?.isMouseDownSwallowedDuringLock = false
                 }
             }
         }
@@ -6469,6 +6498,13 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     override func mouseDown(with event: NSEvent) {
+        if isFolderCloseInputLocked || (isFolderTransitionActive && folderTransition?.direction == .closing) {
+            isMouseDownSwallowedDuringLock = true
+            isMouseDown = false
+            dragSource = nil
+            draggedAppID = nil
+            return
+        }
         if window?.isKeyWindow == false {
             NSApp.activate(ignoringOtherApps: true)
             window?.makeKey()
@@ -6648,6 +6684,11 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        if isFolderCloseInputLocked {
+            rightMouseStart = nil
+            isRightMarquee = false
+            return
+        }
         rightMouseStart = convert(event.locationInWindow, from: nil)
         isRightMarquee = false
         marqueeClickItemID = nil
@@ -7266,6 +7307,9 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if isMouseDownSwallowedDuringLock || isFolderCloseInputLocked {
+            return
+        }
         if isDragCancelledByLayout {
             discardCancelledDrag()
             return
@@ -7342,6 +7386,17 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
 
     override func mouseUp(with event: NSEvent) {
         isMouseDown = false
+        if isMouseDownSwallowedDuringLock {
+            isMouseDownSwallowedDuringLock = false
+            dragSource = nil
+            draggedAppID = nil
+            return
+        }
+        if isFolderCloseInputLocked {
+            dragSource = nil
+            draggedAppID = nil
+            return
+        }
         defer {
             if store.isDragSessionActive {
                 store.endDragSession(committed: false)
@@ -7651,6 +7706,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     private var lastStandardPinchTime: CFTimeInterval = 0
 
     override func magnify(with event: NSEvent) {
+        if isFolderCloseInputLocked { return }
         guard store.openedFolderID == nil, GridLayoutPreset.current.isInfiniteCanvas else {
             handleStandardPinch(with: event)
             return
@@ -7755,6 +7811,7 @@ final class LaunchpadMetalView: MTKView, MTKViewDelegate {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        if isFolderCloseInputLocked { return }
         if window?.isKeyWindow == false {
             NSApp.activate(ignoringOtherApps: true)
             window?.makeKey()

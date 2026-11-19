@@ -460,10 +460,15 @@ final class LaunchpadContainerView: NSView {
             }
             CATransaction.commit()
         }
-        metalView.areFolderPreviewsReady = { [weak self] folderID in
+        metalView.areFolderPreviewsReady = { [weak self] folderID, direction in
             guard let self else { return false }
-            return self.foregroundFolderHostView.hasReadyPreviews(for: "opened-folder-" + folderID)
-                || self.backgroundFolderHostView.hasReadyPreviews(for: folderID)
+            switch direction {
+            case .closing:
+                return self.backgroundFolderHostView.hasReadyPreviews(for: folderID)
+            case .opening:
+                return self.foregroundFolderHostView.hasReadyPreviews(for: "opened-folder-" + folderID)
+                    || self.foregroundFolderHostView.hasReadyPreviews(for: "opened-folder")
+            }
         }
         metalView.onLookupFolderPreviewImages = { [weak self] folderID in
             self?.backgroundFolderHostView.previewImages(for: folderID) ?? [:]
@@ -637,6 +642,7 @@ final class LaunchpadContainerView: NSView {
         }
         overlayView.onSelectPageAt = { [weak self] point in
             guard let self else { return }
+            guard !self.metalView.isFolderCloseInputLocked else { return }
             _ = self.store.selectPage(
                 at: point,
                 in: self.overlayView.bounds,
