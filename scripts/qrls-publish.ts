@@ -4,12 +4,114 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
-import {
-  parseSparkleAppcast,
-  qrls,
-  type IFileInput,
-  type IQRlsVersionResult,
-} from "qrls";
+
+export interface IFileInput {
+  data: string;
+  name: string;
+  edSignature?: string;
+  deltaFromVersion?: string;
+}
+
+export interface IQRlsVersionResult {
+  version: string;
+  buildVersion?: string;
+  sparkle?: {
+    feedUrl?: string;
+  };
+  [key: string]: unknown;
+}
+
+interface ParsedSparkleItem {
+  buildVersion?: string;
+  mainFile: {
+    name: string;
+    url?: string;
+    sparkle?: {
+      edSignature?: string;
+    };
+  };
+  deltaFiles?: Array<{
+    name: string;
+    url?: string;
+    deltaFromVersion?: string;
+    sparkle?: {
+      edSignature?: string;
+      deltaFromVersion?: string;
+    };
+  }>;
+}
+
+let qrlsModuleCache: {
+  parseSparkleAppcast?: (xml: string) => ParsedSparkleItem[];
+  qrls?: (options: unknown) => Promise<IQRlsVersionResult>;
+} | null | undefined = undefined;
+
+async function getQrlsModule() {
+  if (qrlsModuleCache !== undefined) return qrlsModuleCache;
+  try {
+    // @ts-ignore
+    qrlsModuleCache = await import("qrls");
+  } catch {
+    qrlsModuleCache = null;
+  }
+  return qrlsModuleCache;
+}
+
+function fallbackParseSparkleAppcast(xml: string): ParsedSparkleItem[] {
+  const items: ParsedSparkleItem[] = [];
+  const itemMatches = xml.matchAll(/<item>([\s\S]*?)<\/item>/g);
+  for (const match of itemMatches) {
+    const itemXml = match[1];
+    const deltasMatch = itemXml.match(/<sparkle:deltas>([\s\S]*?)<\/sparkle:deltas>/);
+    const deltasXml = deltasMatch ? deltasMatch[1] : "";
+    const mainXml = itemXml.replace(/<sparkle:deltas>[\s\S]*?<\/sparkle:deltas>/g, "");
+    const mainEnclosure = mainXml.match(/<enclosure\s+([^>]+?)\/?>/);
+    if (!mainEnclosure) continue;
+
+    const getAttr = (attrs: string, name: string) => {
+      const m = attrs.match(new RegExp(`${name}="([^"]*)"`));
+      return m ? m[1] : undefined;
+    };
+
+    const mainAttrs = mainEnclosure[1];
+    const buildVersion = getAttr(mainAttrs, "sparkle:version");
+    const mainUrl = getAttr(mainAttrs, "url");
+    const mainSig = getAttr(mainAttrs, "sparkle:edSignature");
+    const mainName = mainUrl ? basename(mainUrl) : "";
+
+    const deltaFiles: NonNullable<ParsedSparkleItem["deltaFiles"]> = [];
+    if (deltasXml) {
+      for (const dMatch of deltasXml.matchAll(/<enclosure\s+([^>]+?)\/?>/g)) {
+        const dAttrs = dMatch[1];
+        const dUrl = getAttr(dAttrs, "url");
+        const dSig = getAttr(dAttrs, "sparkle:edSignature");
+        const deltaFrom = getAttr(dAttrs, "sparkle:deltaFrom");
+        deltaFiles.push({
+          name: dUrl ? basename(dUrl) : "",
+          url: dUrl,
+          deltaFromVersion: deltaFrom,
+          sparkle: {
+            edSignature: dSig,
+            deltaFromVersion: deltaFrom,
+          },
+        });
+      }
+    }
+
+    items.push({
+      buildVersion,
+      mainFile: {
+        name: mainName,
+        url: mainUrl,
+        sparkle: {
+          edSignature: mainSig,
+        },
+      },
+      deltaFiles,
+    });
+  }
+  return items;
+}
 
 /** R2 公开访问前缀，末尾不含斜杠。 */
 export const R2_ONLINE_URL = (
@@ -71,7 +173,8 @@ export function readSparkleSignatures(
   if (!existsSync(appcastPath)) {
     return { deltas: [] };
   }
-  const items = parseSparkleAppcast(readFileSync(appcastPath, "utf8"));
+  const parser = qrlsModuleCache?.parseSparkleAppcast ?? fallbackParseSparkleAppcast;
+  const items = parser(readFileSync(appcastPath, "utf8"));
   const current = items.find((item) => item.buildVersion === build);
   if (!current) {
     return { deltas: [] };
@@ -141,7 +244,12 @@ export async function publishWithQrls(
     input.changelog ||
     (existsSync(input.notesPath) ? readFileSync(input.notesPath, "utf8") : "");
 
-  return qrls({
+  const qrlsModule = await getQrlsModule();
+  if (!qrlsModule?.qrls) {
+    throw new Error("未找到 'qrls' 模块。如需发布到 R2，请先安装或链接 qrls。");
+  }
+
+  return qrlsModule.qrls({
     name: input.name,
     version: input.version,
     buildVersion: input.build,

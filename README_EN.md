@@ -16,7 +16,7 @@
   <b>This branch is based on <a href="https://github.com/qzrzz/QLaunch">qzrzz/QLaunch</a>, featuring deep refactorings and optimizations for trackpad gestures, animation continuity, and stability.</b>
 </p>
 
-- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.4.2)](https://github.com/BiKing567/QLaunch/releases)
+- 📦 **Download Latest Release**: [BiKing567/QLaunch Releases (V1.5.0)](https://github.com/BiKing567/QLaunch/releases)
 - 🏠 **Original Project Homepage**: [https://qzrzz.com/QLaunch/](https://qzrzz.com/QLaunch/)
 - 🔗 **Original Project Repository**: [https://github.com/qzrzz/QLaunch](https://github.com/qzrzz/QLaunch)
 
@@ -30,6 +30,12 @@
 ## 🌟 Key Improvements & Features in this Fork
 
 Built upon the excellent foundation of the original QLaunch, this fork deeply addresses multi-finger trackpad gestures, micro-interaction animation details, and system compatibility:
+
+### 🚀 Custom Paging Layout, Native Glass Refactor & Comprehensive Animation Polish (V1.5.0)
+- **Custom Paging Layout**: Full overhaul of page and icon grid layout with free-form multi-page arrangement, edge-dwell tentative page creation, and automatic pruning of empty pages when the last icon is moved out.
+- **Native Glass Blur Refactor (Quality-First)**: Fixed thumbnail blurring and layer inversion in shared glass effect containers; streamlined batch containers with outer-layer sink transforms and eliminated per-frame redundant property rewrites.
+- **Folder Close Input Lock & Zero-Flash Handover**: Strict input lock held during folder close until the settled desktop frame is confirmed presented on screen by Metal, cleanly swallowing accidental clicks; atomically deferred layer dismissals after GPU encoding commits to eliminate 1-frame blank flashes.
+- **Stable Drag Release Target & Seamless Empty Page Pruning**: Drag release trajectories are now rock-solidly anchored to destination grid cells instead of chasing live interpolation slots, eliminating trajectory wobbles; smoothly synchronized viewport offsets and slot shifts on empty page pruning to prevent any visual jumps.
 
 ### ✨ Liquid Glass Optimization for macOS 26 (V1.4.2)
 - Optimized the Liquid Glass effect on macOS 26.
